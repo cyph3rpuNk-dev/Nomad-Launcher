@@ -21,7 +21,7 @@ No installer. No `HKLM` writes. No persistent services. No `%APPDATA%`. The brow
 | `Nomad-Mullvad.exe` | [Mullvad Browser](https://mullvad.net/en/browser) | GPG + SHA-256 |
 | `Nomad-LibreWolf.exe` | [LibreWolf](https://librewolf.net) | SHA-256 |
 | `Nomad-Floorp.exe` | [Floorp](https://floorp.app) | SHA-256 |
-| `Nomad-Waterfox.exe` | [Waterfox](https://www.waterfox.net) | SHA-256 |
+| `Nomad-Waterfox.exe` | [Waterfox](https://www.waterfox.net) | SHA-512 |
 | `Nomad-Chromium.exe` | [Ungoogled Chromium](https://github.com/ungoogled-software/ungoogled-chromium) | SHA-256 |
 | `Nomad-Helium.exe` | [Helium](https://github.com/imputnet/helium-windows) | SHA-256 |
 | `Nomad-Bitwarden.exe` | [Bitwarden](https://bitwarden.com) desktop (not a browser) | SHA-256 + Authenticode |
@@ -180,6 +180,55 @@ Writes to `HKCU` only (no UAC). State is tracked in `Nomad/nomad.reg-state.json`
 **"No GPG signature" warning.** Informational only — Floorp, Waterfox, Helium, LibreWolf, and Ungoogled Chromium don't publish a usable signing key. The download is still SHA-256 verified.
 
 **Behind a proxy / update check fails.** Set `[update] check_on_launch = false` in `nomad.toml`.
+
+---
+
+## FAQ
+
+**Does this require administrator privileges?**
+No. Everything runs as the current user. The optional `--register-default` flag writes to `HKCU` only — no UAC prompt.
+
+**Where does the browser get installed?**
+In a `Browser/` folder beside the launcher (see [On-disk layout](#on-disk-layout)). Nothing is written to `Program Files`, `%APPDATA%`, `%LOCALAPPDATA%`, or any system location during normal operation.
+
+**Does it work from a USB drive?**
+Yes. The launcher and its `Browser/` and `Data/` folders are fully portable — move them anywhere and they behave the same.
+
+**Does it leave anything behind after I delete it?**
+Runtime traces Windows writes on its own are scrubbed when the browser closes (see [Post-exit cleanup](#post-exit-cleanup)). Delete the launcher's folder and nothing remains. If you used `--register-default`, run `--unregister-default` first to remove the `HKCU` entries.
+
+**What happens if a download fails verification?**
+The launcher aborts before extracting or running anything. Any existing install is left untouched.
+
+**What if I'm already on the latest version?**
+Nomad keeps a local version cache (6-hour TTL). Within that window it skips the network check entirely and launches immediately.
+
+**Can each launcher have its own `nomad.toml`?**
+Yes. Every launcher reads the `nomad.toml` in its own `Nomad/` folder independently.
+
+---
+
+## Compatibility
+
+| Component | Requirement |
+|---|---|
+| Operating system | Windows 10 or Windows 11 (64-bit) |
+| Launcher build | `x86_64-pc-windows-msvc` |
+| Browser architecture | `x64` (default), `x86`, or `arm64` — selectable via `[browser] arch` |
+| Runtime dependencies | None beyond stock Windows 10/11 DLLs |
+| Network | Required for first run and update checks |
+
+---
+
+## Acknowledgements
+
+Nomad launches and builds on the work of these projects:
+
+- [Firefox](https://www.mozilla.org/firefox/) / Firefox ESR, [Floorp](https://floorp.app), [Waterfox](https://www.waterfox.net), [LibreWolf](https://librewolf.net), [Mullvad Browser](https://mullvad.net/en/browser), [Ungoogled Chromium](https://github.com/ungoogled-software/ungoogled-chromium), [Helium](https://github.com/imputnet/helium-windows), and [Bitwarden](https://bitwarden.com).
+- [arkenfox/user.js](https://github.com/arkenfox/user.js) — basis for the Gecko "safe subset" `user.js`.
+- [uBlock Origin](https://github.com/gorhill/uBlock) — provisioned automatically for the Gecko launchers (AMO-signed XPI) and Ungoogled Chromium (GPG-verified gorhill release). Helium ships its own built-in fork, so Nomad does not provision it there.
+
+Nomad is an independent project and is not affiliated with, endorsed by, or sponsored by any of the projects above. See [TRADEMARKS.md](TRADEMARKS.md).
 
 ---
 
