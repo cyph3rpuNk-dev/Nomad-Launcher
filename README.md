@@ -16,10 +16,6 @@ No installer. No `HKLM` writes. No persistent services. No `%APPDATA%`. The brow
 
 **Status:** Functionally complete and in daily use. *Inspired by [chrlauncher](https://github.com/henrypp/chrlauncher).*
 
-<p align="center">
-  <img src="docs/launcher.png" width="520" alt="Nomad Launcher downloading and updating Firefox">
-</p>
-
 ---
 
 ## Supported browsers
@@ -44,6 +40,10 @@ No installer. No `HKLM` writes. No persistent services. No `%APPDATA%`. The brow
 2. Run it.
 
 On first run Nomad creates a `Nomad/` subfolder, writes a default `nomad.toml`, then downloads and launches the browser. A status window shows progress and closes once the browser starts. No elevation required.
+
+<p align="center">
+  <img src="docs/launcher.png" width="520" alt="Nomad Launcher downloading and updating Firefox">
+</p>
 
 ---
 
