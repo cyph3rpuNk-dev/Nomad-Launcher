@@ -10,7 +10,7 @@ description = "Shared core library for the Nomad Launcher browser launchers."
 # default_fonts dropped: the launcher ships only Atkinson Hyperlegible (vendored
 # in payloads/fonts/), so egui's bundled Ubuntu/NotoEmoji/Hack are not embedded.
 # glow + accesskit are the only other eframe defaults we use (verified: not wgpu).
-eframe = { version = "0.31", default-features = false, features = ["accesskit", "glow", "wayland", "x11"] }
+eframe = { version = "0.34", default-features = false, features = ["accesskit", "glow", "wayland", "x11"] }
 hex = "0.4"
 ico = "0.4"
 pgp = "0.14.2"
