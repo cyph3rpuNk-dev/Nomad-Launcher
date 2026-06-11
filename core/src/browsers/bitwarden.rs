@@ -26,8 +26,8 @@
 //! `None` and integrity rests on the SHA-256 the GitHub releases API records
 //! for the asset (the same model as Helium — see SPEC §9). The downloaded
 //! `.exe` is additionally Authenticode-signed by "Bitwarden Inc."; signer
-//! pinning via `WinVerifyTrust` is layered into [`Bitwarden::extract`] in a
-//! follow-up (it needs `windows-sys` WinTrust/Cryptography features).
+//! pinning via [`crate::authenticode::verify_signed_by`] is implemented in
+//! [`Bitwarden::extract`].
 
 use std::path::Path;
 use std::process::Command;
