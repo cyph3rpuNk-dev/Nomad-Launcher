@@ -78,8 +78,6 @@ Nomad applies a curated **"safe" hardening profile** — maximum privacy without
 
 **Mullvad Browser** is launched completely unmodified — it ships its own crowd-blending anti-fingerprinting stack and any added pref would make users distinguishable.
 
-See [AUDIT.md](AUDIT.md) for the full security and privacy audit.
-
 ### Trade-offs
 
 - **Safe Browsing is off.** Substitute: DoH points at Quad9's malware-blocking resolver by default.
