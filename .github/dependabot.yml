@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Keep the SHA-pinned Actions (ci.yml, scorecard.yml, zizmor.yml) current on
+  # security fixes. The cooldown avoids auto-importing a freshly published —
+  # possibly compromised — release on day zero.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+
+  # Rust crate advisories are already gated by the `audit` job in ci.yml; this
+  # adds proactive version bumps. Cap open PRs to keep noise down.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10

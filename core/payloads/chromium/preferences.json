@@ -1,0 +1,46 @@
+{
+  "https_only_mode_enabled": true,
+  "https_only_mode_auto_enabled": false,
+  "enable_do_not_track": true,
+  "net": {
+    "network_prediction_options": 2
+  },
+  "safebrowsing": {
+    "enabled": false
+  },
+  "privacy_sandbox": {
+    "m1": {
+      "topics_enabled": false,
+      "fledge_enabled": false,
+      "ad_measurement_enabled": false
+    }
+  },
+  "search": {
+    "suggest_enabled": false
+  },
+  "alternate_error_pages": {
+    "enabled": false
+  },
+  "translate": {
+    "enabled": false
+  },
+  "profile": {
+    "cookie_controls_mode": 1,
+    "default_content_setting_values": {
+      "sensors": 2
+    }
+  },
+  "payments": {
+    "can_make_payment_enabled": false
+  },
+  "media_router": {
+    "enable_media_router": false
+  },
+  "spell_check": {
+    "use_spelling_service": false
+  },
+  "autofill": {
+    "enabled": false,
+    "credit_card_enabled": false
+  }
+}

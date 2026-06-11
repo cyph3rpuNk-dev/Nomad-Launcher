@@ -1,0 +1,17 @@
+[package]
+name = "nomad-mullvad"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Nomad Launcher for Mullvad Browser."
+
+[[bin]]
+name = "Nomad-Mullvad"
+path = "src/main.rs"
+
+[dependencies]
+nomad-core = { workspace = true }
+
+[build-dependencies]
+winresource = "0.1"

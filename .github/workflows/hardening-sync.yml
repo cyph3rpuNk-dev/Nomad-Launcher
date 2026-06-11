@@ -1,0 +1,273 @@
+name: Hardening Sync
+
+# Watches upstream hardening + branding sources for changes. Text baselines open
+# a PR on drift; the ungoogled-chromium PAK logo IDs (pinned in code, no
+# baseline file) fail the run instead. No upstream change is ever auto-merged —
+# every PR requires human curation review (SPEC §5).
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Every Monday 06:00 UTC
+  workflow_dispatch:        # Manual trigger for testing
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # ── Job 1: ungoogled-chromium flags.md ────────────────────────────────────
+  chromium-flags:
+    name: Ungoogled-Chromium flags drift
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch upstream flags.md
+        run: |
+          curl -sSf \
+            "https://raw.githubusercontent.com/ungoogled-software/ungoogled-chromium/master/docs/flags.md" \
+            -o /tmp/upstream-flags.md
+
+      - name: Diff against baseline
+        id: diff
+        run: |
+          baseline="core/baselines/ungoogled-flags.md"
+          if [ ! -f "$baseline" ]; then
+            echo "no_baseline=true" >> "$GITHUB_OUTPUT"
+            echo "changed=false"   >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if diff -q "$baseline" /tmp/upstream-flags.md > /dev/null 2>&1; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            diff "$baseline" /tmp/upstream-flags.md > /tmp/flags-diff.txt || true
+          fi
+
+      - name: Extract Nomad Chromium flags
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          # Pull every "--flag" string literal from the two Chromium hardening sources.
+          grep -hEo '"--[A-Za-z0-9=_:-]+"' \
+            core/src/browsers/ungoogled.rs \
+            core/src/browsers/helium.rs \
+            | tr -d '"' | sort -u > /tmp/nomad-flags.txt
+          echo "Nomad Chromium flags:"
+          cat /tmp/nomad-flags.txt
+
+      - name: Find deprecated flags
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          touch /tmp/deprecated-flags.txt
+          while IFS= read -r flag; do
+            # Strip leading -- for a broader search (flags sometimes appear
+            # without the leading dashes in the upstream docs table).
+            bare="${flag#--}"
+            if ! grep -qF "$bare" /tmp/upstream-flags.md; then
+              echo "$flag" >> /tmp/deprecated-flags.txt
+            fi
+          done < /tmp/nomad-flags.txt
+
+      - name: Open or update PR
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          branch="hardening-sync/chromium-flags"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Use a stable branch name so repeated runs update the same PR.
+          git checkout -B "$branch"
+          cp /tmp/upstream-flags.md core/baselines/ungoogled-flags.md
+          git add core/baselines/ungoogled-flags.md
+          git commit -m "chore(baselines): update ungoogled-chromium flags.md baseline"
+          git push --force origin "$branch"
+
+          # Build the PR body.
+          body="## Ungoogled-Chromium \`docs/flags.md\` drift detected"$'\n\n'
+          body+="The upstream flag reference has changed since the last pinned baseline."$'\n'
+          body+="Review the diff below and update \`HARDENING_FLAGS\` in"$'\n'
+          body+="\`core/src/browsers/ungoogled.rs\` and \`core/src/browsers/helium.rs\` as needed."$'\n\n'
+
+          if [ -s /tmp/deprecated-flags.txt ]; then
+            body+="### ⚠️ Nomad flags no longer in upstream docs"$'\n\n'
+            body+="These flags are in Nomad's active \`HARDENING_FLAGS\` but no longer appear"$'\n'
+            body+="in \`docs/flags.md\`. Verify they are not silently deprecated or renamed:"$'\n\n'
+            while IFS= read -r flag; do
+              body+="- \`${flag}\`"$'\n'
+            done < /tmp/deprecated-flags.txt
+            body+=$'\n'
+          fi
+
+          diff_excerpt="$(head -200 /tmp/flags-diff.txt)"
+          body+="### Diff (first 200 lines)"$'\n\n'
+          body+="\`\`\`diff"$'\n'"${diff_excerpt}"$'\n'"\`\`\`"$'\n\n'
+          body+="**No changes are auto-merged.** Human curation review required (SPEC §5)."
+
+          # Create PR if none exists for this branch; otherwise the force-push updates it.
+          existing=$(gh pr list --head "$branch" --json number --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -z "$existing" ]; then
+            gh pr create \
+              --title "hardening: ungoogled-chromium flags.md baseline update ($(date +%Y-%m-%d))" \
+              --body  "$body" \
+              --base  main \
+              --head  "$branch"
+          else
+            echo "PR #${existing} already open for ${branch} — force-push updated it."
+          fi
+
+  # ── Job 2: arkenfox user.js ───────────────────────────────────────────────
+  arkenfox:
+    name: Arkenfox user.js release watch
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch latest arkenfox release tag
+        id: upstream
+        run: |
+          tag=$(curl -sSf https://api.github.com/repos/arkenfox/user.js/releases/latest \
+                | jq -r '.tag_name')
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Latest arkenfox tag: ${tag}"
+
+      - name: Read pinned version
+        id: pinned
+        run: |
+          baseline="core/baselines/arkenfox-version.txt"
+          if [ -f "$baseline" ]; then
+            version="$(tr -d '[:space:]' < "$baseline")"
+          else
+            version=""
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Pinned version: ${version:-<none>}"
+
+      - name: Check for new release
+        id: check
+        run: |
+          upstream="${{ steps.upstream.outputs.tag }}"
+          pinned="${{ steps.pinned.outputs.version }}"
+          if [ "$upstream" != "$pinned" ]; then
+            echo "changed=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Arkenfox is up to date at ${pinned}."
+          fi
+
+      - name: Download new user.js
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          tag="${{ steps.upstream.outputs.tag }}"
+          curl -sSf \
+            "https://raw.githubusercontent.com/arkenfox/user.js/${tag}/user.js" \
+            -o /tmp/arkenfox-new-user.js
+          echo "Downloaded arkenfox ${tag} user.js ($(wc -l < /tmp/arkenfox-new-user.js) lines)"
+
+      - name: Diff user.js
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          if [ -f core/baselines/arkenfox-user.js ]; then
+            diff core/baselines/arkenfox-user.js /tmp/arkenfox-new-user.js \
+              > /tmp/userjs-diff.txt || true
+          else
+            echo "(no baseline — first sync)" > /tmp/userjs-diff.txt
+          fi
+
+      - name: Open or update PR
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.upstream.outputs.tag }}"
+          pinned="${{ steps.pinned.outputs.version }}"
+          [ -z "$pinned" ] && pinned="(none)"
+          branch="hardening-sync/arkenfox-${tag}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+
+          cp /tmp/arkenfox-new-user.js core/baselines/arkenfox-user.js
+          printf '%s\n' "$tag" > core/baselines/arkenfox-version.txt
+          git add core/baselines/arkenfox-user.js core/baselines/arkenfox-version.txt
+          git commit -m "chore(baselines): pin arkenfox user.js to ${tag}"
+          git push --force origin "$branch"
+
+          diff_excerpt="$(head -300 /tmp/userjs-diff.txt)"
+          body="## Arkenfox \`user.js\` updated: ${pinned} → ${tag}"$'\n\n'
+          body+="A new arkenfox release is available. Review the diff below and"$'\n'
+          body+="update \`core/payloads/firefox/user.js\` as needed (and the"$'\n'
+          body+="\`waterfox/user.js\` ESR variant + the minimal \`librewolf/user.js\`"$'\n'
+          body+="if affected), keeping only the safe, non-site-breaking subset (SPEC §5)."$'\n\n'
+          body+="### Diff (first 300 lines)"$'\n\n'
+          body+="\`\`\`diff"$'\n'"${diff_excerpt}"$'\n'"\`\`\`"$'\n\n'
+          body+="**No changes are auto-merged.** Human curation review required (SPEC §5)."
+
+          existing=$(gh pr list --head "$branch" --json number --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -z "$existing" ]; then
+            gh pr create \
+              --title "hardening: arkenfox user.js ${pinned} → ${tag}" \
+              --body  "$body" \
+              --base  main \
+              --head  "$branch"
+          else
+            echo "PR #${existing} already open for ${branch} — force-push updated it."
+          fi
+
+  # ── Job 3: ungoogled-chromium PAK logo resource IDs ───────────────────────
+  # The `chrome://settings/help` logo is patched by empirically-pinned grit
+  # resource IDs in launchers/ungoogled-chromium/src/main.rs. grit can renumber
+  # those IDs between Chromium versions, silently moving the logo (the runtime
+  # guard in core/src/branding.rs then skips with a WARN). This job verifies the
+  # IDs against a fresh release and FAILS loudly so they are re-derived before
+  # shipping. There is no text baseline to PR — the IDs live in code.
+  chromium-pak-logo-ids:
+    name: Ungoogled-Chromium PAK logo ID drift
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve latest ungoogled-chromium x64 zip
+        id: rel
+        run: |
+          url=$(curl -sSf \
+            https://api.github.com/repos/ungoogled-software/ungoogled-chromium-windows/releases/latest \
+            | jq -r '.assets[]
+                | select((.name | endswith(".zip"))
+                         and (.name | contains("x64"))
+                         and ((.name | contains("installer")) | not))
+                | .browser_download_url' | head -1)
+          if [ -z "$url" ]; then
+            echo "::error::no ungoogled-chromium x64 .zip asset found on the latest release"
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Asset: $url"
+
+      - name: Download + extract logo PAK files
+        run: |
+          curl -sSfL "${{ steps.rel.outputs.url }}" -o /tmp/uc.zip
+          # -j flattens the versioned top-level dir so both paks land in /tmp/paks.
+          unzip -o -j /tmp/uc.zip \
+            '*/chrome_100_percent.pak' '*/chrome_200_percent.pak' -d /tmp/paks
+          ls -la /tmp/paks
+
+      - name: Verify pinned logo resource IDs
+        run: |
+          # IDs + dimensions mirror the PakPatch set in
+          # launchers/ungoogled-chromium/src/main.rs.
+          fail=0
+          python3 scripts/verify_pak_logos.py /tmp/paks/chrome_100_percent.pak \
+            16324:32x32 16323:16x16 16326:16x16 || fail=1
+          python3 scripts/verify_pak_logos.py /tmp/paks/chrome_200_percent.pak \
+            16324:64x64 16323:16x16 16326:32x32 || fail=1
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::ungoogled-chromium PAK logo resource IDs drifted — re-derive them from the new release and update the PakPatch IDs in launchers/ungoogled-chromium/src/main.rs (see BRANDING.md B4 / SPEC §6)."
+            exit 1
+          fi
+          echo "All pinned ungoogled-chromium logo resource IDs still resolve correctly."

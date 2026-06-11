@@ -1,0 +1,13 @@
+# Build hardening for the Windows launcher binaries — defense-in-depth for the
+# prebuilt code Nomad ships (mirrors the toolchain hardening Trivalent applies
+# to Chromium; see AUDIT).
+#
+# Control Flow Guard (CFG): MSVC forward-edge control-flow integrity. Instruments
+# indirect calls in Nomad's own code and emits the PE load-config guard tables,
+# turning many memory-corruption bugs into fast aborts instead of control-flow
+# hijacks. Scoped to Windows targets so non-Windows tooling builds are unaffected.
+# NOTE: the precompiled `std` on stable is not CFG-built, so coverage is partial
+# (Nomad code + CFG-aware linked libs) — still meaningful hardening, and the PE is
+# flagged CFG-aware for the loader.
+[target.'cfg(windows)']
+rustflags = ["-C", "control-flow-guard=yes"]

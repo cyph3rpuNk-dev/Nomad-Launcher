@@ -1,0 +1,17 @@
+[package]
+name = "nomad-bitwarden"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Nomad Launcher for Bitwarden (portable desktop app)."
+
+[[bin]]
+name = "Nomad-Bitwarden"
+path = "src/main.rs"
+
+[dependencies]
+nomad-core = { workspace = true }
+
+[build-dependencies]
+winresource = "0.1"

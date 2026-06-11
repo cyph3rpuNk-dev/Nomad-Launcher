@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["core", "launchers/*"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.77"
+
+[workspace.dependencies]
+nomad-core = { path = "core" }
+
+[profile.release]
+# Turn silent integer wraparound into a loud panic in release builds. The
+# arithmetic in a launcher is tiny so the cost is negligible, and fail-loud is
+# the right posture for a privacy/security tool — a wraparound becomes a crash,
+# not a latent miscalculation.
+overflow-checks = true
