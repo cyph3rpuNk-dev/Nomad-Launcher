@@ -12,7 +12,7 @@ description = "Shared core library for the Nomad Launcher browser launchers."
 # glow + accesskit are the only other eframe defaults we use (verified: not wgpu).
 eframe = { version = "0.31", default-features = false, features = ["accesskit", "glow", "wayland", "x11"] }
 hex = "0.4"
-ico = "0.4"
+ico = "0.5"
 pgp = "0.14.2"
 reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
 serde = { version = "1", features = ["derive"] }
