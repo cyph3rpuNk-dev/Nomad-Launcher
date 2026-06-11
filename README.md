@@ -2,7 +2,9 @@
   <img src="core/payloads/nomad/nomad.png" width="220" alt="Nomad Launcher">
 </p>
 
-# Nomad Launcher
+<p align="center">
+  <a href= # Nomad Launcher></a>
+</p>
 
 <p align="center">
   <a href="https://github.com/cyph3rpuNk-dev/Nomad-Launcher/releases/latest"><img src="https://img.shields.io/github/v/release/cyph3rpuNk-dev/Nomad-Launcher?label=version" alt="Latest release"></a>
