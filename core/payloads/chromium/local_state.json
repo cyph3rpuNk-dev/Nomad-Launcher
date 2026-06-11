@@ -1,0 +1,15 @@
+{
+  "browser": {
+    "enabled_labs_experiments": [
+      "extension-mime-request-handling@2",
+      "omnibox-autocomplete-filtering@2",
+      "enforce-certificate-transparency@1",
+      "increase-incognito-storage-quota@1",
+      "disable-sharing-hub@1"
+    ]
+  },
+  "dns_over_https": {
+    "mode": "secure",
+    "templates": "https://dns.quad9.net/dns-query"
+  }
+}

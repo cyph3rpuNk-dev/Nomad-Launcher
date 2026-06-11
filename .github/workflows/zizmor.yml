@@ -1,0 +1,25 @@
+name: Zizmor GitHub Actions static analysis
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Default-deny; the job opts into only what's needed to upload findings.
+permissions: {}
+
+jobs:
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # upload SARIF to the code-scanning dashboard
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d # v0.5.6

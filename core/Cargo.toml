@@ -1,0 +1,52 @@
+[package]
+name = "nomad-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Shared core library for the Nomad Launcher browser launchers."
+
+[dependencies]
+# default_fonts dropped: the launcher ships only Atkinson Hyperlegible (vendored
+# in payloads/fonts/), so egui's bundled Ubuntu/NotoEmoji/Hack are not embedded.
+# glow + accesskit are the only other eframe defaults we use (verified: not wgpu).
+eframe = { version = "0.31", default-features = false, features = ["accesskit", "glow", "wayland", "x11"] }
+hex = "0.4"
+ico = "0.4"
+pgp = "0.14.2"
+reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "fs", "io-util", "rt", "rt-multi-thread", "macros"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zip = "2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+chrono = "0.4"
+httpmock = "0.7"
+rand = "0.8"
+tempfile = "3"
+zip = "2"
+
+[[test]]
+name = "integration"
+path = "tests/integration/main.rs"
