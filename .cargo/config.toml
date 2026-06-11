@@ -10,4 +10,14 @@
 # (Nomad code + CFG-aware linked libs) — still meaningful hardening, and the PE is
 # flagged CFG-aware for the loader.
 [target.'cfg(windows)']
-rustflags = ["-C", "control-flow-guard=yes"]
+rustflags = [
+    # Forward-edge control-flow integrity: instruments indirect calls and emits
+    # PE load-config guard tables; many memory-corruption bugs become fast
+    # aborts instead of control-flow hijacks.
+    "-C", "control-flow-guard=yes",
+    # Restrict DLL search order for all static (import-table) dependencies to
+    # System32 only.  Prevents the loader from finding a planted DLL in the
+    # application directory before it finds the real system DLL.
+    # 0x800 = LOAD_LIBRARY_SEARCH_SYSTEM32 (WinBase.h).
+    "-C", "link-arg=/DEPENDENTLOADFLAG:0x800",
+]

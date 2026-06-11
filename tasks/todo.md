@@ -97,7 +97,17 @@ Findings + resolutions: [AUDIT.md](../AUDIT.md) Addendum Session 11.
 - [x] Tor launcher fully removed (user direction; see Phase 9 banner) — stale exe + references cleaned, historical records banner-preserved
 - [x] Docs: `TRADEMARKS.md` created (was referenced but missing); verification tiers (Mullvad GPG, Waterfox SHA-512, fail-closed no-hash) and uBO trust model corrected across SPEC/README/CLAUDE; ghost `new_focus` removed from SPEC §3 tree
 - [x] Gate: 267 unit + 7 integration tests, clippy `-D warnings`, fmt — green. Release rebuilt (`dist.ps1`): 9 launchers, `SHA256SUMS` GPG-signed (verified Good); Authenticode skipped by decision (no cert)
-- [ ] **Repo is not under version control** — `git init` + initial commit is the outstanding risk-reducer
+- [x] **Repo is not under version control** — `git init` + initial commit done (2026-06-10)
+
+## Phase 12: Adversarial re-audit + DLL hardening (2026-06-10) — DONE
+Adversarial re-review findings (N-1 through N-8) + resolutions.
+- [x] **High (whole-volume scrub):** `scrub_shell_recent` / `scrub_automatic_destinations` skipped when `GetDriveTypeW != DRIVE_REMOVABLE` — no longer wipes system-wide Recent Items / JumpList when run from `C:` or any fixed drive
+- [x] **High (prefetch UAC on every exit):** `scrub_prefetch` made opt-in (`[hardening] scrub_prefetch = false` default); UAC elevation only fires when explicitly enabled; SPEC §4/§5 updated
+- [x] **High (DLL planting via elevated re-spawn):** `/DEPENDENTLOADFLAG:0x800` added to `.cargo/config.toml` rustflags (protects static imports); `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` added as first call in `nomad_core::run()` (protects runtime `LoadLibrary`). Verified via `dumpbin /LOADCONFIG`: `Dependent Load Flag = 0800` confirmed in release PE.
+- [x] **Medium (install_dir confinement):** `run_with_ui` now rejects absolute paths and `..` components before constructing `install_dir` — silent redirection of extraction outside the portable tree is no longer possible
+- [x] **Medium (incognito disables uBO):** `ungoogled.rs::launch_command` logs `WARN` when `--incognito` + uBO staged; comma-in-path guard added
+- [x] **Medium (non-atomic PAK write):** `apply_pak_patches` now uses temp+rename; power-loss on USB no longer corrupts the PAK permanently
+- [x] **Git init + initial commit** — full history from this point forward
 
 ---
 
