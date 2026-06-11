@@ -4,6 +4,14 @@
 
 # Nomad Launcher
 
+<p align="center">
+  <a href="https://github.com/cyph3rpuNk-dev/Nomad-Launcher/releases/latest"><img src="https://img.shields.io/github/v/release/cyph3rpuNk-dev/Nomad-Launcher?label=version" alt="Latest release"></a>
+  <a href="https://github.com/cyph3rpuNk-dev/Nomad-Launcher/releases"><img src="https://img.shields.io/github/downloads/cyph3rpuNk-dev/Nomad-Launcher/total" alt="Total downloads"></a>
+  <a href="https://github.com/cyph3rpuNk-dev/Nomad-Launcher/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cyph3rpuNk-dev/Nomad-Launcher/ci.yml?branch=main&label=build" alt="CI status"></a>
+  <a href="https://github.com/cyph3rpuNk-dev/Nomad-Launcher/issues"><img src="https://img.shields.io/github/issues/cyph3rpuNk-dev/Nomad-Launcher" alt="Open issues"></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="License"></a>
+</p>
+
 Single-file portable Windows browser launchers. Drop the `.exe` anywhere — USB drive, network share, local folder — and it downloads, GPG-verifies (where upstream signs), privacy-hardens, and launches the browser. When you close the browser, Nomad scrubs the host traces Windows leaves behind.
 
 No installer. No `HKLM` writes. No persistent services. No `%APPDATA%`. The browser lives in the launcher's directory and dies with it.
