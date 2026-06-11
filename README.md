@@ -72,7 +72,9 @@ Nomad applies a curated **"safe" hardening profile** — maximum privacy without
 
 **Chromium (Ungoogled Chromium, Helium):** launch flags disable sync, telemetry, JumpList, and machine ID; enable canvas/rects/measureText noise, WebRTC restriction, and referrer stripping. DoH is seeded to Quad9 secure mode. uBlock Origin is loaded via `--load-extension=` (sourced from [gorhill/uBlock](https://github.com/gorhill/uBlock) releases, GPG-verified tag).
 
-**Gecko (Firefox, Floorp, Waterfox, LibreWolf):** a fenced `user.js` (arkenfox-derived, safe subset) and a `policies.json` (disables updater, telemetry, Pocket) are written on every launch. uBlock Origin is provisioned from a locally cached AMO-signed `.xpi`.
+**Gecko (Firefox, Floorp, Waterfox):** a fenced `user.js` (arkenfox-derived, safe subset) and a `policies.json` (disables updater, telemetry, Pocket) are written on every launch. uBlock Origin is provisioned from a locally cached AMO-signed `.xpi`.
+
+**LibreWolf** ships pre-hardened, so Nomad applies a lighter touch. It gets its own minimal `user.js` — not the shared Firefox one — that adds only what LibreWolf doesn't already do: Quad9 malware-blocking DoH, `geo.enabled` off, network prediction off, WebRTC restricted, and the shutdown sanitize block. LibreWolf's own `librewolf.cfg` and autoconfig pair are never touched, and `privacy.resistFingerprinting` is left intact. uBlock Origin is provisioned the same way as Firefox (the portable ZIP doesn't bundle it).
 
 **Mullvad Browser** is launched completely unmodified — it ships its own crowd-blending anti-fingerprinting stack and any added pref would make users distinguishable.
 
