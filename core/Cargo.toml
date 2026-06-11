@@ -23,7 +23,7 @@ tokio = { version = "1", features = ["sync", "fs", "io-util", "rt", "rt-multi-th
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-zip = "2"
+zip = "8"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
@@ -45,7 +45,7 @@ chrono = "0.4"
 httpmock = "0.7"
 rand = "0.8"
 tempfile = "3"
-zip = "2"
+zip = "8"
 
 [[test]]
 name = "integration"
