@@ -1,13 +1,11 @@
 #![deny(clippy::all, clippy::pedantic)]
-// Build as a Windows GUI (windowed) application so launching the .exe does
-// not spawn a console window.
 #![windows_subsystem = "windows"]
 
 //! Nomad Launcher binary for Bitwarden (portable desktop app).
 
 use std::process::ExitCode;
 
-/// Bitwarden icon embedded at compile time (placeholder — replace before release).
+/// Bitwarden icon embedded at compile time.
 static ICON: &[u8] = include_bytes!("../assets/icon.ico");
 
 fn main() -> ExitCode {

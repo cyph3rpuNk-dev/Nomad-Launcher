@@ -1286,8 +1286,6 @@ fn wait_for_pipeline_action(state: &StateHandle) -> PipelineAction {
     }
 }
 
-// ── Tracing ───────────────────────────────────────────────────────────────────
-
 // ── Post-exit cleanup ─────────────────────────────────────────────────────────
 
 /// Splits argv at the first literal `--`: Nomad's own flags come before it,
