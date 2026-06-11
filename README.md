@@ -18,6 +18,10 @@ No installer. No `HKLM` writes. No persistent services. No `%APPDATA%`. The brow
 
 **Status:** Functionally complete and in daily use. *Inspired by [chrlauncher](https://github.com/henrypp/chrlauncher).*
 
+<p align="center">
+  <img src="docs/launcher.png" width="520" alt="Nomad Launcher downloading and updating Firefox">
+</p>
+
 ---
 
 ## Supported browsers
@@ -178,6 +182,8 @@ Writes to `HKCU` only (no UAC). State is tracked in `Nomad/nomad.reg-state.json`
 ## Troubleshooting
 
 **Nothing happens on launch.** First-run downloads take 30–90 seconds. Check `Nomad/nomad.log` for errors. If the log is empty, Windows SmartScreen may be quarantining the `.exe` — check Windows Security → Protection History.
+
+**"Windows protected your PC" on first launch.** Expected, not a malware detection. The launchers are unsigned, so Microsoft Defender SmartScreen flags them as "unrecognized" until they accrue download reputation — this happens to any new unsigned executable, not just Nomad. The binary is unmodified and still verifiable against `SHA256SUMS`. To run it: click **More info** → **Run anyway**, or clear the download mark first with `Unblock-File .\Nomad-Firefox.exe` (PowerShell) or right-click → Properties → tick **Unblock**. Don't disable SmartScreen system-wide to work around this — the per-file unblock is the correct scope.
 
 **uBlock Origin isn't installed.** Close and re-launch once. If it still doesn't appear, check that `Nomad/Gecko-extensions/uBlock0.xpi` exists and contains `META-INF/mozilla.rsa`.
 
