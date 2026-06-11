@@ -98,6 +98,19 @@ where
     B: BrowserFamily + 'static,
     F: FnOnce(Arch) -> B,
 {
+    // Restrict all subsequent LoadLibrary calls to System32 only.
+    // This covers runtime DLL loads; /DEPENDENTLOADFLAG in .cargo/config.toml
+    // covers static import-table loads that happen before this point.
+    // 0x800 = LOAD_LIBRARY_SEARCH_SYSTEM32.
+    #[cfg(windows)]
+    {
+        // SAFETY: SetDefaultDllDirectories has no preconditions beyond a valid
+        // flags bitmask; the call is always safe and takes effect immediately.
+        unsafe {
+            windows_sys::Win32::System::LibraryLoader::SetDefaultDllDirectories(0x800);
+        }
+    }
+
     init_tracing();
 
     let args: Vec<String> = std::env::args().collect();
