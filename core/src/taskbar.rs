@@ -149,7 +149,7 @@ pub fn acquire_hwnd() -> Option<Hwnd> {
     {
         use std::ffi::c_void;
 
-        use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
+        use windows_sys::Win32::Foundation::{HWND, LPARAM};
         use windows_sys::Win32::System::Threading::GetCurrentProcessId;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
@@ -160,7 +160,7 @@ pub fn acquire_hwnd() -> Option<Hwnd> {
             hwnd: HWND,
         }
 
-        unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> i32 {
             // SAFETY: lparam is a valid *mut State cast to LPARAM.
             let state = unsafe { &mut *(lparam as *mut State) };
             let mut pid: u32 = 0;
