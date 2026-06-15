@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
       - name: Fetch upstream flags.md
         run: |
@@ -124,7 +124,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
       - name: Fetch latest arkenfox release tag
         id: upstream
@@ -230,7 +230,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           persist-credentials: false
 
@@ -269,7 +269,7 @@ jobs:
           python3 scripts/verify_pak_logos.py /tmp/paks/chrome_200_percent.pak \
             16325:64x64 16327:32x32 || fail=1
           if [ "$fail" -ne 0 ]; then
-            echo "::error::ungoogled-chromium PAK logo resource IDs drifted — re-derive them from the new release and update the PakPatch IDs in launchers/ungoogled-chromium/src/main.rs (see BRANDING.md B4 / SPEC §6)."
+            echo "::error::ungoogled-chromium PAK logo resource IDs drifted — re-derive them from the new release and update the PakPatch IDs in launchers/ungoogled-chromium/src/main.rs (re-derivation recipe is in that file's pak_patches comment; see also scripts/verify_pak_logos.py)."
             exit 1
           fi
           echo "All pinned ungoogled-chromium logo resource IDs still resolve correctly."
