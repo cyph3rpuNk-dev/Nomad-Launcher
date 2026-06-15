@@ -148,9 +148,12 @@ jobs:
 
       - name: Check for new release
         id: check
+        env:
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
+          PINNED_VERSION: ${{ steps.pinned.outputs.version }}
         run: |
-          upstream="${{ steps.upstream.outputs.tag }}"
-          pinned="${{ steps.pinned.outputs.version }}"
+          upstream="$UPSTREAM_TAG"
+          pinned="$PINNED_VERSION"
           if [ "$upstream" != "$pinned" ]; then
             echo "changed=true"  >> "$GITHUB_OUTPUT"
           else
@@ -160,8 +163,10 @@ jobs:
 
       - name: Download new user.js
         if: steps.check.outputs.changed == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
         run: |
-          tag="${{ steps.upstream.outputs.tag }}"
+          tag="$UPSTREAM_TAG"
           curl -sSf \
             "https://raw.githubusercontent.com/arkenfox/user.js/${tag}/user.js" \
             -o /tmp/arkenfox-new-user.js
@@ -181,9 +186,11 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
+          PINNED_VERSION: ${{ steps.pinned.outputs.version }}
         run: |
-          tag="${{ steps.upstream.outputs.tag }}"
-          pinned="${{ steps.pinned.outputs.version }}"
+          tag="$UPSTREAM_TAG"
+          pinned="$PINNED_VERSION"
           [ -z "$pinned" ] && pinned="(none)"
           branch="hardening-sync/arkenfox-${tag}"
 
@@ -252,8 +259,10 @@ jobs:
           echo "Asset: $url"
 
       - name: Download + extract logo PAK files
+        env:
+          ASSET_URL: ${{ steps.rel.outputs.url }}
         run: |
-          curl -sSfL "${{ steps.rel.outputs.url }}" -o /tmp/uc.zip
+          curl -sSfL "$ASSET_URL" -o /tmp/uc.zip
           # -j flattens the versioned top-level dir so both paks land in /tmp/paks.
           unzip -o -j /tmp/uc.zip \
             '*/chrome_100_percent.pak' '*/chrome_200_percent.pak' -d /tmp/paks
