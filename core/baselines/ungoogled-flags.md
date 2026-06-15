@@ -1,4 +1,4 @@
-﻿# List of flags and switches
+# List of flags and switches
 
 This is an exhaustive list of command-line switches and flags introduced by ungoogled-chromium.
 Each switch has a corresponding entry on the `chrome://flags` page which can be filtered by searching for `ungoogled-chromium`.
@@ -25,6 +25,7 @@ If a switch requires a value, you must specify it with an `=` sign; e.g. flag `-
   `--max-connections-per-host` | (from Bromite) Configure the maximum allowed connections per host. Valid values are `6` and `15`
   `--omnibox-autocomplete-filtering` | Restrict omnibox autocomplete results to a combination of search suggestions (if enabled), bookmarks, and internal chrome pages. Accepts `search`, `search-bookmarks`, `search-chrome`, and `search-bookmarks-chrome`.
   `--popups-to-tabs` | Makes popups open in new tabs.
+  `--disabling-javascript-optimization-disables-jit` | Disables JIT too if the "JavaScript optimization" setting is turned off
 
 - ### Available only on desktop
 
