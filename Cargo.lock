@@ -3137,7 +3137,7 @@ dependencies = [
 
 [[package]]
 name = "nomad-bitwarden"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nomad-core",
  "winresource",
@@ -3145,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "nomad-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "eframe",
@@ -3171,7 +3171,7 @@ dependencies = [
 
 [[package]]
 name = "nomad-firefox"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nomad-core",
  "winresource",
@@ -3179,7 +3179,7 @@ dependencies = [
 
 [[package]]
 name = "nomad-firefox-esr"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nomad-core",
  "winresource",
@@ -3187,7 +3187,7 @@ dependencies = [
 
 [[package]]
 name = "nomad-floorp"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nomad-core",
  "winresource",
@@ -3195,7 +3195,7 @@ dependencies = [
 
 [[package]]
 name = "nomad-helium"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nomad-core",
  "winresource",
@@ -3203,7 +3203,7 @@ dependencies = [
 
 [[package]]
 name = "nomad-librewolf"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nomad-core",
  "winresource",
@@ -3211,7 +3211,7 @@ dependencies = [
 
 [[package]]
 name = "nomad-mullvad"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nomad-core",
  "winresource",
@@ -3219,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "nomad-ungoogled-chromium"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nomad-core",
  "winresource",
@@ -3227,7 +3227,7 @@ dependencies = [
 
 [[package]]
 name = "nomad-waterfox"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nomad-core",
  "winresource",
