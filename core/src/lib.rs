@@ -1035,6 +1035,7 @@ fn do_launch<B: BrowserFamily>(
     scrub_mozilla_installs_ini();
     scrub_mozilla_runtime_dirs();
     scrub_mullvad_runtime_dir();
+    scrub_chromium_runtime_dirs();
     let mut cmd = browser.launch_command(install_dir, extra_args);
     let browser_exe_name = browser_exe_file_name(&cmd);
     let child = cmd.spawn()?;
@@ -1113,6 +1114,7 @@ fn handle_error<B: BrowserFamily>(
             scrub_mozilla_installs_ini();
             scrub_mozilla_runtime_dirs();
             scrub_mullvad_runtime_dir();
+            scrub_chromium_runtime_dirs();
             let mut cmd = browser.launch_command(install_dir, extra_args);
             let browser_exe_name = browser_exe_file_name(&cmd);
             if let Ok(child) = cmd.spawn() {
@@ -1352,6 +1354,7 @@ fn handle_cleanup_flag(args: CleanupArgs) -> ExitCode {
     scrub_mozilla_installs_ini();
     scrub_mozilla_runtime_dirs();
     scrub_mullvad_runtime_dir();
+    scrub_chromium_runtime_dirs();
     scrub_shell_recent();
     scrub_automatic_destinations();
     if args.scrub_thumbnail_cache {
@@ -2185,6 +2188,57 @@ fn scrub_mullvad_runtime_dir_in(local: Option<&std::path::Path>) {
     }
 }
 
+/// Removes the Chromium-family host runtime directories under `%LOCALAPPDATA%`.
+///
+/// Unlike the Gecko brands, a *Nomad* launch of ungoogled-chromium or Helium
+/// writes nothing here — `launch_command` always passes `--user-data-dir`
+/// beside the exe, which redirects the whole profile. These directories only
+/// appear when the browser executable is launched **outside** Nomad with no
+/// such flag, so Chromium falls back to its built-in default location — most
+/// commonly a link click that opened the raw `chrome.exe` because it (rather
+/// than the Nomad launcher) was registered as the OS default browser. This
+/// scrub clears those strays on the next Nomad-launched session so nothing
+/// accumulates in `%LOCALAPPDATA%`.
+///
+/// - ungoogled-chromium → `%LOCALAPPDATA%\Chromium` (unbranded Chromium)
+/// - Helium             → `%LOCALAPPDATA%\imput\Helium` (vendor dir `imput\`)
+///
+/// As with [`scrub_mullvad_runtime_dir`], Helium's vendor parent `imput\` is
+/// removed only when it is left empty, so a future `imput` product's data is
+/// preserved. Same accepted tradeoff as the Gecko scrub: a separate, non-Nomad
+/// Chromium or Helium install would also be cleaned — the portable-first
+/// posture treats these brand dirs as Nomad's to scrub.
+fn scrub_chromium_runtime_dirs() {
+    let local = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+    scrub_chromium_runtime_dirs_in(local.as_deref());
+}
+
+fn scrub_chromium_runtime_dirs_in(local: Option<&std::path::Path>) {
+    let Some(local) = local else {
+        return;
+    };
+
+    // ungoogled-chromium: unbranded top-level dir.
+    let chromium = local.join("Chromium");
+    if chromium.exists() {
+        try_remove_dir_with_retry(&chromium);
+    }
+
+    // Helium: nested under the `imput` vendor dir. Remove the browser subdir,
+    // then the vendor parent only if nothing else (a future imput product)
+    // remains in it.
+    let imput = local.join("imput");
+    let helium = imput.join("Helium");
+    if helium.exists() {
+        try_remove_dir_with_retry(&helium);
+    }
+    if let Ok(mut entries) = std::fs::read_dir(&imput) {
+        if entries.next().is_none() {
+            let _ = std::fs::remove_dir(&imput);
+        }
+    }
+}
+
 /// Tolerant tree delete modeled on `LibreWolf` Portable's cleanup strategy:
 /// walks `dir` post-order, deletes each **file** individually (a single
 /// locked file doesn't abort the rest), then removes each **directory** only
@@ -2206,13 +2260,13 @@ fn try_remove_dir_with_retry(dir: &std::path::Path) {
             path = %dir.display(),
             deleted_files,
             locked,
-            "Gecko runtime dir partially scrubbed (some entries still locked)"
+            "browser runtime dir partially scrubbed (some entries still locked)"
         );
     } else {
         tracing::info!(
             path = %dir.display(),
             deleted_files,
-            "removed Gecko runtime dir"
+            "removed browser runtime dir"
         );
     }
 }
@@ -2909,6 +2963,78 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let nonexistent = temp.path().join("does-not-exist");
         scrub_mozilla_runtime_dirs_in(Some(&nonexistent), Some(&nonexistent));
+    }
+
+    #[test]
+    fn scrub_chromium_runtime_dirs_removes_chromium_and_helium() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path();
+
+        // ungoogled-chromium's unbranded default profile.
+        let chromium = local.join("Chromium").join("User Data").join("Default");
+        std::fs::create_dir_all(&chromium).unwrap();
+        std::fs::write(chromium.join("Preferences"), b"{}").unwrap();
+
+        // Helium's profile under the imput vendor dir.
+        let helium = local.join("imput").join("Helium").join("User Data");
+        std::fs::create_dir_all(&helium).unwrap();
+        std::fs::write(helium.join("Local State"), b"{}").unwrap();
+
+        // A future imput product sharing the vendor parent — must be preserved.
+        let other = local.join("imput").join("SomethingElse");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("data"), b"keep").unwrap();
+
+        // A bystander dir that must NOT be touched.
+        std::fs::create_dir_all(local.join("Microsoft")).unwrap();
+
+        scrub_chromium_runtime_dirs_in(Some(local));
+
+        assert!(
+            !local.join("Chromium").exists(),
+            "LOCALAPPDATA\\Chromium must be removed"
+        );
+        assert!(
+            !local.join("imput").join("Helium").exists(),
+            "LOCALAPPDATA\\imput\\Helium must be removed"
+        );
+        assert!(
+            other.join("data").exists(),
+            "other imput product data must be preserved"
+        );
+        assert!(
+            local.join("imput").exists(),
+            "imput vendor parent must be kept while other product data remains"
+        );
+        assert!(
+            local.join("Microsoft").exists(),
+            "bystander LOCALAPPDATA dir must be preserved"
+        );
+    }
+
+    #[test]
+    fn scrub_chromium_runtime_dirs_removes_now_empty_imput_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path();
+        std::fs::create_dir_all(local.join("imput").join("Helium").join("User Data")).unwrap();
+
+        scrub_chromium_runtime_dirs_in(Some(local));
+
+        assert!(
+            !local.join("imput").exists(),
+            "empty imput parent must be removed when only Helium existed"
+        );
+    }
+
+    #[test]
+    fn scrub_chromium_runtime_dirs_handles_missing_base_dir() {
+        // None base dir — must not panic.
+        scrub_chromium_runtime_dirs_in(None);
+        // Present base dir with no Chromium/imput entries — must not panic or create anything.
+        let temp = tempfile::tempdir().unwrap();
+        scrub_chromium_runtime_dirs_in(Some(temp.path()));
+        assert!(!temp.path().join("Chromium").exists());
+        assert!(!temp.path().join("imput").exists());
     }
 
     #[test]
