@@ -60,4 +60,17 @@ jobs:
         # (public-key operations), never to decrypt, and there is no fixed
         # upstream `rsa` release. Re-evaluate if a patched `rsa` ships or Nomad's
         # cryptographic usage changes.
-        run: cargo audit --ignore RUSTSEC-2023-0071
+        #
+        # RUSTSEC-2026-0194 / RUSTSEC-2026-0195 (quick-xml DoS) never reach a
+        # shipped binary: quick-xml enters the lockfile only through Linux-only
+        # paths (zbus_xml -> atspi D-Bus accessibility, and wayland-scanner)
+        # behind eframe's wayland/x11 features, and Nomad ships Windows
+        # binaries only — `cargo tree -i quick-xml` on the Windows target finds
+        # nothing. No semver-compatible fix exists (zbus_xml 4.0 pins 0.30,
+        # wayland-scanner pins 0.39; fixed in 0.41). Re-evaluate on the next
+        # eframe upgrade.
+        run: >-
+          cargo audit
+          --ignore RUSTSEC-2023-0071
+          --ignore RUSTSEC-2026-0194
+          --ignore RUSTSEC-2026-0195
