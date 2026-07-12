@@ -181,6 +181,8 @@ Writes to `HKCU` only (no UAC). State is tracked in `Nomad/nomad.reg-state.json`
 
 **Nothing happens on launch.** First-run downloads take 30–90 seconds. Check `Nomad/nomad.log` for errors. If the log is empty, Windows SmartScreen may be quarantining the `.exe` — check Windows Security → Protection History.
 
+**"Launch failed: window error" / won't start in a virtual machine.** The status window needs OpenGL 2.0, which VMs without 3D acceleration don't provide (they fall back to Windows' software GL 1.1). Enable it and relaunch: VirtualBox — install Guest Additions and tick **Settings → Display → 3D Acceleration**; VMware — tick **Accelerate 3D graphics** in the VM's display settings. Hyper-V's basic display adapter has no GL acceleration; use an enhanced-session GPU (GPU-P) or a different hypervisor.
+
 **"Windows protected your PC" on first launch.** Expected, not a malware detection. The launchers are unsigned, so Microsoft Defender SmartScreen flags them as "unrecognized" until they accrue download reputation — this happens to any new unsigned executable, not just Nomad. The binary is unmodified and still verifiable against `SHA256SUMS`. To run it: click **More info** → **Run anyway**, or clear the download mark first with `Unblock-File .\Nomad-Firefox.exe` (PowerShell) or right-click → Properties → tick **Unblock**. Don't disable SmartScreen system-wide to work around this — the per-file unblock is the correct scope.
 
 **uBlock Origin isn't installed.** Close and re-launch once. If it still doesn't appear, check that `Nomad/Gecko-extensions/uBlock0.xpi` exists and contains `META-INF/mozilla.rsa`.

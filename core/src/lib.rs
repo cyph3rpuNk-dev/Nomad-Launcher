@@ -132,7 +132,21 @@ where
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             tracing::error!(error = %e, "launcher failed");
-            eprintln!("Nomad Launcher: {e}");
+            // Launchers are windowed processes with no console, so stderr is
+            // invisible — a message box is the only channel guaranteed to
+            // reach the user when the status window itself cannot open.
+            let mut text = format!("Launch failed: {e}");
+            if matches!(e, RunError::Ui(_)) {
+                text.push_str(
+                    "\n\nThe status window could not be created. This usually \
+                     means OpenGL 2.0 is not available — common in virtual \
+                     machines without 3D acceleration. Enable it (VirtualBox: \
+                     install Guest Additions and tick \"3D Acceleration\"; \
+                     VMware: tick \"Accelerate 3D graphics\") and try again.",
+                );
+            }
+            text.push_str("\n\nDetails: Nomad\\nomad.log beside this launcher.");
+            show_msgbox(&text, true);
             ExitCode::FAILURE
         }
     }
