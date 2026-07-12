@@ -549,24 +549,24 @@ fn setup_visuals(ctx: &egui::Context, accent: egui::Color32) {
     // Resting button: card surface with a hairline border.
     w.inactive.bg_fill = theme::CARD;
     w.inactive.weak_bg_fill = theme::CARD;
-    w.inactive.bg_stroke = egui::Stroke::new(1.0, theme::BORDER);
-    w.inactive.fg_stroke = egui::Stroke::new(1.0, theme::TEXT_PRIMARY);
+    w.inactive.bg_stroke = egui::Stroke::new(1.0_f32, theme::BORDER);
+    w.inactive.fg_stroke = egui::Stroke::new(1.0_f32, theme::TEXT_PRIMARY);
     w.inactive.corner_radius = radius;
     // Hover: lift to the border tone, accent outline.
     w.hovered.bg_fill = theme::BORDER;
     w.hovered.weak_bg_fill = theme::BORDER;
-    w.hovered.bg_stroke = egui::Stroke::new(1.0, accent);
-    w.hovered.fg_stroke = egui::Stroke::new(1.0, theme::TEXT_PRIMARY);
+    w.hovered.bg_stroke = egui::Stroke::new(1.0_f32, accent);
+    w.hovered.fg_stroke = egui::Stroke::new(1.0_f32, theme::TEXT_PRIMARY);
     w.hovered.corner_radius = radius;
     // Pressed/active: accent fill with on-accent ink.
     w.active.bg_fill = accent;
     w.active.weak_bg_fill = accent;
-    w.active.bg_stroke = egui::Stroke::new(1.0, accent);
-    w.active.fg_stroke = egui::Stroke::new(1.0, theme::ON_ACCENT);
+    w.active.bg_stroke = egui::Stroke::new(1.0_f32, accent);
+    w.active.fg_stroke = egui::Stroke::new(1.0_f32, theme::ON_ACCENT);
     w.active.corner_radius = radius;
 
     vis.selection.bg_fill = accent.gamma_multiply(0.4);
-    vis.selection.stroke = egui::Stroke::new(1.0, accent);
+    vis.selection.stroke = egui::Stroke::new(1.0_f32, accent);
     ctx.set_visuals(vis);
 }
 
