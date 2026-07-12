@@ -695,11 +695,11 @@ fn verify_gorhill_tag_signature(
 /// [`crate::gpg::verify_bytes`].
 #[cfg(not(test))]
 fn gorhill_key_armored(gorhill_key: &[u8]) -> Result<Vec<u8>> {
-    use pgp::types::PublicKeyTrait;
-    use pgp::Deserializable;
+    use pgp::composed::Deserializable;
+    use pgp::types::KeyDetails;
 
     let cursor = std::io::Cursor::new(gorhill_key);
-    let (iter, _) = pgp::SignedPublicKey::from_armor_many(cursor)
+    let (iter, _) = pgp::composed::SignedPublicKey::from_armor_many(cursor)
         .map_err(|e| BrowserError::Parse(format!("embedded gorhill key not armored: {e}")))?;
     for key in iter.flatten() {
         let fp = hex::encode_upper(key.primary_key.fingerprint().as_bytes());
@@ -1489,10 +1489,10 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
     #[test]
     fn gorhill_embedded_key_matches_pinned_fingerprint() {
         // This test exercises the non-test variant of gorhill_key_armored.
-        use pgp::types::PublicKeyTrait;
-        use pgp::Deserializable;
+        use pgp::composed::Deserializable;
+        use pgp::types::KeyDetails;
         let cursor = std::io::Cursor::new(GORHILL_KEY);
-        let (iter, _) = pgp::SignedPublicKey::from_armor_many(cursor).unwrap();
+        let (iter, _) = pgp::composed::SignedPublicKey::from_armor_many(cursor).unwrap();
         let mut found = false;
         for key in iter.flatten() {
             let fp = hex::encode_upper(key.primary_key.fingerprint().as_bytes());

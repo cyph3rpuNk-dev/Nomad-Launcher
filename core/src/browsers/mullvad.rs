@@ -451,10 +451,10 @@ mod tests {
 
     #[test]
     fn embedded_key_matches_expected_fingerprint() {
-        use pgp::types::PublicKeyTrait;
-        use pgp::Deserializable;
+        use pgp::composed::Deserializable;
+        use pgp::types::KeyDetails;
         let cursor = std::io::Cursor::new(MULLVAD_KEY);
-        let (iter, _) = pgp::SignedPublicKey::from_armor_many(cursor).unwrap();
+        let (iter, _) = pgp::composed::SignedPublicKey::from_armor_many(cursor).unwrap();
         let mut found = false;
         for key in iter.flatten() {
             let fp = hex::encode_upper(key.primary_key.fingerprint().as_bytes());

@@ -7,7 +7,7 @@
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use pgp::{Deserializable, SignedPublicKey, StandaloneSignature};
+use pgp::composed::{Deserializable, DetachedSignature, SignedPublicKey};
 
 /// Errors from signature or hash verification.
 #[derive(Debug, thiserror::Error)]
@@ -70,12 +70,12 @@ pub fn verify_bytes(
     let (public_key, _) = SignedPublicKey::from_armor_single(Cursor::new(armored_public_key))
         .map_err(|e| GpgError::PublicKey(e.to_string()))?;
     // Try ASCII-armored first; fall back to binary PGP (e.g. Pale Moon `.sig` files).
-    let sig = StandaloneSignature::from_armor_single(Cursor::new(signature))
+    let sig = DetachedSignature::from_armor_single(Cursor::new(signature))
         .map(|(s, _)| s)
-        .or_else(|_| StandaloneSignature::from_bytes(signature))
+        .or_else(|_| DetachedSignature::from_bytes(signature))
         .map_err(|e| GpgError::SignatureData(e.to_string()))?;
-    // pgp v0.14 only checks the supplied key, not its subkeys automatically.
-    // Try the primary key first, then every signing subkey.
+    // The pgp crate checks only the supplied key, not its subkeys
+    // automatically. Try the primary key first, then every signing subkey.
     let primary_err = sig.verify(&public_key, package);
     if primary_err.is_ok() {
         return Ok(());
@@ -166,12 +166,13 @@ pub mod sha512 {
 
 #[cfg(test)]
 mod tests {
-    use chrono::SubsecRound;
+    use pgp::composed::{
+        ArmorOptions, DetachedSignature, KeyType, SecretKeyParamsBuilder, SignedSecretKey,
+    };
     use pgp::crypto::hash::HashAlgorithm;
     use pgp::crypto::public_key::PublicKeyAlgorithm;
     use pgp::packet::{SignatureConfig, SignatureType, Subpacket, SubpacketData};
-    use pgp::types::{PublicKeyTrait, SecretKeyTrait};
-    use pgp::{ArmorOptions, KeyType, SecretKeyParamsBuilder, SignedSecretKey};
+    use pgp::types::{KeyDetails, Password, Timestamp};
     use rand::rngs::OsRng;
 
     use super::{sha256, verify_bytes};
@@ -180,19 +181,16 @@ mod tests {
     fn keypair(user: &str) -> SignedSecretKey {
         let mut builder = SecretKeyParamsBuilder::default();
         builder
-            .key_type(KeyType::EdDSALegacy)
+            .key_type(KeyType::Ed25519Legacy)
             .can_sign(true)
             .primary_user_id(user.to_owned());
         let params = builder.build().expect("valid key params");
-        let secret = params.generate(OsRng).expect("key generation");
-        secret.sign(OsRng, String::new).expect("self-sign key")
+        params.generate(OsRng).expect("key generation")
     }
 
     /// Returns the ASCII-armored public key for `key`.
     fn armored_public_key(key: &SignedSecretKey) -> Vec<u8> {
-        key.public_key()
-            .sign(OsRng, key, String::new)
-            .expect("sign public key")
+        key.to_public_key()
             .to_armored_bytes(ArmorOptions::default())
             .expect("armor public key")
     }
@@ -202,18 +200,18 @@ mod tests {
         let mut config = SignatureConfig::v4(
             SignatureType::Binary,
             PublicKeyAlgorithm::EdDSALegacy,
-            HashAlgorithm::SHA2_256,
+            HashAlgorithm::Sha256,
         );
         config.hashed_subpackets = vec![
-            Subpacket::regular(SubpacketData::SignatureCreationTime(
-                chrono::Utc::now().trunc_subsecs(0),
-            )),
-            Subpacket::regular(SubpacketData::Issuer(key.key_id())),
+            Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
+                .expect("creation-time subpacket"),
+            Subpacket::regular(SubpacketData::IssuerKeyId(key.primary_key.legacy_key_id()))
+                .expect("issuer subpacket"),
         ];
         let signature = config
-            .sign(key, String::new, data)
+            .sign(&key.primary_key, &Password::empty(), data)
             .expect("create detached signature");
-        pgp::StandaloneSignature::new(signature)
+        DetachedSignature::new(signature)
             .to_armored_bytes(ArmorOptions::default())
             .expect("armor signature")
     }
