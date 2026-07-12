@@ -153,14 +153,19 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ```bash
 # Import the Nomad release key and confirm the fingerprint:
-# 4D92 5DAD 1DB4 405C 99EA 1FD3 9984 5DA3 20CD 1F37
+# 4F90 CF11 723D C3A2 E719 8331 FEF9 81E9 09EF 44ED
 gpg --import nomad-release-signing-key.asc
-gpg --fingerprint 4D925DAD1DB4405C99EA1FD399845DA320CD1F37
+gpg --fingerprint 4F90CF11723DC3A2E7198331FEF981E909EF44ED
 
 # Verify the manifest, then check your binary against it
 gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
 ```
+
+> **Key rotation (v1.0.2):** access to the previous signing key
+> (`4D92 5DAD 1DB4 405C 99EA 1FD3 9984 5DA3 20CD 1F37`) was lost; it is not
+> believed compromised. Releases up to and including v1.0.1 remain verifiable
+> against that key ([announcement](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/releases/tag/v1.0.2)).
 
 On Windows PowerShell: `(Get-FileHash .\Nomad-Firefox.exe -Algorithm SHA256).Hash.ToLower()` and compare against the `SHA256SUMS` line.
 
