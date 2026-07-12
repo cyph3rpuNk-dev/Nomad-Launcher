@@ -128,6 +128,21 @@ where
         return handle_prefetch_scrub_flag();
     }
 
+    // Panics bypass the Result-based error arm below and would otherwise die
+    // on the invisible stderr (e.g. deep inside the GL window stack when a VM
+    // exposes no usable pixel format). Log and surface them like any other
+    // launch failure. Installed after the flag dispatch above so the detached
+    // cleanup watcher never pops a dialog on the user's desktop.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(panic = %info, "launcher panicked");
+        show_msgbox(
+            &format!("Nomad Launcher crashed:\n\n{info}\n\nDetails: Nomad\\nomad.log beside this launcher."),
+            true,
+        );
+        default_hook(info);
+    }));
+
     match run_with_ui(make, icon, branding, forwarded_args.to_vec()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
