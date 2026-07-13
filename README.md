@@ -10,7 +10,7 @@
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="License"></a>
 </p>
 
-Nomad Launcher is a set of single-file portable browser launchers for Windows. Copy a `Nomad-<browser>.exe` to any folder you can write to (a USB stick, a network share, a local directory) and run it. The launcher downloads the browser, verifies the download against upstream signatures or hashes, applies a privacy-hardening profile, and starts it. Everything stays inside that one folder: there is no installer, no `HKLM` registry writes, no services, and nothing in `%APPDATA%`. After the browser exits, Nomad also cleans up the traces that Windows itself writes to the host, so deleting the folder really does remove everything.
+Nomad Launcher is a set of single-file portable browser launchers for Windows. Copy a `Nomad-<browser>.exe` to any folder you can write to (a USB stick, a network share, a local directory) and run it. The launcher downloads the browser, verifies the download against upstream signatures or hashes, applies a privacy-hardening profile, and starts it. Everything stays inside that one folder: there is no installer, no `HKLM` registry writes, no services, and nothing in `%APPDATA%`. After the browser exits, Nomad also cleans up the traces that Windows itself writes to the host. Some OS-level records are beyond its reach; the [Post-exit cleanup](#post-exit-cleanup) section lists both sides honestly.
 
 The project is functionally complete and in daily use. It was inspired by [chrlauncher](https://github.com/henrypp/chrlauncher).
 
@@ -101,7 +101,13 @@ When the browser closes, a detached watcher process scrubs the traces Windows wr
 | `%LOCALAPPDATA%\{Mozilla, Firefox, Floorp, …}\` | Gecko runtime working dirs |
 | `C:\Windows\Prefetch\` | Prefetch entries (requires UAC; decline the prompt to skip) |
 
-Thumbnail cache scrubbing is opt-in (`scrub_thumbnail_cache = true`) because it briefly restarts Explorer.
+Thumbnail cache scrubbing is opt-in (`scrub_thumbnail_cache = true`) because it briefly restarts Explorer. The Recent-shortcut and Jump List scrubs only run when the launcher is on a removable drive, so they can never wipe your system-wide history when run from `C:`.
+
+### What Nomad cannot scrub
+
+Windows keeps execution records that Nomad does not remove, either because deleting them requires administrator rights or because removing them would harm the system: Amcache and ShimCache (program execution history), SRUM (per-application network usage), the NTFS USN journal's record of deleted files, Windows event logs, and the pagefile. Prefetch is the one Nomad can reach, and only with elevation (`scrub_prefetch`, opt-in).
+
+In practical terms: the scrub removes what a casual look at the machine would find, not what a forensic examination would. If your threat model includes forensics on the host, a portable browser on that host is the wrong tool. The full threat model is in [SECURITY.md](SECURITY.md).
 
 ## On-disk layout
 
@@ -138,6 +144,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 # 4F90 CF11 723D C3A2 E719 8331 FEF9 81E9 09EF 44ED
 gpg --import nomad-release-signing-key.asc
 gpg --fingerprint 4F90CF11723DC3A2E7198331FEF981E909EF44ED
+
+# The key is also published on keyservers independent of this repository,
+# so you can cross-check that the copy here hasn't been swapped:
+gpg --keyserver hkps://keys.openpgp.org --recv-keys 4F90CF11723DC3A2E7198331FEF981E909EF44ED
 
 # Verify the manifest, then check your binary against it
 gpg --verify SHA256SUMS.asc SHA256SUMS
@@ -190,7 +200,7 @@ In a `Browser/` folder beside the launcher (see [On-disk layout](#on-disk-layout
 Yes. The launcher and its `Browser/` and `Data/` folders are fully portable. Move them anywhere and they behave the same.
 
 **Does it leave anything behind after I delete it?**
-Runtime traces Windows writes on its own are scrubbed when the browser closes (see [Post-exit cleanup](#post-exit-cleanup)). Delete the launcher's folder and nothing remains. If you used `--register-default`, run `--unregister-default` first to remove the `HKCU` entries.
+No files or configuration: runtime traces Windows writes on its own are scrubbed when the browser closes, and deleting the launcher's folder removes everything Nomad and the browser wrote. Windows itself still keeps some execution records that Nomad cannot remove (see [What Nomad cannot scrub](#what-nomad-cannot-scrub)). If you used `--register-default`, run `--unregister-default` first to remove the `HKCU` entries.
 
 **What happens if a download fails verification?**
 The launcher aborts before extracting or running anything. Any existing install is left untouched.
