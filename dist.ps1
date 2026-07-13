@@ -103,8 +103,10 @@ $lines = foreach ($e in $exes) {
     $h = (Get-FileHash $e.FullName -Algorithm SHA256).Hash.ToLower()
     "$h  $($e.Name)"
 }
-# ASCII, no BOM — so `sha256sum -c SHA256SUMS` and `gpg --verify` read it cleanly.
-Set-Content -Path $sumsPath -Value $lines -Encoding ascii
+# ASCII, no BOM, LF line endings. Set-Content would write CRLF, and GNU
+# sha256sum treats the \r as part of the filename ("no file was verified" —
+# the v1.0.2 manifest shipped with this bug).
+[IO.File]::WriteAllText($sumsPath, (($lines -join "`n") + "`n"), [Text.Encoding]::ASCII)
 Write-Host "Wrote SHA256SUMS ($($exes.Count) entries)"
 
 # --- Authenticity: detached GPG signature of SHA256SUMS ---
