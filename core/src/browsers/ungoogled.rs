@@ -238,6 +238,7 @@ impl BrowserFamily for UngoogledChromium {
     async fn fetch_latest_version(&self) -> Result<VersionInfo> {
         let client = reqwest::Client::builder()
             .user_agent("nomad-portable")
+            .redirect(crate::downloader::redirect_policy())
             .build()
             .map_err(|e| BrowserError::Network(e.to_string()))?;
         let body = client

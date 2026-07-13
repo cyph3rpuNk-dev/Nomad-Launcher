@@ -61,10 +61,12 @@ pub(super) struct ReleaseAsset {
 
 // ── Client ────────────────────────────────────────────────────────────────────
 
-/// Builds a `reqwest` client with the Nomad user-agent.
+/// Builds a `reqwest` client with the Nomad user-agent and the shared
+/// no-downgrade redirect policy.
 pub(super) fn build_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent("nomad-portable")
+        .redirect(crate::downloader::redirect_policy())
         .build()
         .map_err(|e| BrowserError::Network(e.to_string()))
 }
