@@ -1,0 +1,86 @@
+name: Release
+
+# Build the launchers from source on every v* tag and attach them to a DRAFT
+# GitHub release with build provenance attestation, so users can check that a
+# published binary came from this repository's code instead of trusting an
+# exe built on a maintainer's machine (see README "Verifying a release").
+#
+# What stays local, by design: the detached GPG signature over SHA256SUMS.
+# The owner downloads SHA256SUMS from the draft, signs it offline, attaches
+# SHA256SUMS.asc, and only then publishes the release.
+
+on:
+  push:
+    tags: ["v*"]
+
+# Default-deny: the job opts into exactly the permissions it needs below.
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build, attest, draft release
+    runs-on: windows-latest
+    permissions:
+      contents: write # create the draft release and upload assets
+      id-token: write # OIDC token for Sigstore signing of the attestation
+      attestations: write # persist the provenance attestation
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+
+      # No cargo cache on purpose: a poisoned cache entry restored into a
+      # release build could end up inside a shipped binary (zizmor's
+      # cache-poisoning audit flags exactly this pattern). A cold build once
+      # per release is a price worth paying.
+
+      - name: Build launchers and write SHA256SUMS (dist.ps1)
+        # NOMAD_SIGN_CERT / NOMAD_SIGNING_KEY are deliberately not set, so
+        # dist.ps1 runs only its build portion: cargo build --release
+        # --workspace, license staging, and the SHA256SUMS manifest, with
+        # artifact naming identical to a local build. The "UNSIGNED" warnings
+        # it prints are expected here.
+        run: .\dist.ps1
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            target/release/Nomad-*.exe
+            target/release/SHA256SUMS
+
+      - name: Bundle third-party licenses
+        # dist.ps1 stages these beside the binaries; a release page can't hold
+        # a directory, so ship the bundle as one zip.
+        run: >-
+          Compress-Archive -Force
+          -DestinationPath target\release\licenses.zip
+          -Path target\release\licenses,
+          target\release\THIRD-PARTY-NOTICES.txt,
+          target\release\TRADEMARKS.md
+
+      - name: Create draft release and upload artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $notes = "Draft created by the release workflow.`n`nBefore publishing: download SHA256SUMS from this draft, create the detached signature locally (gpg --armor --detach-sign SHA256SUMS), attach SHA256SUMS.asc, then publish."
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:TAG --draft --verify-tag --title $env:TAG --notes $notes
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+          $files = @(Get-ChildItem target\release -Filter "Nomad-*.exe" | Sort-Object Name | ForEach-Object FullName)
+          # The public release key ships with every release (README tells users
+          # to import it from here); SHA256SUMS.asc is attached by the owner.
+          $files += @("target\release\SHA256SUMS", "target\release\licenses.zip", "nomad-release-signing-key.asc")
+          gh release upload $env:TAG @files --clobber
+          if ($LASTEXITCODE -ne 0) { exit 1 }
