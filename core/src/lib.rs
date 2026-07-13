@@ -275,6 +275,9 @@ fn show_msgbox(text: &str, error: bool) {
 #[derive(Debug, PartialEq)]
 struct CleanupArgs {
     browser_pid: u32,
+    /// Full path of the launched browser executable, used to match the
+    /// portable browser's processes by image path. A bare file name is
+    /// accepted and falls back to name-only matching (bounded wait).
     browser_exe: Option<String>,
     scrub_thumbnail_cache: bool,
     scrub_prefetch: bool,
@@ -1066,13 +1069,13 @@ fn do_launch<B: BrowserFamily>(
     scrub_mullvad_runtime_dir();
     scrub_chromium_runtime_dirs();
     let mut cmd = browser.launch_command(install_dir, extra_args);
-    let browser_exe_name = browser_exe_file_name(&cmd);
+    let browser_exe = browser_exe_path(&cmd);
     let child = cmd.spawn()?;
     let pid = child.id();
-    tracing::info!(browser = browser.id(), pid, exe = %browser_exe_name, "browser launched");
+    tracing::info!(browser = browser.id(), pid, exe = %browser_exe, "browser launched");
     spawn_cleanup_watcher(
         pid,
-        &browser_exe_name,
+        &browser_exe,
         hardening.scrub_thumbnail_cache,
         hardening.scrub_prefetch,
     );
@@ -1080,14 +1083,14 @@ fn do_launch<B: BrowserFamily>(
     Ok(())
 }
 
-/// Extracts the browser executable file name (e.g. `"firefox.exe"`,
-/// `"chrome.exe"`) from a `Command` built by `BrowserFamily::launch_command()`.
-fn browser_exe_file_name(cmd: &std::process::Command) -> String {
-    std::path::Path::new(cmd.get_program())
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_owned()
+/// Returns the full path of the browser executable a `Command` built by
+/// `BrowserFamily::launch_command()` will spawn. The cleanup watcher matches
+/// browser processes by this image path rather than by bare file name: a name
+/// like `chrome.exe` also matches unrelated installs of the same browser, so
+/// on a host that runs a desktop Chrome alongside Nomad the watcher's
+/// exit-wait could never reach zero and scrubbed early on its timeout.
+fn browser_exe_path(cmd: &std::process::Command) -> String {
+    cmd.get_program().to_string_lossy().into_owned()
 }
 
 /// Applies browser PE-icon branding when one is configured and not yet
@@ -1145,17 +1148,17 @@ fn handle_error<B: BrowserFamily>(
             scrub_mullvad_runtime_dir();
             scrub_chromium_runtime_dirs();
             let mut cmd = browser.launch_command(install_dir, extra_args);
-            let browser_exe_name = browser_exe_file_name(&cmd);
+            let browser_exe = browser_exe_path(&cmd);
             if let Ok(child) = cmd.spawn() {
                 tracing::info!(
                     browser = browser.id(),
                     pid = child.id(),
-                    exe = %browser_exe_name,
+                    exe = %browser_exe,
                     "browser launched (fallback)"
                 );
                 spawn_cleanup_watcher(
                     child.id(),
-                    &browser_exe_name,
+                    &browser_exe,
                     hardening.scrub_thumbnail_cache,
                     hardening.scrub_prefetch,
                 );
@@ -1334,8 +1337,9 @@ fn split_forwarded_args(args: &[String]) -> (&[String], &[String]) {
 }
 
 /// Parses cleanup-watcher arguments: `--nomad-cleanup-pid <pid>` (required),
-/// `--nomad-cleanup-exe <name>` (optional), `--nomad-scrub-thumbcache` (flag),
-/// and `--nomad-scrub-prefetch` (flag). Returns `None` when
+/// `--nomad-cleanup-exe <path>` (optional; full browser-executable path, a
+/// bare name is tolerated), `--nomad-scrub-thumbcache` (flag), and
+/// `--nomad-scrub-prefetch` (flag). Returns `None` when
 /// `--nomad-cleanup-pid` is absent.
 fn parse_cleanup_pid(args: &[String]) -> Option<CleanupArgs> {
     let pos = args.iter().position(|a| a == "--nomad-cleanup-pid")?;
@@ -1367,12 +1371,14 @@ fn handle_cleanup_flag(args: CleanupArgs) -> ExitCode {
         "cleanup watcher started"
     );
     wait_for_pid(args.browser_pid);
-    if let Some(ref name) = args.browser_exe {
-        // Background-task children (e.g. `firefox.exe --backgroundtask defaultagent`)
-        // can outlive the main UI process by minutes and hold file handles in
-        // %LOCALAPPDATA%\Mozilla\. Wait up to 30 seconds for the process tree
-        // to settle before scrubbing.
-        wait_for_all_processes_named(name, 30);
+    if let Some(ref exe) = args.browser_exe {
+        // The anchor PID alone is not enough: Chromium hands its initial
+        // process off to a new one, and Gecko background-task children (e.g.
+        // `firefox.exe --backgroundtask defaultagent`) outlive the main UI
+        // process and hold file handles in %LOCALAPPDATA%\Mozilla\. Wait for
+        // the whole browser tree — matched by image path — to exit before
+        // scrubbing.
+        wait_for_browser_tree_exit(exe, 30);
     }
     tracing::info!(
         pid = args.browser_pid,
@@ -1485,30 +1491,54 @@ fn wait_for_pid(pid: u32) {
     }
 }
 
-/// Polls the running process list every 500 ms and returns when **no** process
-/// with the given executable file name (case-insensitive, e.g. `"firefox.exe"`)
-/// is still running, or `max_wait_secs` elapses — whichever comes first.
+/// Blocks until every process belonging to the launched browser has exited.
 ///
-/// Used by the cleanup watcher to wait out background-task children that
-/// Firefox/Floorp/Waterfox spawn detached from the main UI process and which
-/// hold file handles in `%LOCALAPPDATA%\Mozilla\` after the parent exits.
-fn wait_for_all_processes_named(exe_name: &str, max_wait_secs: u64) {
+/// When `exe` is a full path (the normal case — `spawn_cleanup_watcher`
+/// passes the launch command's program path), matching is by process image
+/// path, so an unrelated install of the same browser (every Chromium ships
+/// as `chrome.exe`) is never latched onto. Because a path match is exact,
+/// the wait is unbounded: it parks on real process handles (zero CPU) until
+/// the portable browser tree is genuinely gone — scrubbing must not race a
+/// browser the user still has open, and Chromium routinely retires the
+/// anchor PID while the tree lives on.
+///
+/// A bare file name (legacy invocations only) cannot make that distinction,
+/// so it keeps the historical bounded behaviour: poll every 500 ms and give
+/// up after `bare_name_max_wait_secs`, scrubbing anyway.
+fn wait_for_browser_tree_exit(exe: &str, bare_name_max_wait_secs: u64) {
+    let by_path = exe.contains(['\\', '/']);
     let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(max_wait_secs);
-    let initial = count_processes_named(exe_name);
+    let initial = processes_matching(exe).len();
     if initial == 0 {
         return;
     }
     tracing::info!(
-        exe = exe_name,
+        exe,
         count = initial,
-        "waiting for background-task children to exit"
+        by_path,
+        "waiting for remaining browser processes to exit"
     );
+
+    if by_path {
+        // wait_for_pid falls back to a 5 s sleep when the process cannot be
+        // opened, so this loop always makes progress.
+        while let Some(&pid) = processes_matching(exe).first() {
+            wait_for_pid(pid);
+        }
+        tracing::info!(
+            exe,
+            elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "all browser processes have exited"
+        );
+        return;
+    }
+
+    let timeout = std::time::Duration::from_secs(bare_name_max_wait_secs);
     while start.elapsed() < timeout {
         std::thread::sleep(std::time::Duration::from_millis(500));
-        if count_processes_named(exe_name) == 0 {
+        if processes_matching(exe).is_empty() {
             tracing::info!(
-                exe = exe_name,
+                exe,
                 elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
                 "all browser processes have exited"
             );
@@ -1516,15 +1546,19 @@ fn wait_for_all_processes_named(exe_name: &str, max_wait_secs: u64) {
         }
     }
     tracing::warn!(
-        exe = exe_name,
-        remaining = count_processes_named(exe_name),
+        exe,
+        remaining = processes_matching(exe).len(),
         "timed out waiting for browser processes; proceeding with scrub anyway"
     );
 }
 
-/// Counts processes whose executable filename matches `exe_name`
-/// (case-insensitive). Returns 0 on non-Windows or on any enumeration failure.
-fn count_processes_named(exe_name: &str) -> u32 {
+/// Returns the PIDs of running processes that match `exe` (case-insensitive).
+///
+/// When `exe` contains a path separator it is a full executable path:
+/// candidates are pre-filtered by file name, then confirmed by querying each
+/// candidate's image path. A bare file name matches on the name alone.
+/// Returns an empty list on non-Windows or on enumeration failure.
+fn processes_matching(exe: &str) -> Vec<u32> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStringExt;
@@ -1533,12 +1567,23 @@ fn count_processes_named(exe_name: &str) -> u32 {
             CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
             TH32CS_SNAPPROCESS,
         };
+
+        let target_path = exe.replace('/', "\\");
+        let by_path = target_path.contains('\\');
+        let target_name = std::path::Path::new(&target_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if target_name.is_empty() {
+            return Vec::new();
+        }
+        let mut pids = Vec::new();
         // SAFETY: snapshot handle is closed before return; PROCESSENTRY32W is
         // zero-initialized except for dwSize per MSDN requirements.
         unsafe {
             let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if snapshot.is_null() || snapshot as isize == -1 {
-                return 0;
+                return Vec::new();
             }
             let mut entry: PROCESSENTRY32W = std::mem::zeroed();
             #[allow(clippy::cast_possible_truncation)]
@@ -1546,8 +1591,6 @@ fn count_processes_named(exe_name: &str) -> u32 {
             {
                 entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
             }
-            let mut count: u32 = 0;
-            let target = exe_name.to_ascii_lowercase();
             if Process32FirstW(snapshot, &mut entry) != 0 {
                 loop {
                     let len = entry
@@ -1558,8 +1601,10 @@ fn count_processes_named(exe_name: &str) -> u32 {
                     let name = std::ffi::OsString::from_wide(&entry.szExeFile[..len])
                         .to_string_lossy()
                         .to_ascii_lowercase();
-                    if name == target {
-                        count += 1;
+                    if name == target_name
+                        && (!by_path || image_path_matches(entry.th32ProcessID, &target_path))
+                    {
+                        pids.push(entry.th32ProcessID);
                     }
                     if Process32NextW(snapshot, &mut entry) == 0 {
                         break;
@@ -1567,14 +1612,55 @@ fn count_processes_named(exe_name: &str) -> u32 {
                 }
             }
             CloseHandle(snapshot);
-            count
         }
+        pids
     }
     #[cfg(not(windows))]
     {
-        let _ = exe_name;
-        0
+        let _ = exe;
+        Vec::new()
     }
+}
+
+/// Returns `true` when process `pid`'s full image path equals `target_path`
+/// (case-insensitive, `\\?\` prefixes ignored on both sides).
+///
+/// Processes whose path cannot be queried do **not** match: the portable
+/// browser runs unelevated as the current user and is always queryable, so
+/// an unqueryable process cannot be one Nomad launched — and counting it
+/// would stall the scrub on somebody else's process.
+#[cfg(windows)]
+fn image_path_matches(pid: u32, target_path: &str) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: the handle is checked before use and closed on every path; the
+    // buffer length is passed in/out per the QueryFullProcessImageNameW
+    // contract.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut buf = vec![0u16; 32768];
+        #[allow(clippy::cast_possible_truncation)] // 32768 fits in u32
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len);
+        CloseHandle(handle);
+        if ok == 0 {
+            return false;
+        }
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        strip_verbatim(&path).eq_ignore_ascii_case(strip_verbatim(target_path))
+    }
+}
+
+/// Drops a leading `\\?\` verbatim prefix so image-path comparisons are
+/// stable regardless of which form the OS returns.
+#[cfg(windows)]
+fn strip_verbatim(path: &str) -> &str {
+    path.strip_prefix(r"\\?\").unwrap_or(path)
 }
 
 /// Returns `true` when `root` is a removable drive (e.g. a USB stick or SD
@@ -3256,11 +3342,62 @@ mod tests {
     }
 
     #[test]
-    fn count_processes_named_self_is_at_least_one() {
-        // Best-effort cross-platform test: the current process is named
-        // something predictable on Windows test runners but varies elsewhere.
-        // Pass a sentinel that definitely shouldn't be running, and verify 0.
-        let count = count_processes_named("nomad-zzzz-not-a-real-process.exe");
-        assert_eq!(count, 0, "non-existent process must report 0");
+    fn processes_matching_reports_nothing_for_absent_targets() {
+        // A name that definitely isn't running, and a path that doesn't exist.
+        assert!(processes_matching("nomad-zzzz-not-a-real-process.exe").is_empty());
+        assert!(processes_matching(r"C:\definitely\not\here\nomad-zzzz.exe").is_empty());
+        // Degenerate input (no file name at all) must be an empty result,
+        // never a match-everything.
+        assert!(processes_matching("").is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn processes_matching_finds_the_current_process_by_full_path() {
+        // The test process itself is a live process whose image path we know
+        // exactly — a real end-to-end check of the Toolhelp + image-path pipe.
+        let exe = std::env::current_exe().expect("current exe");
+        let by_path = processes_matching(&exe.to_string_lossy());
+        assert!(
+            by_path.contains(&std::process::id()),
+            "the current process must be found by its own image path"
+        );
+
+        // A *different* path with the same file name must NOT match this
+        // process — the exact scenario of a desktop Chrome vs. the portable
+        // one (both `chrome.exe`, different directories).
+        let same_name_elsewhere = format!(
+            r"C:\definitely\not\here\{}",
+            exe.file_name().unwrap().to_string_lossy()
+        );
+        assert!(
+            !processes_matching(&same_name_elsewhere).contains(&std::process::id()),
+            "a same-named executable at a different path must not match"
+        );
+
+        // Bare-name matching (legacy) is a superset of path matching.
+        let name = exe.file_name().unwrap().to_string_lossy();
+        assert!(
+            processes_matching(&name).contains(&std::process::id()),
+            "the current process must be found by bare name"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_removes_only_the_verbatim_prefix() {
+        assert_eq!(
+            strip_verbatim(r"\\?\C:\Portables\Browser\chrome.exe"),
+            r"C:\Portables\Browser\chrome.exe"
+        );
+        assert_eq!(
+            strip_verbatim(r"C:\Portables\Browser\chrome.exe"),
+            r"C:\Portables\Browser\chrome.exe"
+        );
+        // UNC paths are not verbatim paths and must be left intact.
+        assert_eq!(
+            strip_verbatim(r"\\server\share\x.exe"),
+            r"\\server\share\x.exe"
+        );
     }
 }
