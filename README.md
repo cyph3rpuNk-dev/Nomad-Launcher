@@ -161,6 +161,14 @@ sha256sum --ignore-missing -c SHA256SUMS
 
 On Windows PowerShell: `(Get-FileHash .\Nomad-Firefox.exe -Algorithm SHA256).Hash.ToLower()` and compare against the `SHA256SUMS` line.
 
+Releases after v1.0.2 are also built from source by a GitHub Actions workflow ([release.yml](.github/workflows/release.yml)) that records signed build provenance. With the [GitHub CLI](https://cli.github.com/) installed, you can check that a binary was produced by that workflow from this repository's code rather than on someone's machine:
+
+```bash
+gh attestation verify Nomad-Firefox.exe --repo cyph3rpuNk-dev/Nomad-Launcher
+```
+
+The same command works for any of the launchers and for the `SHA256SUMS` file itself. Attestation is independent of the GPG key above, so the two checks back each other up.
+
 ## Default browser registration
 
 ```powershell
