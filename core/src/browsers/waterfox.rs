@@ -197,7 +197,9 @@ impl BrowserFamily for Waterfox {
             .unwrap_or_else(|| install_dir.join("profile"));
         let mut cmd = Command::new(install_dir.join(EXECUTABLE));
         cmd.arg("--profile").arg(profile_dir);
-        cmd.arg("--no-remote");
+        // --no-remote deliberately absent: per-profile remoting (Firefox 67+)
+        // lets a second invocation open its URL as a tab in the running
+        // instance — required for the default-browser flow (SPEC §10).
         cmd.env("MOZ_CRASHREPORTER_DISABLE", "1");
         cmd.env("MOZ_LEGACY_PROFILES", "1");
         cmd.args(args);
@@ -319,8 +321,8 @@ mod tests {
         let cmd = browser.launch_command(install, &["--safe-mode".to_owned()]);
         let args: Vec<_> = cmd.get_args().collect();
         assert!(
-            args.contains(&std::ffi::OsStr::new("--no-remote")),
-            "--no-remote must be present"
+            !args.contains(&std::ffi::OsStr::new("--no-remote")),
+            "--no-remote must be absent so a clicked URL opens as a tab in the running instance"
         );
         let profile_idx = args
             .iter()
