@@ -1170,14 +1170,37 @@ fn handle_error<B: BrowserFamily>(
     }
 }
 
-/// Runs browser-specific, best-effort launch preparation such as bundled
-/// extension staging. Preparation failures should not prevent the browser from
-/// launching; the browser itself remains the product boundary.
+/// Runs best-effort launch preparation: browser-specific staging (bundled
+/// extensions) plus the self-registration repair. Preparation failures should
+/// not prevent the browser from launching; the browser itself remains the
+/// product boundary.
 fn prepare_browser_for_launch<B: BrowserFamily>(
     browser: &B,
     install_dir: &Path,
     hardening: HardeningConfig,
 ) {
+    // If the browser registered *itself* as a URL/HTML handler (its own
+    // "Make default" button), that registration launches the browser exe
+    // directly — host profile, no hardening, no portable Data dir — and a
+    // clicked link then opens a second, empty-profile instance whose data the
+    // trace scrub deletes on exit. Reroute exactly those commands through
+    // this launcher; registrations pointing outside our install tree are
+    // never touched (see SPEC §10).
+    match std::env::current_exe() {
+        Ok(launcher_exe) => {
+            let repaired = registry::repair_self_registration(install_dir, &launcher_exe);
+            if repaired > 0 {
+                tracing::info!(
+                    browser = browser.id(),
+                    repaired,
+                    "rerouted browser self-registration(s) through the launcher"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "could not resolve launcher path; skipping registration repair");
+        }
+    }
     if let Err(e) = browser.prepare_launch(install_dir, hardening) {
         tracing::warn!(
             browser = browser.id(),

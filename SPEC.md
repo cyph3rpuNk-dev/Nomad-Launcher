@@ -451,6 +451,12 @@ Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are 
 - On unregister: reads the sidecar and removes exactly those keys (no guessing, no collateral damage).
 - The registered handler launches `nomad-<browser-id>.exe -- %1` so the launcher mediates URL opens.
 
+### Self-registration repair (automatic, narrowly scoped)
+
+Browsers can register *themselves* as URL/HTML handlers (the "Make default" button in their own settings). For a Nomad-managed install that registration points straight at the browser exe inside the portable tree (e.g. `"...\Browser\chrome.exe" --single-argument %1`), bypassing the launcher entirely: the browser then starts with its default host-profile location (`%LOCALAPPDATA%`) instead of the portable `Data` dir. Every clicked link opens a second, empty-profile instance — and the trace scrub deletes that host profile on exit, which reads as "the browser deleted my logins".
+
+On every launch, `registry::repair_self_registration` therefore inspects the `HKCU` `UserChoice` ProgIds for `http`/`https`/`ftp` and `.htm`/`.html`/`.shtml`/`.xhtml`, plus `HKCU\Software\Clients\StartMenuInternet` clients, and rewrites any `shell\open\command` whose executable lives **strictly inside this launcher's `install_dir`** to route through the launcher (`"<launcher>" -- "%1"`). This is the one registry write permitted outside `--register-default`; it is `HKCU`-only, touches only commands that already point into Nomad's own install tree (never other browsers, other Nomad launchers, or system installs), and repairs state the browser itself wrote about Nomad's files. Combined with the launcher's stable `--user-data-dir`/`--profile`, a clicked URL reaches the already-running portable instance as a new tab (Chromium process singleton; Gecko per-profile remoting — which is also why Gecko launch commands must **not** pass `--no-remote`).
+
 ---
 
 ## 11. Code Style
@@ -506,7 +512,7 @@ Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are 
 - Reject unknown config keys with a clear error message.
 
 ### Ask user before (prompt in the status window, not silent)
-- Writing any registry key (even `HKCU`) — only via the explicit `--register-default` flag.
+- Writing any registry key (even `HKCU`) — only via the explicit `--register-default` flag, with one automatic exception: the self-registration repair (§10), which rewrites only `HKCU` handler commands that already point inside the launcher's own install tree.
 - Deleting or replacing an existing browser installation directory during an update.
 - Downloading when `auto_download = false` (the window waits on the "Update" button).
 
