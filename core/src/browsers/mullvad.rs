@@ -226,7 +226,9 @@ impl BrowserFamily for Mullvad {
             .unwrap_or_else(|| install_dir.join("profile"));
         let mut cmd = Command::new(install_dir.join(EXECUTABLE));
         cmd.arg("--profile").arg(&profile_dir);
-        cmd.arg("--no-remote");
+        // --no-remote deliberately absent: per-profile remoting (Firefox 67+)
+        // lets a second invocation open its URL as a tab in the running
+        // instance — required for the default-browser flow (SPEC §10).
         // Mullvad requires MOZ_CRASHREPORTER_DISABLE to suppress the crash
         // reporter process that would write to the host system.
         cmd.env("MOZ_CRASHREPORTER_DISABLE", "1");
@@ -391,7 +393,10 @@ mod tests {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        assert!(args.iter().any(|a| a == "--no-remote"));
+        assert!(
+            !args.iter().any(|a| a == "--no-remote"),
+            "--no-remote must be absent so a clicked URL opens as a tab in the running instance"
+        );
         assert!(args.iter().any(|a| a == "--profile"));
         assert!(args.last().unwrap().contains("safe-mode"));
     }

@@ -96,18 +96,57 @@ fn is_nomad_owned_value(key_path: &str, value_name: &str) -> bool {
     key_path.eq_ignore_ascii_case(REGISTERED_APPS_KEY) && value_name.starts_with("NomadPortable.")
 }
 
+// ── Self-registration repair ──────────────────────────────────────────────────
+//
+// Browsers can register *themselves* as URL/HTML handlers (the "Make default"
+// button in their settings). For a Nomad-managed install that registration
+// points straight at the browser exe inside the portable tree — bypassing the
+// launcher, so the browser starts with its default host-profile location
+// (%LOCALAPPDATA%) instead of the portable profile. The result is a second,
+// empty-profile instance on every clicked link, whose data Nomad's trace scrub
+// then deletes on exit. `repair_self_registration` reroutes exactly those
+// commands through the launcher; it never touches a registration that points
+// outside the launcher's own install tree.
+
+/// Extracts the executable path from a `shell\open\command` string: the
+/// quoted first token when the command starts with `"`, the first
+/// whitespace-separated token otherwise.
+fn command_exe(command: &str) -> Option<&str> {
+    let s = command.trim_start();
+    if let Some(rest) = s.strip_prefix('"') {
+        rest.split('"').next()
+    } else {
+        s.split_whitespace().next()
+    }
+    .filter(|exe| !exe.is_empty())
+}
+
+/// Component-wise, ASCII-case-insensitive "is `path` strictly inside `root`".
+/// Pure string comparison — the paths come from registry values and may not
+/// exist on disk, so filesystem canonicalization is not an option.
+fn path_is_under(root: &Path, path: &Path) -> bool {
+    let norm = |p: &Path| -> Vec<String> {
+        p.components()
+            .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
+            .collect()
+    };
+    let root = norm(root);
+    let path = norm(path);
+    path.len() > root.len() && path[..root.len()] == root[..]
+}
+
 // ── Windows implementation ────────────────────────────────────────────────────
 
 #[cfg(windows)]
 mod win {
     use std::path::Path;
 
-    use winreg::enums::{HKEY_CURRENT_USER, KEY_WRITE};
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
     use winreg::RegKey;
 
     use super::{
-        app_key_path, classes_path, is_nomad_owned_key, is_nomad_owned_value, prog_id, RegState,
-        RegistryError, Result, REGISTERED_APPS_KEY,
+        app_key_path, classes_path, command_exe, is_nomad_owned_key, is_nomad_owned_value,
+        path_is_under, prog_id, RegState, RegistryError, Result, REGISTERED_APPS_KEY,
     };
 
     pub(super) fn register(
@@ -264,6 +303,113 @@ mod win {
         Ok(())
     }
 
+    /// URL protocols whose `UserChoice` `ProgId` is inspected for a hijacked
+    /// handler command.
+    const REPAIR_PROTOCOLS: &[&str] = &["http", "https", "ftp"];
+
+    /// File extensions whose `UserChoice` `ProgId` is inspected likewise.
+    const REPAIR_EXTENSIONS: &[&str] = &[".htm", ".html", ".shtml", ".xhtml"];
+
+    pub(super) fn repair_self_registration(install_dir: &Path, launcher_exe: &Path) -> usize {
+        let Some(launcher_str) = launcher_exe.to_str() else {
+            return 0; // non-UTF-8 launcher path — nothing sane to write
+        };
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let mut repaired = 0;
+
+        // 1. ProgIds the user actually selected as URL / HTML-file handlers.
+        let mut prog_ids = std::collections::BTreeSet::new();
+        for proto in REPAIR_PROTOCOLS {
+            let key = format!(
+                "Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\{proto}\\UserChoice"
+            );
+            if let Ok(k) = hkcu.open_subkey(&key) {
+                if let Ok(pid) = k.get_value::<String, _>("ProgId") {
+                    prog_ids.insert(pid);
+                }
+            }
+        }
+        for ext in REPAIR_EXTENSIONS {
+            let key = format!(
+                "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\{ext}\\UserChoice"
+            );
+            if let Ok(k) = hkcu.open_subkey(&key) {
+                if let Ok(pid) = k.get_value::<String, _>("ProgId") {
+                    prog_ids.insert(pid);
+                }
+            }
+        }
+        let url_command = format!("\"{launcher_str}\" -- \"%1\"");
+        for pid in &prog_ids {
+            // Nomad's own ProgId already routes through the launcher.
+            if pid.starts_with("NomadPortable.") {
+                continue;
+            }
+            let key_path = format!("Software\\Classes\\{pid}\\shell\\open\\command");
+            if repair_command_key(&hkcu, &key_path, install_dir, &url_command) {
+                repaired += 1;
+            }
+        }
+
+        // 2. Start-Menu-Internet clients (launch-without-URL surface).
+        let smi_command = format!("\"{launcher_str}\"");
+        if let Ok(clients) = hkcu.open_subkey("Software\\Clients\\StartMenuInternet") {
+            let names: Vec<String> = clients
+                .enum_keys()
+                .filter_map(std::result::Result::ok)
+                .collect();
+            for name in names {
+                let key_path =
+                    format!("Software\\Clients\\StartMenuInternet\\{name}\\shell\\open\\command");
+                if repair_command_key(&hkcu, &key_path, install_dir, &smi_command) {
+                    repaired += 1;
+                }
+            }
+        }
+
+        repaired
+    }
+
+    /// Rewrites the default value of `key_path` to `replacement` when its
+    /// current command launches an executable strictly inside `install_dir`.
+    /// Returns whether a rewrite happened.
+    pub(super) fn repair_command_key(
+        hkcu: &RegKey,
+        key_path: &str,
+        install_dir: &Path,
+        replacement: &str,
+    ) -> bool {
+        let Ok(key) = hkcu.open_subkey_with_flags(key_path, KEY_READ | KEY_WRITE) else {
+            return false;
+        };
+        let Ok(current) = key.get_value::<String, _>("") else {
+            return false;
+        };
+        let Some(exe) = command_exe(&current) else {
+            return false;
+        };
+        if !path_is_under(install_dir, Path::new(exe)) {
+            return false;
+        }
+        if current == replacement {
+            return false; // already routed through this launcher
+        }
+        match key.set_value("", &replacement.to_owned()) {
+            Ok(()) => {
+                tracing::info!(
+                    key = %key_path,
+                    old = %current,
+                    "rerouted browser self-registration through the Nomad launcher"
+                );
+                true
+            }
+            Err(e) => {
+                tracing::warn!(key = %key_path, error = %e, "could not repair self-registration");
+                false
+            }
+        }
+    }
+
     fn notify_shell() {
         // Declare SHChangeNotify without pulling in the large Win32_UI_Shell feature set.
         #[link(name = "shell32")]
@@ -325,6 +471,23 @@ pub fn unregister(sidecar: &Path) -> Result<()> {
     win::unregister(sidecar)
 }
 
+/// Reroutes browser self-registrations through the launcher.
+///
+/// Inspects the `HKCU` `UserChoice` `ProgId`s for http/https/ftp and the HTML
+/// file extensions, plus `StartMenuInternet` clients, and rewrites any
+/// `shell\open\command` whose executable lives strictly inside `install_dir`
+/// so it invokes `launcher_exe` instead (`"<launcher>" -- "%1"` for URL
+/// handlers). Commands pointing anywhere else — other browsers, other Nomad
+/// launchers, system installs — are never touched.
+///
+/// Best-effort: individual failures are logged and skipped. Returns the
+/// number of commands rewritten.
+#[cfg(windows)]
+#[must_use]
+pub fn repair_self_registration(install_dir: &Path, launcher_exe: &Path) -> usize {
+    win::repair_self_registration(install_dir, launcher_exe)
+}
+
 // ── Non-Windows stubs ─────────────────────────────────────────────────────────
 
 #[cfg(not(windows))]
@@ -340,6 +503,12 @@ pub fn register(
 #[cfg(not(windows))]
 pub fn unregister(_sidecar: &Path) -> Result<()> {
     Err(RegistryError::NotRegistered)
+}
+
+#[cfg(not(windows))]
+#[must_use]
+pub fn repair_self_registration(_install_dir: &Path, _launcher_exe: &Path) -> usize {
+    0
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -427,6 +596,103 @@ mod tests {
             "Software\\RegisteredApplications",
             "SomeOtherApp"
         ));
+    }
+
+    #[test]
+    fn command_exe_parses_quoted_and_bare_commands() {
+        assert_eq!(
+            command_exe(r#""C:\Portables\Helium\Browser\chrome.exe" --single-argument %1"#),
+            Some(r"C:\Portables\Helium\Browser\chrome.exe")
+        );
+        assert_eq!(
+            command_exe(r"C:\tools\browser.exe %1"),
+            Some(r"C:\tools\browser.exe")
+        );
+        assert_eq!(
+            command_exe(r#"  "C:\a b\x.exe""#),
+            Some(r"C:\a b\x.exe"),
+            "leading whitespace and embedded spaces must be handled"
+        );
+        assert_eq!(command_exe(""), None);
+        assert_eq!(command_exe("\"\" %1"), None, "empty quoted exe is invalid");
+    }
+
+    #[test]
+    fn path_is_under_is_case_insensitive_and_strict() {
+        let root = Path::new(r"C:\Portables\Helium\Browser");
+        assert!(path_is_under(
+            root,
+            Path::new(r"C:\Portables\Helium\Browser\chrome.exe")
+        ));
+        assert!(path_is_under(
+            root,
+            Path::new(r"c:\portables\helium\browser\sub\chrome.exe")
+        ));
+        // The root itself is not *under* the root.
+        assert!(!path_is_under(root, root));
+        // Siblings — the launcher beside the install dir must never match.
+        assert!(!path_is_under(
+            root,
+            Path::new(r"C:\Portables\Helium\Nomad-Helium.exe")
+        ));
+        // Prefix of a component name is not containment.
+        assert!(!path_is_under(
+            root,
+            Path::new(r"C:\Portables\Helium\BrowserEvil\chrome.exe")
+        ));
+    }
+
+    // Repair round-trip against a synthetic HKCU key (Windows-only: registry).
+    #[cfg(windows)]
+    #[test]
+    fn repair_command_key_rewrites_only_commands_inside_install_dir() {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let base = "Software\\Classes\\NomadPortable.test-repair.HTML";
+        let key_path = format!("{base}\\shell\\open\\command");
+        let (key, _) = hkcu.create_subkey(&key_path).unwrap();
+
+        let install_dir = Path::new(r"C:\Portables\TestBrowser\Browser");
+        let replacement = r#""C:\Portables\TestBrowser\Nomad-Test.exe" -- "%1""#;
+
+        // Command pointing inside the install dir: must be rewritten.
+        key.set_value(
+            "",
+            &r#""C:\Portables\TestBrowser\Browser\chrome.exe" --single-argument %1"#.to_owned(),
+        )
+        .unwrap();
+        assert!(win::repair_command_key(
+            &hkcu,
+            &key_path,
+            install_dir,
+            replacement
+        ));
+        let rewritten: String = hkcu.open_subkey(&key_path).unwrap().get_value("").unwrap();
+        assert_eq!(rewritten, replacement);
+
+        // Second pass is a no-op (already routed through the launcher).
+        assert!(!win::repair_command_key(
+            &hkcu,
+            &key_path,
+            install_dir,
+            replacement
+        ));
+
+        // Command pointing elsewhere: must be left alone.
+        let foreign = r#""C:\Program Files\Other\browser.exe" %1"#.to_owned();
+        key.set_value("", &foreign).unwrap();
+        assert!(!win::repair_command_key(
+            &hkcu,
+            &key_path,
+            install_dir,
+            replacement
+        ));
+        let untouched: String = hkcu.open_subkey(&key_path).unwrap().get_value("").unwrap();
+        assert_eq!(untouched, foreign);
+
+        hkcu.delete_subkey_all(base).unwrap();
     }
 
     #[test]

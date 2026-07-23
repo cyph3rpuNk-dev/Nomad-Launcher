@@ -340,7 +340,11 @@ impl BrowserFamily for Firefox {
             .unwrap_or_else(|| install_dir.join("profile"));
         let mut cmd = Command::new(install_dir.join(EXECUTABLE));
         cmd.arg("--profile").arg(profile_dir);
-        cmd.arg("--no-remote");
+        // NOTE: --no-remote is deliberately absent. Remoting has been keyed on
+        // the profile since Firefox 67 (bug 1518639), so a second invocation
+        // with the same --profile hands its URL to the running instance as a
+        // new tab (the default-browser flow) without ever touching a host
+        // Firefox running on a different profile.
         cmd.env("MOZ_CRASHREPORTER_DISABLE", "1");
         // Disable Firefox 67+ dedicated-profile-per-install; without this the
         // browser writes an install marker into %LOCALAPPDATA%\Mozilla\Firefox\.
@@ -527,8 +531,8 @@ mod tests {
             "--profile must be followed by a path"
         );
         assert!(
-            args.contains(&std::ffi::OsStr::new("--no-remote")),
-            "--no-remote must be present"
+            !args.contains(&std::ffi::OsStr::new("--no-remote")),
+            "--no-remote must be absent so a clicked URL opens as a tab in the running instance"
         );
         assert!(args.last().unwrap().to_string_lossy().contains("safe-mode"));
     }
