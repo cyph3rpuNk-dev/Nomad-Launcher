@@ -67,32 +67,33 @@ static BRANDING: Branding = Branding {
     //   # parse PAK v5 entries, check each for PNG sig + IHDR dims
     //   # grep for 32x32 (100%) and 64x64 (200%) near the current IDs
     //
-    // Last verified for ungoogled-chromium 150.0.7871.114-1.1 (2026-07-13).
+    // Last verified for ungoogled-chromium 151.0.7922.71-1.1 (2026-08-03).
     pak_patches: &[
         // Main product logo — chrome://settings/help (current-channel-logo).
         // 32px logical: 32×32 in 100% pak, 64×64 in 200% pak.
-        // (Was id=16324 in ≤148.x, 16325 in 149.x; shifted to 15315 in 150.x.)
+        // (Was id=16324 in ≤148.x, 16325 in 149.x, 15315 in 150.x; stable at
+        // 15317 in 151.x.)
         PakPatch {
             pak_file: "chrome_100_percent.pak",
-            resource_id: 15315,
+            resource_id: 15317,
             png_bytes: include_bytes!("../assets/branding/product_logo_32.png"),
         },
         PakPatch {
             pak_file: "chrome_200_percent.pak",
-            resource_id: 15315,
+            resource_id: 15317,
             png_bytes: include_bytes!("../assets/branding/product_logo_64.png"),
         },
         // Small logo variant — 16px logical: 16×16 in 100% pak, 32×32 in 200% pak.
-        // (Was id=16323/16326 in ≤148.x, 16327 in 149.x; shifted to 15317 in
-        // 150.x — the main/small +2 offset survived the renumber.)
+        // (Was id=16323/16326 in ≤148.x, 16327 in 149.x, 15317 in 150.x;
+        // shifted to 15319 in 151.x.)
         PakPatch {
             pak_file: "chrome_100_percent.pak",
-            resource_id: 15317,
+            resource_id: 15319,
             png_bytes: include_bytes!("../assets/branding/product_logo_16.png"),
         },
         PakPatch {
             pak_file: "chrome_200_percent.pak",
-            resource_id: 15317,
+            resource_id: 15319,
             png_bytes: include_bytes!("../assets/branding/product_logo_32.png"),
         },
     ],
