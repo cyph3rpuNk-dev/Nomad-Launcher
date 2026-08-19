@@ -36,6 +36,15 @@ fail=0
 
 py() { command -v python3 >/dev/null 2>&1 && python3 "$@" || python "$@"; }
 
+# curl with a retry budget sized for a weekly job rather than an interactive
+# one. GitHub's ref endpoints on large repositories routinely take several
+# seconds and intermittently return 504, and a transient upstream error must
+# never be reported as key drift. Latency costs nothing here, so spend it.
+fetch() {
+    curl -sSfL --retry 5 --retry-all-errors --retry-delay 5 --max-time 120 \
+        -H 'Accept: application/vnd.github+json' "$@"
+}
+
 # Reads a value out of a JSON document on stdin, given a python expression
 # operating on `d`. Avoids a jq dependency, which Git Bash does not ship.
 json() { py -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
@@ -89,7 +98,7 @@ check() {
 }
 
 echo "== Mozilla (Firefox, Firefox ESR) =="
-if curl -sSfL --retry 3 https://product-details.mozilla.org/1.0/firefox_versions.json \
+if fetch https://product-details.mozilla.org/1.0/firefox_versions.json \
     -o "$tmp/firefox_versions.json"; then
     for field in LATEST_FIREFOX_VERSION FIREFOX_ESR; do
         version="$(json "d['$field']" < "$tmp/firefox_versions.json")"
@@ -99,7 +108,7 @@ if curl -sSfL --retry 3 https://product-details.mozilla.org/1.0/firefox_versions
             continue
         fi
         sig="$tmp/mozilla-${field}.asc"
-        if curl -sSfL --retry 3 \
+        if fetch \
             "https://ftp.mozilla.org/pub/firefox/releases/${version}/SHA256SUMS.asc" -o "$sig"; then
             check "Firefox ${version}" "$repo_root/core/keys/firefox.asc" "$sig"
         else
@@ -113,12 +122,12 @@ else
 fi
 
 echo "== Mullvad Browser =="
-if curl -sSfL --retry 3 -H 'Accept: application/vnd.github+json' \
+if fetch \
     https://api.github.com/repos/mullvad/mullvad-browser/releases/latest \
     -o "$tmp/mullvad-release.json"; then
     url="$(json "next((a['browser_download_url'] for a in d['assets'] if a['name'].endswith('.asc') and 'windows' in a['name']), '')" \
         < "$tmp/mullvad-release.json")"
-    if [ -n "$url" ] && curl -sSfL --retry 3 "$url" -o "$tmp/mullvad.asc"; then
+    if [ -n "$url" ] && fetch "$url" -o "$tmp/mullvad.asc"; then
         check "Mullvad Browser" "$repo_root/core/keys/mullvad.asc" "$tmp/mullvad.asc"
     else
         echo "::error::Mullvad Browser: no Windows .asc asset on the latest release"
@@ -136,10 +145,10 @@ echo "== gorhill / uBlock Origin =="
 # lightweight tags, which point straight at a signed commit, and annotated tags
 # are handled as a forward-compatibility case.
 ubo_api="https://api.github.com/repos/gorhill/uBlock"
-if curl -sSfL --retry 3 -H 'Accept: application/vnd.github+json' \
+if fetch \
     "${ubo_api}/releases/latest" -o "$tmp/ubo-release.json"; then
     tag="$(json "d['tag_name']" < "$tmp/ubo-release.json")"
-    if curl -sSfL --retry 3 -H 'Accept: application/vnd.github+json' \
+    if fetch \
         "${ubo_api}/git/refs/tags/${tag}" -o "$tmp/ubo-ref.json"; then
         obj_type="$(json "d['object']['type']" < "$tmp/ubo-ref.json")"
         obj_sha="$(json "d['object']['sha']" < "$tmp/ubo-ref.json")"
@@ -156,7 +165,7 @@ if curl -sSfL --retry 3 -H 'Accept: application/vnd.github+json' \
                 url=""
                 ;;
         esac
-        if [ -n "$url" ] && curl -sSfL --retry 3 -H 'Accept: application/vnd.github+json' \
+        if [ -n "$url" ] && fetch \
             "$url" -o "$tmp/ubo-obj.json"; then
             json "$expr" < "$tmp/ubo-obj.json" > "$tmp/gorhill.asc"
             check "uBlock Origin ${tag}" "$repo_root/core/keys/gorhill.asc" "$tmp/gorhill.asc"
