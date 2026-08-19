@@ -45,7 +45,7 @@ Each launcher reads the `nomad.toml` in its own `Nomad/` subfolder. Unknown keys
 
 ```toml
 [browser]
-install_dir = "browser"      # relative to the .exe
+install_dir = "Browser"      # relative to the .exe
 arch = "x64"                 # "x64" | "x86" | "arm64"
 
 [update]
@@ -62,17 +62,20 @@ enabled = true
 sanitize_on_shutdown = true
 disable_webrtc = true        # WebRTC is off by default (STUN can leak your real IP through a VPN)
 scrub_thumbnail_cache = false  # opt-in: briefly restarts Explorer on exit
+scrub_prefetch = false       # opt-in: needs elevation, prompts for UAC on every exit
 clear_data_on_exit = false   # Chromium only: wipe cookies/history/sessions on exit
 reduce_system_info = true    # Chromium only: ReducedSystemInfo fingerprint hardening
 ```
 
 ## Privacy hardening
 
-Nomad applies a "safe" hardening profile: the privacy measures that don't break everyday sites. Aggressive settings that do break sites are deliberately left out. If you'd rather configure the browser yourself, set `[hardening] enabled = false` and Nomad will launch it untouched.
+Nomad applies a "safe" hardening profile: the privacy measures that don't break everyday sites. Aggressive settings that do break sites are deliberately left out. If you'd rather configure the browser yourself, set `[hardening] enabled = false`.
+
+Turning it off removes the privacy settings but not the portability ones. On Chromium the browser still starts on the portable profile with machine-ID binding, DPAPI encryption, and TPM session binding switched off, because those three decide how the profile is stored rather than how private it is. Changing them on an existing profile makes Chromium discard your extensions and sign you out of everything, so they are applied the same way whichever position the toggle is in. On Gecko, the `user.js` block and the locked preference file that Nomad wrote are removed, and anything you added yourself is left in place. `policies.json` stays, because nothing in it breaks a site and it is what installs uBlock Origin.
 
 What each browser family gets:
 
-**Chromium (Ungoogled Chromium, Helium):** launch flags disable sync, telemetry, JumpList, and machine ID, and enable canvas/rects/measureText noise, WebRTC restriction, and referrer stripping. DoH is seeded to Quad9 secure mode. uBlock Origin is loaded via `--load-extension=`, sourced from [gorhill/uBlock](https://github.com/gorhill/uBlock) releases with a GPG-verified tag.
+**Chromium (Ungoogled Chromium, Helium):** launch flags disable sync, telemetry, and JumpList, and enable canvas/rects/measureText noise, WebRTC restriction, and referrer stripping. DoH is seeded to Quad9 secure mode. uBlock Origin is loaded via `--load-extension=`, sourced from [gorhill/uBlock](https://github.com/gorhill/uBlock) releases with a GPG-verified tag. The machine-ID and encryption switches are not part of this profile, for the reason given above.
 
 **Gecko (Firefox, Floorp, Waterfox):** a fenced `user.js` (a safe subset derived from arkenfox) and a `policies.json` that disables the updater, telemetry, and Pocket are written on every launch. uBlock Origin is provisioned from a locally cached AMO-signed `.xpi`.
 
@@ -84,7 +87,7 @@ What each browser family gets:
 
 - Safe Browsing is off. As a partial substitute, DoH points at Quad9's malware-blocking resolver by default.
 - WebRTC is off, so video and audio calls (Meet, Teams, Discord) won't work out of the box. Set `disable_webrtc = false` to get restricted WebRTC back.
-- Chromium profile encryption (DPAPI) is off for the sake of portability. Keep the drive on an encrypted volume if that matters to you.
+- Chromium profile encryption (DPAPI) is off so the profile stays usable on any machine. This applies whether or not hardening is enabled. Keep the drive on an encrypted volume if that matters to you.
 - The browsers' own auto-updaters are disabled. Nomad is the only updater, which means you only pick up security patches when you run the launcher.
 - Mullvad gets none of the above: no `user.js`, no uBO provisioning. Nomad defers entirely to Mullvad's stack.
 
@@ -99,9 +102,14 @@ When the browser closes, a detached watcher process scrubs the traces Windows wr
 | `%APPDATA%\...\AutomaticDestinations\` | Jump List entries mentioning the portable path |
 | `%LOCALAPPDATA%\CrashDumps\` | Crash dumps for the launched browser |
 | `%LOCALAPPDATA%\{Mozilla, Firefox, Floorp, …}\` | Gecko runtime working dirs |
+| `%LOCALAPPDATA%\Chromium\`, `%LOCALAPPDATA%\imput\Helium\` | Chromium runtime working dirs |
+| `%LOCALAPPDATA%\Mullvad\MullvadBrowser\` | Mullvad Browser runtime working dir |
+| `%APPDATA%\{Mozilla\Firefox, Floorp, Waterfox}\installs.ini` | The profile-to-install mapping Gecko writes |
 | `C:\Windows\Prefetch\` | Prefetch entries (requires UAC; decline the prompt to skip) |
 
 Thumbnail cache scrubbing is opt-in (`scrub_thumbnail_cache = true`) because it briefly restarts Explorer. The Recent-shortcut and Jump List scrubs only run when the launcher is on a removable drive, so they can never wipe your system-wide history when run from `C:`.
+
+Those runtime directories are also where a normally installed copy of the same browser keeps its program files and profile. If Nomad finds an installation in one of them it leaves the whole directory alone, profile included, and notes that in `nomad.log`. The profile there is your real one and there is no way to tell it apart from a stray, so leaving an unscrubbed trace is the better outcome. Versions before v1.0.6 deleted these directories outright, which removed browsers people had installed themselves.
 
 ### What Nomad cannot scrub
 
@@ -178,6 +186,10 @@ Nomad-Firefox.exe --unregister-default
 
 Writes to `HKCU` only, so there is no UAC prompt. State is tracked in `Nomad/nomad.reg-state.json`.
 
+Browsers can also register themselves. If you use the browser's own "make this my default" button, Windows records the browser executable rather than the launcher, and a clicked link then starts the browser on its default profile under `%LOCALAPPDATA%` instead of the portable one. That second copy has none of your extensions or sign-ins, and older versions then deleted its profile when the browser closed.
+
+To prevent that, each launch inspects the `HKCU` handler entries and rewrites any whose command runs a file inside the launcher's own folder, so those links go through the launcher and land in the portable profile. The check runs again after the browser exits, because the "make default" button can be used while the browser is open. Handlers pointing anywhere else, including other browsers and separately installed copies of the same browser, are left as they are. This is the only registry write Nomad makes without being asked, and it is confined to `HKCU`.
+
 ## Troubleshooting
 
 **Nothing happens on launch.** First-run downloads take 30 to 90 seconds. Check `Nomad/nomad.log` for errors. If the log is empty, Windows SmartScreen may be quarantining the `.exe`; look in Windows Security → Protection History.
@@ -202,19 +214,19 @@ Writes to `HKCU` only, so there is no UAC prompt. State is tracked in `Nomad/nom
 No. Everything runs as the current user. The optional `--register-default` flag writes to `HKCU` only, with no UAC prompt.
 
 **Where does the browser get installed?**
-In a `Browser/` folder beside the launcher (see [On-disk layout](#on-disk-layout)). Nothing is written to `Program Files`, `%APPDATA%`, `%LOCALAPPDATA%`, or any other system location during normal operation.
+In a `Browser/` folder beside the launcher (see [On-disk layout](#on-disk-layout)). Nothing is written to `Program Files`, `%APPDATA%`, or `%LOCALAPPDATA%`. The one thing Nomad changes outside its own folder during normal operation is the `HKCU` handler repair described under [Default browser registration](#default-browser-registration), which corrects entries the browser itself created.
 
 **Does it work from a USB drive?**
 Yes. The launcher and its `Browser/` and `Data/` folders are fully portable. Move them anywhere and they behave the same.
 
 **Does it leave anything behind after I delete it?**
-No files or configuration: runtime traces Windows writes on its own are scrubbed when the browser closes, and deleting the launcher's folder removes everything Nomad and the browser wrote. Windows itself still keeps some execution records that Nomad cannot remove (see [What Nomad cannot scrub](#what-nomad-cannot-scrub)). If you used `--register-default`, run `--unregister-default` first to remove the `HKCU` entries.
+No files or configuration: runtime traces Windows writes on its own are scrubbed when the browser closes, and deleting the launcher's folder removes everything Nomad and the browser wrote. Windows itself still keeps some execution records that Nomad cannot remove (see [What Nomad cannot scrub](#what-nomad-cannot-scrub)). If you used `--register-default`, run `--unregister-default` first to remove the `HKCU` entries. If you made the browser your default from inside the browser instead, its handler was rewritten to run the launcher, so pick a different default browser in Windows Settings before you delete the folder.
 
 **What happens if a download fails verification?**
 The launcher aborts before extracting or running anything. Any existing install is left untouched.
 
 **What if I'm already on the latest version?**
-Nomad keeps a local version cache with a 6-hour TTL. Within that window it skips the network check entirely and launches immediately.
+Nomad keeps a local version cache with a 6-hour TTL. Within that window it skips the network check entirely and launches immediately. An entry recorded at a moment when the upstream hash was unavailable is discarded rather than reused, so a temporary problem upstream doesn't leave updates failing verification until the cache expires.
 
 **Can each launcher have its own `nomad.toml`?**
 Yes. Every launcher reads the `nomad.toml` in its own `Nomad/` folder independently.
