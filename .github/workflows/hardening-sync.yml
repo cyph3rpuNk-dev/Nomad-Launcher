@@ -312,3 +312,37 @@ jobs:
 
       - name: Check embedded keys against the signatures upstream publishes now
         run: bash scripts/check-signing-keys.sh
+
+  # ── Job 5: every launcher can still verify a download ─────────────────────
+  # Each launcher pins assumptions about how its upstream publishes integrity
+  # material: the name and format of a checksum file, the key an entry is filed
+  # under, the presence of a GitHub asset digest. When an upstream changes one,
+  # verify_package correctly refuses to install anything and the launcher stops
+  # working entirely, but nothing in the repository can see it.
+  #
+  # Two consecutive releases shipped a launcher broken this way. v1.0.5 shipped
+  # a Firefox that could not install (Mozilla added a signing subkey), v1.0.6 a
+  # Floorp that could not install (hashes.txt moved to sha256sum format and
+  # dropped its path prefix). Both were found by a user, not by us.
+  #
+  # These call the real fetch_latest_version against the real endpoints, so they
+  # exercise the parsers the launchers actually use rather than a copy in CI
+  # that could drift. Windows runner because that is what nomad-core targets.
+  upstream-verifiable:
+    name: Launchers can still verify a download
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+
+      - name: Resolve every upstream release and confirm it is verifiable
+        run: cargo test -p nomad-core --test upstream_live -- --ignored --nocapture
