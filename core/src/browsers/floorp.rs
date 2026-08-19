@@ -48,17 +48,38 @@ fn hashes_txt_key(arch: Arch) -> &'static str {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Parses `SHA256: <hex> - <key>` lines from Floorp's `hashes.txt`, returning
-/// the hash for `key` if present.
+/// Parses a Floorp `hashes.txt`, returning the hash for `key` if present.
+///
+/// Floorp has published two formats over time:
+/// - `SHA256: <hex> - <path>`
+/// - standard `sha256sum` lines: `<hex>  <filename>`
+///
+/// The current format omits the historical `win-dist/` prefix, so matching
+/// also accepts the basename of `key` while still requiring the expected
+/// installer filename.
 fn parse_hashes_txt(text: &str, key: &str) -> Option<String> {
+    let key_name = key.rsplit('/').next().unwrap_or(key);
+
     for line in text.lines() {
-        // Format: "SHA256: <hex> - <path>"
-        if let Some(rest) = line.trim().strip_prefix("SHA256:") {
-            if let Some((hex, path)) = rest.trim().split_once(" - ") {
-                if path.trim() == key {
-                    return Some(hex.trim().to_owned());
-                }
-            }
+        let line = line.trim();
+        let (hex, path) = if let Some(rest) = line.strip_prefix("SHA256:") {
+            // Legacy format: "SHA256: <hex> - <path>"
+            let Some((hex, path)) = rest.trim().split_once(" - ") else {
+                continue;
+            };
+            (hex.trim(), path.trim())
+        } else {
+            // Current format: "<hex>  <filename>"
+            let mut fields = line.split_whitespace();
+            let Some(hex) = fields.next() else { continue };
+            let Some(path) = fields.next() else { continue };
+            (hex, path)
+        };
+
+        let path_matches = path == key || path == key_name;
+        let hash_is_valid = hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit());
+        if path_matches && hash_is_valid {
+            return Some(hex.to_ascii_lowercase());
         }
     }
     None
@@ -283,6 +304,16 @@ mod tests {
         let info = browser.fetch_latest_version().await.unwrap();
         assert_eq!(info.browser_version, "12.1.0");
         assert!(info.sha256.is_none());
+    }
+
+    #[test]
+    fn parse_hashes_txt_accepts_current_standard_checksum_format() {
+        let hash = "a".repeat(64);
+        let text = format!("{hash}  floorp-windows-x86_64.installer.exe\n");
+        assert_eq!(
+            parse_hashes_txt(&text, "win-dist/floorp-windows-x86_64.installer.exe"),
+            Some(hash)
+        );
     }
 
     #[tokio::test]
