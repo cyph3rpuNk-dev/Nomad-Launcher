@@ -109,6 +109,18 @@ $lines = foreach ($e in $exes) {
 [IO.File]::WriteAllText($sumsPath, (($lines -join "`n") + "`n"), [Text.Encoding]::ASCII)
 Write-Host "Wrote SHA256SUMS ($($exes.Count) entries)"
 
+# A signature from an earlier run does not cover the manifest just written, so
+# drop it here — unconditionally, before the signing block. Deleting it only on
+# the path that re-signs left a stale .asc beside a fresh SHA256SUMS whenever
+# signing was skipped: NOMAD_SIGNING_KEY unset (how CI always runs), gpg not
+# found, or a failed signing run. The pair verifies BAD, and nothing local says
+# so — the failure surfaces at whoever downloads the release.
+$sig = "$sumsPath.asc"
+if (Test-Path $sig) {
+    Remove-Item $sig -Force
+    Write-Host "Removed stale SHA256SUMS.asc (did not cover the new manifest)"
+}
+
 # --- Authenticity: detached GPG signature of SHA256SUMS ---
 # Set NOMAD_SIGNING_KEY to the Nomad release key's fingerprint (or uid/email)
 # to sign. Users verify with: gpg --verify SHA256SUMS.asc SHA256SUMS
@@ -131,8 +143,8 @@ if ($key) {
     if (-not $gpg) {
         Write-Warning "gpg not found (set NOMAD_GPG to gpg.exe's path); SHA256SUMS is left UNSIGNED"
     } else {
-        $sig = "$sumsPath.asc"
-        if (Test-Path $sig) { Remove-Item $sig -Force }
+        # $sig was defined and any stale file removed right after SHA256SUMS
+        # was written, so this only has to produce the new signature.
         & $gpg --batch --yes --local-user $key --armor --detach-sign --output $sig $sumsPath
         if ($LASTEXITCODE -eq 0) {
             Write-Host "Signed SHA256SUMS -> SHA256SUMS.asc (key: $key)"
