@@ -23,6 +23,38 @@ pub mod mullvad;
 pub mod ungoogled;
 pub mod waterfox;
 
+/// Chromium-family switches that determine **how the profile is stored**, not
+/// how private it is. Applied by `launch_command` on every launch, next to
+/// `--user-data-dir`, and deliberately outside `[hardening] enabled`.
+///
+/// These are ungoogled-chromium switches (Helium inherits them):
+///
+/// - `--disable-machine-id` — without it Chromium mixes the host machine ID
+///   into the seed for the `Secure Preferences` MACs. Those MACs protect
+///   tracked preferences, `extensions.settings` among them, so changing the
+///   seed invalidates every one of them: Chromium's tracked-preference
+///   enforcement clears the protected values, the extension registry comes up
+///   empty, and `ExtensionGarbageCollector` deletes the now-unreferenced
+///   directories under `Default\Extensions`.
+/// - `--disable-encryption` — without it cookies and auth tokens are sealed
+///   with DPAPI, bound to the host OS user. Data written in one mode cannot be
+///   decrypted in the other and Chromium drops what it cannot read.
+/// - `--disable-features=DeviceBoundSessions` — Chrome 146+ binds sessions to
+///   the host TPM. A browser that also passes a hardening
+///   `--disable-features=` bundle overrides this one (Chromium honours only
+///   the last occurrence), which is fine: that bundle is a superset.
+///
+/// Gating any of these on a config toggle means flipping the toggle silently
+/// reformats an existing profile — the user loses their extensions and their
+/// sign-ins, having changed a setting labelled "privacy hardening" (#38).
+/// Keep them unconditional; the hardening list is for switches that are safe
+/// to turn on and off between launches.
+pub(crate) const CHROMIUM_PORTABILITY_FLAGS: &[&str] = &[
+    "--disable-machine-id",
+    "--disable-encryption",
+    "--disable-features=DeviceBoundSessions",
+];
+
 /// GitHub Releases API URL for uBlock Origin — used to provision the Firefox
 /// XPI locally so `policies.json` can reference it with a `file://` URL
 /// instead of the AMO endpoint at runtime.

@@ -47,6 +47,10 @@ incognito = false            # true = launch Chromium browsers in --incognito mo
 [hardening]
 enabled = true               # false = launch with no privacy hardening applied
 sanitize_on_shutdown = true  # false = disable clear-on-exit in Gecko user.js
+# Safe to toggle between launches: the switches that decide how the portable
+# profile is *stored* (machine-ID binding, cookie/token encryption, TPM session
+# binding) are applied on every launch regardless of this setting, so your
+# extensions, cookies, and sign-ins are unaffected either way.
 scrub_thumbnail_cache = false  # true = enable thumbcache scrub on exit (briefly restarts Explorer)
 clear_data_on_exit = false   # true = wipe Chromium cookies/sessions/history on exit (strong privacy, breaks \"stay signed in\")
 scrub_prefetch = false       # true = delete Windows Prefetch entries on exit (requires UAC prompt for non-admin accounts)
