@@ -282,3 +282,33 @@ jobs:
             exit 1
           fi
           echo "All pinned ungoogled-chromium logo resource IDs still resolve correctly."
+
+  # ── Job 4: embedded signing key coverage ──────────────────────────────────
+  # The keys in core/keys/ are point-in-time snapshots of keys that gain
+  # subkeys over time. Upstreams sign with a signing subkey rather than the
+  # primary and add new subkeys without changing it, so a stale snapshot still
+  # parses and still has the right primary while no longer containing the
+  # subkey that signed the release. Verification then fails outright and every
+  # local check still passes.
+  #
+  # That shipped: v1.0.6 had to fix Nomad-Firefox.exe and Nomad-Firefox-ESR.exe
+  # being unable to install or update at all, because Mozilla had added a
+  # signing subkey after the snapshot was taken. The only signal was a user
+  # reporting the failure.
+  #
+  # Like job 3 this FAILS rather than opening a PR. Refreshing a trust anchor
+  # is a human decision, and auto-committing a downloaded public key would
+  # defeat the point of pinning one.
+  signing-keys:
+    name: Embedded signing key coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check embedded keys against the signatures upstream publishes now
+        run: bash scripts/check-signing-keys.sh
