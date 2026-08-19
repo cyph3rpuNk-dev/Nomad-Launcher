@@ -98,6 +98,13 @@ impl VersionCache {
         now.saturating_sub(self.fetched_at) < CACHE_TTL_SECS
     }
 
+    /// Returns whether this cache entry contains at least one verification
+    /// mechanism for the downloaded package.
+    #[must_use]
+    pub fn has_integrity_material(&self) -> bool {
+        self.signature_url.is_some() || self.sha256.is_some() || self.sha512.is_some()
+    }
+
     /// Reads and deserialises a cache from `path`.  Returns `None` on any
     /// error (missing file, malformed TOML, etc.).
     pub fn load(path: &Path) -> Option<Self> {
@@ -234,6 +241,15 @@ mod tests {
             ubo_version: None,
         };
         assert!(!cache.is_fresh());
+    }
+
+    #[test]
+    fn cache_without_integrity_material_is_not_usable_for_updates() {
+        let mut cache = fixture_cache("1.0");
+        assert!(cache.has_integrity_material());
+
+        cache.sha256 = None;
+        assert!(!cache.has_integrity_material());
     }
 
     #[test]
