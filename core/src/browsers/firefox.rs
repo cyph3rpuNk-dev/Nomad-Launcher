@@ -23,6 +23,16 @@ use crate::config::Arch;
 /// an empty placeholder; replace it with the official key before release.
 /// When the file is empty, GPG verification is skipped and a warning is logged
 /// (see SPEC §9).
+///
+/// **This is a point-in-time snapshot of a key that gains subkeys over time.**
+/// Mozilla signs `SHA256SUMS` with a *signing subkey*, not the primary, and
+/// adds new subkeys without changing the primary. A snapshot taken before such
+/// an addition still parses and still has the right primary, but no longer
+/// contains the subkey that signed the release — verification then fails with
+/// rpgp's `No matching issuer_key_id or issuer_fingerprint for Key ID: <our
+/// primary>`, which reads as though our key were unknown when in fact it is
+/// merely stale. Refresh from `<releases>/<version>/KEY` and confirm the
+/// primary fingerprint is unchanged (see `embedded_key_is_mozillas_release_key`).
 static FIREFOX_KEY: &[u8] = include_bytes!("../../keys/firefox.asc");
 
 /// Curated safe user.js payload (arkenfox-derived, SPEC §5).
@@ -375,6 +385,59 @@ mod tests {
         "FIREFOX_ESR": "128.11.0esr",
         "FIREFOX_DEVEDITION": "139.0b3"
     }"#;
+
+    /// Mozilla's long-published release-key fingerprint. This is the trust
+    /// anchor: it is documented out-of-band and must never change silently.
+    /// Refreshing the snapshot for new subkeys is routine; a *different*
+    /// primary is a different identity and must not be accepted on the
+    /// strength of a file downloaded over HTTPS alone.
+    const MOZILLA_PRIMARY_FPR: &str = "14F26682D0916CDD81E37B6D61B7B526D98F0353";
+
+    /// Integrity check on the embedded key snapshot.
+    ///
+    /// Regression: the snapshot taken 2026-07-12 carried the correct primary
+    /// but was missing the signing subkey `827E6586…76767AA3` that Mozilla
+    /// later began signing `SHA256SUMS` with, so every Firefox and Firefox ESR
+    /// install and update failed verification outright. `verify_bytes` walks
+    /// the subkeys, so the fix was to refresh the file — no code change — but
+    /// the failure mode is silent until a user tries to install.
+    ///
+    /// Note what this test can and cannot do: it validates the *file*, not its
+    /// freshness against Mozilla. Only a networked drift check can catch the
+    /// next subkey addition before a user does.
+    #[test]
+    fn embedded_key_is_mozillas_release_key() {
+        use pgp::composed::{Deserializable, SignedPublicKey};
+        use pgp::types::KeyDetails;
+
+        assert!(
+            !FIREFOX_KEY.is_empty(),
+            "the release build must embed the real key, not the placeholder"
+        );
+        let (key, _) = SignedPublicKey::from_armor_single(std::io::Cursor::new(FIREFOX_KEY))
+            .expect("embedded key must be parseable ASCII-armored PGP");
+
+        let fpr = hex::encode_upper(key.fingerprint().as_bytes());
+        assert_eq!(
+            fpr, MOZILLA_PRIMARY_FPR,
+            "embedded primary key is not Mozilla's release key"
+        );
+
+        let subkey_fprs: Vec<String> = key
+            .public_subkeys
+            .iter()
+            .map(|s| hex::encode_upper(s.fingerprint().as_bytes()))
+            .collect();
+        assert!(
+            subkey_fprs
+                .iter()
+                .any(|f| f == "827E658608679618CD349F93678E455D76767AA3"),
+            "the subkey Mozilla currently signs SHA256SUMS with is missing — \
+             Firefox and ESR cannot verify any download. Refresh \
+             core/keys/firefox.asc from <releases>/<version>/KEY, keeping the \
+             same primary fingerprint. Present subkeys: {subkey_fprs:?}"
+        );
+    }
 
     /// Minimal SHA256SUMS fixture with installer entries for all three archs.
     fn fixture_sha256sums(version: &str) -> String {
