@@ -58,12 +58,12 @@ const INITIAL_PREFERENCES: &str = include_str!("../../payloads/chromium/initial_
 /// without breaking site functionality; potentially breaking switches
 /// (e.g. `--disable-webgl`) are deliberately excluded.
 const HARDENING_FLAGS: &[&str] = &[
-    // ─── Portability (Windows-mandatory) ───────────────────────────
-    // Without these two the profile is encrypted with the host OS user
-    // credentials (DPAPI) and bound to the machine ID — both make it
-    // non-portable to other machines (ungoogled-chromium-specific flags).
-    "--disable-machine-id",
-    "--disable-encryption",
+    // NOTE: the profile-storage switches (--disable-machine-id,
+    // --disable-encryption, DeviceBoundSessions) are NOT here. They live in
+    // CHROMIUM_PORTABILITY_FLAGS and are applied unconditionally by
+    // launch_command — gating them on `[hardening] enabled` meant toggling
+    // that setting reformatted an existing profile and wiped the user's
+    // extensions and sign-ins (#38).
     // ─── Stock Chromium privacy / portability hygiene ──────────────
     // NOTE: `--no-first-run` is deliberately omitted here. We append it
     // conditionally in `launch_command` only after
@@ -296,6 +296,12 @@ impl BrowserFamily for Helium {
             .unwrap_or_else(|| install_dir.join("profile"));
         let mut cmd = Command::new(install_dir.join(EXECUTABLE));
         cmd.arg(format!("--user-data-dir={}", profile_dir.display()));
+        // Profile-storage switches belong with --user-data-dir: both decide
+        // where and how the portable profile lives, and neither may be gated
+        // on config (#38). Placed before `args` so a hardening
+        // --disable-features= bundle (a superset) still wins, and so a user's
+        // extra_args can still override.
+        cmd.args(super::CHROMIUM_PORTABILITY_FLAGS);
         if default_apps_already_installed(&profile_dir) {
             cmd.arg("--no-first-run");
         }

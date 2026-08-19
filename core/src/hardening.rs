@@ -118,6 +118,39 @@ pub fn write_autoconfig(
     Ok(())
 }
 
+/// Removes the autoconfig pair written by [`write_autoconfig`], so
+/// `[hardening] enabled = false` actually stops applying the locked prefs
+/// rather than merely not refreshing them.
+///
+/// Both files are deleted by exact name — `defaults/pref/autoconfig.js` and
+/// `nomad.cfg` — never the directories, which the browser also populates with
+/// its own files (`channel-prefs.js`, …). Callers must invoke this only for
+/// browsers that actually declare an autoconfig payload: `LibreWolf` and
+/// Mullvad ship their own pair and Nomad never writes theirs, so theirs must
+/// never be removed either.
+///
+/// Missing files are not an error — the profile may never have been hardened.
+///
+/// # Errors
+/// Returns [`BrowserError::Io`] if a file exists but cannot be removed.
+pub fn remove_autoconfig(install_dir: &Path) -> Result<()> {
+    let targets = [
+        install_dir
+            .join("defaults")
+            .join("pref")
+            .join("autoconfig.js"),
+        install_dir.join("nomad.cfg"),
+    ];
+    for path in targets {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
+
 /// Seeds Chromium's `Local State` and (optionally) `Default/Preferences` JSON
 /// files inside `user_data_dir`, recursively merging the supplied defaults with
 /// any existing user values.
@@ -787,6 +820,35 @@ mod tests {
         let udd = dir.path().join("profile");
         let err = write_chromium_state(&udd, Some("{not valid"), None).unwrap_err();
         assert!(matches!(err, BrowserError::Parse(_)));
+    }
+
+    #[test]
+    fn remove_autoconfig_deletes_the_pair_but_keeps_the_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("firefox");
+        write_autoconfig(&install, "pointer\n", "cfg\n").unwrap();
+        // A file the browser itself ships alongside ours.
+        let vendor = install
+            .join("defaults")
+            .join("pref")
+            .join("channel-prefs.js");
+        std::fs::write(&vendor, "vendor").unwrap();
+
+        remove_autoconfig(&install).unwrap();
+
+        assert!(!install.join("defaults/pref/autoconfig.js").exists());
+        assert!(!install.join("nomad.cfg").exists());
+        assert!(
+            vendor.exists(),
+            "only our two files are removed by name — never the directory"
+        );
+        assert!(install.join("defaults").join("pref").is_dir());
+    }
+
+    #[test]
+    fn remove_autoconfig_is_a_noop_when_never_written() {
+        let dir = tempfile::tempdir().unwrap();
+        remove_autoconfig(dir.path()).expect("missing files must not be an error");
     }
 
     #[test]

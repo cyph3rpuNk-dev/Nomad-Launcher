@@ -716,7 +716,12 @@ async fn update_check_phase<B: BrowserFamily>(
     let launcher_dir = install_dir.parent().unwrap_or(install_dir);
     let cache_path = config::nomad_subdir(launcher_dir).join("nomad-version-cache.toml");
     if let Some(cached) = version_cache::VersionCache::load(&cache_path) {
-        if cached.is_fresh() && cached.is_url_plausible() {
+        // Never reuse a cache entry that was created when an upstream hash
+        // endpoint was temporarily missing or used an unrecognised format.
+        // Such an entry would otherwise suppress the corrected parser until
+        // the six-hour TTL expires and make a verified update appear
+        // permanently unverifiable after a launcher upgrade.
+        if cached.is_fresh() && cached.is_url_plausible() && cached.has_integrity_material() {
             let latest = cached.into_version_info();
             tracing::debug!(
                 browser = browser.id(),
@@ -1059,6 +1064,8 @@ fn do_launch<B: BrowserFamily>(
                 }
             }
         }
+    } else {
+        remove_gecko_hardening(browser, install_dir);
     }
     prepare_browser_for_launch(browser, install_dir, hardening);
     // Remove host-system traces from a previous (possibly crashed) session
@@ -1081,6 +1088,71 @@ fn do_launch<B: BrowserFamily>(
     );
     signal_done(state, ctx);
     Ok(())
+}
+
+/// Withdraws the Gecko hardening Nomad previously wrote, so `[hardening]
+/// enabled = false` disables hardening on an already-hardened profile instead
+/// of merely not refreshing it.
+///
+/// Gecko hardening lives in files that persist between launches, unlike the
+/// Chromium-family launch flags which simply stop being passed. Skipping the
+/// write left the previous `user.js` fence and the locked `nomad.cfg` in place,
+/// so a user who turned the setting off to unbreak a site saw no change at all
+/// — and `lockPref` values cannot even be overridden from `about:config`.
+///
+/// Two surfaces are withdrawn:
+/// - the Nomad-managed `user.js` fence (content the user added outside the
+///   markers is preserved; see `hardening::remove_managed_user_js`);
+/// - the autoconfig pair, but only for browsers that declare one. `LibreWolf`
+///   and Mullvad ship their own and Nomad never writes theirs.
+///
+/// `distribution/policies.json` is deliberately **kept**. Nothing in the
+/// curated payload breaks a site — it covers telemetry, updates, Pocket, and
+/// first-run pages — so removing it does not serve the reason people turn
+/// hardening off, and it carries the injected uBO `ExtensionSettings` entry,
+/// so deleting it would uninstall the user's ad blocker. Nomad also overwrites
+/// the vendor's own file on browsers that ship one, so the original could not
+/// be restored.
+///
+/// The Chromium family has no equivalent: its profile seeds are merged into
+/// the browser's own `Preferences` with user-wins semantics and cannot be
+/// cleanly un-merged. Turning hardening off stops the locked scalars being
+/// re-enforced, which is the most that can be withdrawn there.
+fn remove_gecko_hardening<B: BrowserFamily>(browser: &B, install_dir: &Path) {
+    let Hardening::GeckoProfile {
+        autoconfig, cfg, ..
+    } = browser.hardening()
+    else {
+        return;
+    };
+    if let Some(profile_dir) = browser.profile_dir(install_dir) {
+        match hardening::remove_managed_user_js(&profile_dir) {
+            Ok(()) => tracing::info!(
+                browser = browser.id(),
+                "hardening disabled — removed the Nomad-managed user.js block"
+            ),
+            Err(e) => tracing::warn!(
+                browser = browser.id(),
+                error = %e,
+                "hardening disabled but the Nomad user.js block could not be removed; \
+                 the profile stays hardened"
+            ),
+        }
+    }
+    if autoconfig.is_some() && cfg.is_some() {
+        match hardening::remove_autoconfig(install_dir) {
+            Ok(()) => tracing::info!(
+                browser = browser.id(),
+                "hardening disabled — removed nomad.cfg + defaults/pref/autoconfig.js"
+            ),
+            Err(e) => tracing::warn!(
+                browser = browser.id(),
+                error = %e,
+                "hardening disabled but the autoconfig pair could not be removed; \
+                 locked prefs stay in force"
+            ),
+        }
+    }
 }
 
 /// Returns the full path of the browser executable a `Command` built by
@@ -1407,6 +1479,7 @@ fn handle_cleanup_flag(args: CleanupArgs) -> ExitCode {
         pid = args.browser_pid,
         "browser tree exited; scrubbing host traces"
     );
+    repair_registration_after_exit(args.browser_exe.as_deref());
     scrub_temp();
     scrub_wer();
     scrub_mozilla_installs_ini();
@@ -1423,6 +1496,44 @@ fn handle_cleanup_flag(args: CleanupArgs) -> ExitCode {
         elevate_for_prefetch_scrub();
     }
     ExitCode::SUCCESS
+}
+
+/// Re-applies the self-registration repair once the browser tree is down.
+///
+/// The launch-time repair in `prepare_browser_for_launch` only sees the state
+/// at launch. A user who clicks "Make default" *inside* the browser rewrites
+/// the handler commands mid-session, with no launcher running to notice — so
+/// every clicked link goes to the browser exe directly (host profile, no
+/// portable Data dir, no handoff to the running instance) until the next
+/// launch. The watcher is already a detached post-exit process, so re-running
+/// the repair here closes that window at no extra cost.
+///
+/// `install_dir` is derived from the launched browser's own path: for every
+/// family the executable sits directly in the install dir. A relative or bare
+/// `browser_exe` yields no usable install dir and is skipped rather than
+/// guessed at — `repair_self_registration` would refuse an empty root anyway,
+/// but the intent is clearer stated here.
+fn repair_registration_after_exit(browser_exe: Option<&str>) {
+    let Some(exe) = browser_exe else { return };
+    let exe = std::path::Path::new(exe);
+    if !exe.is_absolute() {
+        return;
+    }
+    let Some(install_dir) = exe.parent().filter(|p| !p.as_os_str().is_empty()) else {
+        return;
+    };
+    let Ok(launcher_exe) = std::env::current_exe() else {
+        tracing::warn!("could not resolve launcher path; skipping post-exit registration repair");
+        return;
+    };
+    let repaired = registry::repair_self_registration(install_dir, &launcher_exe);
+    if repaired > 0 {
+        tracing::warn!(
+            repaired,
+            "browser re-registered itself as default during the session; \
+             rerouted through the launcher so clicked links reach the portable profile"
+        );
+    }
 }
 
 /// Entry point for the elevated Prefetch scrubber sub-process.
@@ -2275,7 +2386,7 @@ fn scrub_mozilla_runtime_dirs_in(
         for brand in GECKO_BRAND_DIRS {
             let dir = local.join(brand);
             if dir.exists() {
-                try_remove_dir_with_retry(&dir);
+                remove_runtime_dir_unless_installed(&dir);
             }
         }
     }
@@ -2291,7 +2402,7 @@ fn scrub_mozilla_runtime_dirs_in(
                         || (n.starts_with(brand) && n.as_bytes().get(brand.len()) == Some(&b'-'))
                 });
                 if matched {
-                    try_remove_dir_with_retry(&entry.path());
+                    remove_runtime_dir_unless_installed(&entry.path());
                 }
             }
         }
@@ -2315,7 +2426,7 @@ fn scrub_mullvad_runtime_dir_in(local: Option<&std::path::Path>) {
     let parent = local.join("Mullvad");
     let browser_dir = parent.join("MullvadBrowser");
     if browser_dir.exists() {
-        try_remove_dir_with_retry(&browser_dir);
+        remove_runtime_dir_unless_installed(&browser_dir);
     }
     // Remove the parent only when it is now empty — a co-installed Mullvad VPN
     // would leave its own entries here, and those must be preserved.
@@ -2343,9 +2454,15 @@ fn scrub_mullvad_runtime_dir_in(local: Option<&std::path::Path>) {
 ///
 /// As with [`scrub_mullvad_runtime_dir`], Helium's vendor parent `imput\` is
 /// removed only when it is left empty, so a future `imput` product's data is
-/// preserved. Same accepted tradeoff as the Gecko scrub: a separate, non-Nomad
-/// Chromium or Helium install would also be cleaned — the portable-first
-/// posture treats these brand dirs as Nomad's to scrub.
+/// preserved.
+///
+/// These are also the directories a *user-level install* of the same browser
+/// occupies, so every removal goes through
+/// [`remove_runtime_dir_unless_installed`], which leaves an installation
+/// untouched. This scrub previously took the portable-first position that the
+/// brand dirs were Nomad's to clear regardless; that deleted the binaries of
+/// browsers the user had installed themselves, leaving their shortcuts and
+/// file associations dangling.
 fn scrub_chromium_runtime_dirs() {
     let local = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
     scrub_chromium_runtime_dirs_in(local.as_deref());
@@ -2359,7 +2476,7 @@ fn scrub_chromium_runtime_dirs_in(local: Option<&std::path::Path>) {
     // ungoogled-chromium: unbranded top-level dir.
     let chromium = local.join("Chromium");
     if chromium.exists() {
-        try_remove_dir_with_retry(&chromium);
+        remove_runtime_dir_unless_installed(&chromium);
     }
 
     // Helium: nested under the `imput` vendor dir. Remove the browser subdir,
@@ -2368,13 +2485,77 @@ fn scrub_chromium_runtime_dirs_in(local: Option<&std::path::Path>) {
     let imput = local.join("imput");
     let helium = imput.join("Helium");
     if helium.exists() {
-        try_remove_dir_with_retry(&helium);
+        remove_runtime_dir_unless_installed(&helium);
     }
     if let Ok(mut entries) = std::fs::read_dir(&imput) {
         if entries.next().is_none() {
             let _ = std::fs::remove_dir(&imput);
         }
     }
+}
+
+/// Executable names that mark a host directory as a real browser
+/// *installation* rather than the runtime leftovers the scrub exists to remove.
+const INSTALL_MARKER_EXES: &[&str] = &[
+    "chrome.exe",
+    "firefox.exe",
+    "floorp.exe",
+    "librewolf.exe",
+    "mullvadbrowser.exe",
+    "waterfox.exe",
+];
+
+/// Returns the browser executable that makes `dir` an installation directory,
+/// or `None` when `dir` holds only runtime data.
+///
+/// Two layouts are recognised:
+/// - Chromium user-level installs keep their binaries in `<dir>\Application\`
+///   (e.g. `%LOCALAPPDATA%\imput\Helium\Application\chrome.exe`), alongside the
+///   `User Data\` profile.
+/// - Gecko user-level installs put the brand executable directly in `<dir>`.
+///
+/// Requiring an actual executable — rather than just an `Application\`
+/// directory — means an empty leftover folder cannot block the scrub forever.
+fn installed_browser_exe(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    for name in INSTALL_MARKER_EXES {
+        let direct = dir.join(name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+        let nested = dir.join("Application").join(name);
+        if nested.is_file() {
+            return Some(nested);
+        }
+    }
+    None
+}
+
+/// [`try_remove_dir_with_retry`], refusing any directory that holds a real
+/// browser installation.
+///
+/// The host brand dirs Nomad scrubs are also where a user-level install of the
+/// same browser lives, and the tree delete does not stop at profile data — it
+/// takes the binaries with it, leaving the install's Start Menu shortcuts,
+/// `App Paths`, and file associations pointing at nothing. Destroying software
+/// the user installed is a worse outcome than leaving a privacy trace, so when
+/// an installation is detected the directory is left entirely alone: its
+/// profile is the user's real one and is indistinguishable from leakage.
+///
+/// The warning names the remedy, because the leak that motivates the scrub is
+/// itself a symptom of the launcher not being the registered handler.
+fn remove_runtime_dir_unless_installed(dir: &std::path::Path) {
+    if let Some(exe) = installed_browser_exe(dir) {
+        tracing::warn!(
+            path = %dir.display(),
+            exe = %exe.display(),
+            "host directory holds an installed browser — leaving it untouched; \
+             profile data written there by links opened outside the launcher is \
+             not scrubbed. Register the launcher as the default browser \
+             (--register-default) so clicked links reach the portable profile"
+        );
+        return;
+    }
+    try_remove_dir_with_retry(dir);
 }
 
 /// Tolerant tree delete modeled on `LibreWolf` Portable's cleanup strategy:
@@ -2401,7 +2582,12 @@ fn try_remove_dir_with_retry(dir: &std::path::Path) {
             "browser runtime dir partially scrubbed (some entries still locked)"
         );
     } else {
-        tracing::info!(
+        // warn!, not info!: the default log filter is `warn`, and this is the
+        // most destructive thing the launcher does — a full tree delete under
+        // %LOCALAPPDATA%. Logging it at info! meant a successful wipe left no
+        // record in the shipped log at all, which made host-profile loss
+        // reports impossible to confirm after the fact.
+        tracing::warn!(
             path = %dir.display(),
             deleted_files,
             "removed browser runtime dir"
@@ -2629,6 +2815,172 @@ mod tests {
             "must resolve to explorer.exe, got {}",
             p.display()
         );
+    }
+
+    /// `[hardening] enabled = false` must actually disable Gecko hardening.
+    ///
+    /// The hardening block writes files that persist between launches, so
+    /// skipping the write left the previous `user.js` fence and the locked
+    /// `nomad.cfg` in force: a user who turned the setting off to unbreak a
+    /// site saw no change, and `lockPref` cannot be overridden from
+    /// `about:config`.
+    #[test]
+    fn disabling_hardening_withdraws_the_gecko_payloads() {
+        use crate::browsers::firefox::Firefox;
+        use crate::config::Arch;
+
+        let temp = tempfile::tempdir().unwrap();
+        let install_dir = temp.path().join("Browser");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let browser = Firefox::new(Arch::X64);
+        let profile_dir = browser.profile_dir(&install_dir).unwrap();
+
+        // A previously hardened install, plus a pref the user wrote themselves
+        // and a file the browser ships beside ours.
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("user.js"), "user_pref(\"mine\", true);\n").unwrap();
+        hardening::write_user_js(&profile_dir, "user_pref(\"privacy.rfp\", true);").unwrap();
+        hardening::write_autoconfig(&install_dir, "pointer\n", "lockPref(\"a\", 1);\n").unwrap();
+        let vendor = install_dir
+            .join("defaults")
+            .join("pref")
+            .join("channel-prefs.js");
+        std::fs::write(&vendor, "vendor").unwrap();
+
+        remove_gecko_hardening(&browser, &install_dir);
+
+        let user_js = std::fs::read_to_string(profile_dir.join("user.js")).unwrap();
+        assert!(
+            user_js.contains("user_pref(\"mine\", true);"),
+            "the user's own prefs must survive"
+        );
+        assert!(
+            !user_js.contains("privacy.rfp"),
+            "the Nomad-managed block must be gone"
+        );
+        assert!(
+            !install_dir.join("nomad.cfg").exists(),
+            "locked prefs must stop being applied"
+        );
+        assert!(!install_dir.join("defaults/pref/autoconfig.js").exists());
+        assert!(
+            vendor.exists(),
+            "the browser's own files are not ours to delete"
+        );
+    }
+
+    /// `LibreWolf` and Mullvad declare `autoconfig: None` — they ship their own
+    /// pair and Nomad never writes one, so disabling hardening must not delete
+    /// theirs.
+    #[test]
+    fn disabling_hardening_spares_a_vendor_owned_autoconfig_pair() {
+        use crate::browsers::librewolf::Librewolf;
+        use crate::config::Arch;
+
+        let temp = tempfile::tempdir().unwrap();
+        let install_dir = temp.path().join("Browser");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        // Stand in for LibreWolf's own local-settings.js + librewolf.cfg by
+        // writing files at the paths our remover targets.
+        hardening::write_autoconfig(&install_dir, "vendor pointer\n", "vendor cfg\n").unwrap();
+
+        remove_gecko_hardening(&Librewolf::new(Arch::X64), &install_dir);
+
+        assert!(
+            install_dir.join("nomad.cfg").exists()
+                && install_dir.join("defaults/pref/autoconfig.js").exists(),
+            "a browser that ships its own autoconfig must keep it"
+        );
+    }
+
+    /// Regression (#38): `--disable-machine-id` and `--disable-encryption`
+    /// used to live in `HARDENING_FLAGS`, so `[hardening] enabled = false`
+    /// dropped them. They decide the profile's storage format, not its
+    /// privacy level:
+    ///
+    /// - the machine ID seeds the `Secure Preferences` MACs that protect
+    ///   `extensions.settings`, so changing it makes Chromium clear the
+    ///   extension registry and garbage-collect `Default\Extensions`;
+    /// - the encryption switch decides whether cookies and auth tokens are
+    ///   DPAPI-sealed, and Chromium drops what it cannot decrypt.
+    ///
+    /// Toggling the setting therefore wiped the user's extensions and
+    /// sign-ins. They must reach the browser whatever the config says.
+    #[test]
+    fn profile_storage_flags_survive_hardening_disabled() {
+        use crate::browsers::helium::Helium;
+        use crate::browsers::ungoogled::UngoogledChromium;
+        use crate::config::{Arch, Config};
+
+        let install_dir = std::path::Path::new(r"C:\Portables\Test\Browser");
+        let mut config = Config::parse("[browser]\ninstall_dir = \"Browser\"\n").unwrap();
+        config.hardening.enabled = false;
+
+        for (label, argv) in [
+            ("ungoogled-chromium", {
+                let b = UngoogledChromium::new(Arch::X64);
+                let args = build_launch_args(&b, &config);
+                assert!(
+                    !args.iter().any(|a| a.starts_with("--disable-")),
+                    "hardening flags must still be gated off when disabled"
+                );
+                argv_of(&b.launch_command(install_dir, &args))
+            }),
+            ("helium", {
+                let b = Helium::new(Arch::X64);
+                let args = build_launch_args(&b, &config);
+                argv_of(&b.launch_command(install_dir, &args))
+            }),
+        ] {
+            for flag in ["--disable-machine-id", "--disable-encryption"] {
+                assert!(
+                    argv.iter().any(|a| a == flag),
+                    "{label}: {flag} must be passed even with hardening disabled"
+                );
+            }
+            assert!(
+                argv.iter().any(|a| a.starts_with("--user-data-dir=")),
+                "{label}: the portable profile must still be selected"
+            );
+        }
+    }
+
+    /// With hardening on, the hardening `--disable-features=` bundle must be
+    /// the last such switch: Chromium honours only the final occurrence, and
+    /// the hardening bundle is a superset of the portability one.
+    #[test]
+    fn hardening_disable_features_bundle_wins_over_the_portability_one() {
+        use crate::browsers::ungoogled::UngoogledChromium;
+        use crate::config::{Arch, Config};
+
+        let browser = UngoogledChromium::new(Arch::X64);
+        let config = Config::parse("[browser]\ninstall_dir = \"Browser\"\n").unwrap();
+        assert!(config.hardening.enabled, "default config hardens");
+
+        let hardening_args = build_launch_args(&browser, &config);
+        let full_argv = argv_of(&browser.launch_command(
+            std::path::Path::new(r"C:\Portables\Test\Browser"),
+            &hardening_args,
+        ));
+        let last = full_argv
+            .iter()
+            .rfind(|a| a.starts_with("--disable-features="))
+            .expect("a --disable-features bundle must be present");
+        assert!(
+            last.contains("DeviceBoundSessions"),
+            "the winning bundle must keep the portability feature: {last}"
+        );
+        assert!(
+            last.contains("JumpList"),
+            "the winning bundle must be the hardening superset: {last}"
+        );
+    }
+
+    /// Renders a built `Command` as its argument list for assertions.
+    fn argv_of(cmd: &std::process::Command) -> Vec<String> {
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
     }
 
     #[test]
@@ -3092,6 +3444,93 @@ mod tests {
         // No Mullvad dir present — must not panic or create anything.
         scrub_mullvad_runtime_dir_in(Some(temp.path()));
         assert!(!temp.path().join("Mullvad").exists());
+    }
+
+    /// Regression: the scrub used to delete `%LOCALAPPDATA%\imput\Helium` and
+    /// `%LOCALAPPDATA%\Chromium` wholesale. On a machine with a user-level
+    /// install of the same browser those paths hold the binaries, not just
+    /// leaked profile data — so a portable launch silently uninstalled the
+    /// user's own browser and left its shortcuts and file associations
+    /// pointing at nothing.
+    #[test]
+    fn scrub_chromium_runtime_dirs_spares_a_user_level_install() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path();
+
+        // Helium's user-level install layout: binaries in Application\,
+        // profile in User Data\.
+        let helium = local.join("imput").join("Helium");
+        std::fs::create_dir_all(helium.join("Application")).unwrap();
+        std::fs::write(helium.join("Application").join("chrome.exe"), b"MZ").unwrap();
+        std::fs::create_dir_all(helium.join("User Data").join("Default")).unwrap();
+        std::fs::write(
+            helium.join("User Data").join("Default").join("Preferences"),
+            b"{}",
+        )
+        .unwrap();
+
+        // A Chromium dir with no install — pure leakage, still scrubbed.
+        let chromium = local.join("Chromium").join("User Data");
+        std::fs::create_dir_all(&chromium).unwrap();
+        std::fs::write(chromium.join("Local State"), b"{}").unwrap();
+
+        scrub_chromium_runtime_dirs_in(Some(local));
+
+        assert!(
+            helium.join("Application").join("chrome.exe").is_file(),
+            "an installed browser's binaries must never be deleted"
+        );
+        assert!(
+            helium
+                .join("User Data")
+                .join("Default")
+                .join("Preferences")
+                .is_file(),
+            "the install's own profile must be left alone — it is the user's \
+             real profile and is indistinguishable from leakage"
+        );
+        assert!(
+            !local.join("Chromium").exists(),
+            "a runtime dir with no installation must still be scrubbed"
+        );
+    }
+
+    #[test]
+    fn scrub_mozilla_runtime_dirs_spares_a_user_level_install() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path();
+
+        // Gecko installs put the brand exe directly in the directory.
+        let floorp = local.join("Floorp");
+        std::fs::create_dir_all(&floorp).unwrap();
+        std::fs::write(floorp.join("floorp.exe"), b"MZ").unwrap();
+
+        // Waterfox with runtime data only.
+        let waterfox = local.join("Waterfox").join("Profiles");
+        std::fs::create_dir_all(&waterfox).unwrap();
+        std::fs::write(waterfox.join("cache"), b"x").unwrap();
+
+        scrub_mozilla_runtime_dirs_in(Some(local), None);
+
+        assert!(
+            floorp.join("floorp.exe").is_file(),
+            "an installed Gecko browser must be left untouched"
+        );
+        assert!(
+            !local.join("Waterfox").exists(),
+            "a Gecko runtime dir with no installation must still be scrubbed"
+        );
+    }
+
+    #[test]
+    fn installed_browser_exe_ignores_an_empty_application_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        // A leftover empty Application\ must not block the scrub forever.
+        std::fs::create_dir_all(temp.path().join("Application")).unwrap();
+        assert!(installed_browser_exe(temp.path()).is_none());
+
+        std::fs::write(temp.path().join("Application").join("chrome.exe"), b"MZ").unwrap();
+        assert!(installed_browser_exe(temp.path()).is_some());
     }
 
     #[test]

@@ -132,7 +132,10 @@ fn path_is_under(root: &Path, path: &Path) -> bool {
     };
     let root = norm(root);
     let path = norm(path);
-    path.len() > root.len() && path[..root.len()] == root[..]
+    // An empty root is a prefix of everything; treat it as matching nothing so
+    // a caller that derives the root from a bare file name cannot widen a
+    // containment check into "any path on the machine".
+    !root.is_empty() && path.len() > root.len() && path[..root.len()] == root[..]
 }
 
 // ── Windows implementation ────────────────────────────────────────────────────
@@ -303,53 +306,24 @@ mod win {
         Ok(())
     }
 
-    /// URL protocols whose `UserChoice` `ProgId` is inspected for a hijacked
-    /// handler command.
-    const REPAIR_PROTOCOLS: &[&str] = &["http", "https", "ftp"];
-
-    /// File extensions whose `UserChoice` `ProgId` is inspected likewise.
-    const REPAIR_EXTENSIONS: &[&str] = &[".htm", ".html", ".shtml", ".xhtml"];
-
     pub(super) fn repair_self_registration(install_dir: &Path, launcher_exe: &Path) -> usize {
         let Some(launcher_str) = launcher_exe.to_str() else {
             return 0; // non-UTF-8 launcher path — nothing sane to write
         };
+        // An empty install_dir would make path_is_under match every path on the
+        // machine, turning the sweep below into a rewrite of every handler in
+        // HKCU. Callers derive it from a browser exe path, so refuse the
+        // degenerate case rather than trusting them.
+        if install_dir.as_os_str().is_empty() {
+            return 0;
+        }
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let mut repaired = 0;
 
-        // 1. ProgIds the user actually selected as URL / HTML-file handlers.
-        let mut prog_ids = std::collections::BTreeSet::new();
-        for proto in REPAIR_PROTOCOLS {
-            let key = format!(
-                "Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\{proto}\\UserChoice"
-            );
-            if let Ok(k) = hkcu.open_subkey(&key) {
-                if let Ok(pid) = k.get_value::<String, _>("ProgId") {
-                    prog_ids.insert(pid);
-                }
-            }
-        }
-        for ext in REPAIR_EXTENSIONS {
-            let key = format!(
-                "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\{ext}\\UserChoice"
-            );
-            if let Ok(k) = hkcu.open_subkey(&key) {
-                if let Ok(pid) = k.get_value::<String, _>("ProgId") {
-                    prog_ids.insert(pid);
-                }
-            }
-        }
+        // 1. Every ProgId under HKCU\Software\Classes whose open command runs a
+        //    binary inside our install tree.
         let url_command = format!("\"{launcher_str}\" -- \"%1\"");
-        for pid in &prog_ids {
-            // Nomad's own ProgId already routes through the launcher.
-            if pid.starts_with("NomadPortable.") {
-                continue;
-            }
-            let key_path = format!("Software\\Classes\\{pid}\\shell\\open\\command");
-            if repair_command_key(&hkcu, &key_path, install_dir, &url_command) {
-                repaired += 1;
-            }
-        }
+        repaired += repair_classes_commands(&hkcu, install_dir, &url_command);
 
         // 2. Start-Menu-Internet clients (launch-without-URL surface).
         let smi_command = format!("\"{launcher_str}\"");
@@ -367,6 +341,75 @@ mod win {
             }
         }
 
+        repaired
+    }
+
+    /// Sweeps every `ProgId` under `HKCU\Software\Classes` and reroutes the
+    /// ones whose `shell\open\command` runs a binary inside `install_dir`.
+    ///
+    /// Deliberately not limited to the `ProgId`s currently selected via
+    /// `UserChoice`. A third-party redirector (Winhance's `OpenWebSearch`
+    /// stub, `MSEdgeRedirect`, …) commonly owns the http/https `UserChoice`
+    /// slot and dispatches onward to the browser's own `ProgId` — so the
+    /// `ProgId` that actually launches the browser is frequently not the
+    /// selected one. Scanning only `UserChoice` left those commands pointing
+    /// straight at the browser exe, which is the bug this sweep closes.
+    ///
+    /// Safety is carried entirely by `path_is_under` in [`repair_command_key`]:
+    /// a command is rewritten only when its executable lives strictly inside
+    /// this launcher's own install tree. Other browsers, other Nomad
+    /// launchers, and system installs are never touched (SPEC §10).
+    ///
+    /// `Software\Classes` holds a few thousand keys on a typical machine and
+    /// most have no `shell\open\command`, so this is a few thousand failed
+    /// opens — cheap relative to the launch it runs alongside.
+    fn repair_classes_commands(hkcu: &RegKey, install_dir: &Path, url_command: &str) -> usize {
+        let Ok(classes) = hkcu.open_subkey("Software\\Classes") else {
+            return 0;
+        };
+        let mut repaired = 0;
+        let names: Vec<String> = classes
+            .enum_keys()
+            .filter_map(std::result::Result::ok)
+            .collect();
+        for name in names {
+            // Extension keys (".html") name a ProgId rather than carrying a
+            // command; Nomad's own ProgId already routes through the launcher.
+            if name.starts_with('.') || name.starts_with("NomadPortable.") {
+                continue;
+            }
+            // `Applications\<exe>` is a container of per-exe handlers, one
+            // level deeper than an ordinary ProgId. Chromium registers itself
+            // there too, so descend instead of skipping.
+            if name.eq_ignore_ascii_case("Applications") {
+                repaired += repair_applications_commands(hkcu, install_dir, url_command);
+                continue;
+            }
+            let key_path = format!("Software\\Classes\\{name}\\shell\\open\\command");
+            if repair_command_key(hkcu, &key_path, install_dir, url_command) {
+                repaired += 1;
+            }
+        }
+        repaired
+    }
+
+    /// Per-exe "Open with" handlers under
+    /// `HKCU\Software\Classes\Applications\<exe>\shell\open\command`.
+    fn repair_applications_commands(hkcu: &RegKey, install_dir: &Path, url_command: &str) -> usize {
+        let Ok(apps) = hkcu.open_subkey("Software\\Classes\\Applications") else {
+            return 0;
+        };
+        let names: Vec<String> = apps
+            .enum_keys()
+            .filter_map(std::result::Result::ok)
+            .collect();
+        let mut repaired = 0;
+        for name in names {
+            let key_path = format!("Software\\Classes\\Applications\\{name}\\shell\\open\\command");
+            if repair_command_key(hkcu, &key_path, install_dir, url_command) {
+                repaired += 1;
+            }
+        }
         repaired
     }
 
@@ -473,12 +516,17 @@ pub fn unregister(sidecar: &Path) -> Result<()> {
 
 /// Reroutes browser self-registrations through the launcher.
 ///
-/// Inspects the `HKCU` `UserChoice` `ProgId`s for http/https/ftp and the HTML
-/// file extensions, plus `StartMenuInternet` clients, and rewrites any
-/// `shell\open\command` whose executable lives strictly inside `install_dir`
-/// so it invokes `launcher_exe` instead (`"<launcher>" -- "%1"` for URL
-/// handlers). Commands pointing anywhere else — other browsers, other Nomad
-/// launchers, system installs — are never touched.
+/// Sweeps every `ProgId` under `HKCU\Software\Classes` (including the per-exe
+/// `Applications\<exe>` handlers) plus the `StartMenuInternet` clients, and
+/// rewrites any `shell\open\command` whose executable lives strictly inside
+/// `install_dir` so it invokes `launcher_exe` instead (`"<launcher>" -- "%1"`
+/// for URL handlers). Commands pointing anywhere else — other browsers, other
+/// Nomad launchers, system installs — are never touched.
+///
+/// The sweep is not restricted to the `ProgId`s currently selected via
+/// `UserChoice`: a third-party redirector often holds that slot and dispatches
+/// onward to the browser's own `ProgId`, so the command that actually launches
+/// the browser is frequently not the selected one.
 ///
 /// Best-effort: individual failures are logged and skipped. Returns the
 /// number of commands rewritten.
@@ -693,6 +741,109 @@ mod tests {
         assert_eq!(untouched, foreign);
 
         hkcu.delete_subkey_all(base).unwrap();
+    }
+
+    /// Regression: the repair used to derive its candidate `ProgId`s solely
+    /// from the http/https `UserChoice` values. When a third-party redirector
+    /// (Winhance's `OpenWebSearch` stub, `MSEdgeRedirect`, …) owns that slot
+    /// and dispatches onward to the browser's own `ProgId`, the one that
+    /// actually launches the browser was never examined — so clicked links
+    /// kept opening the browser exe directly, on the host profile, in a
+    /// second instance.
+    #[cfg(windows)]
+    #[test]
+    fn repair_rewrites_progids_that_are_not_the_userchoice_selection() {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let install_dir = Path::new(r"C:\Portables\NomadTestSweep\Browser");
+        let launcher = Path::new(r"C:\Portables\NomadTestSweep\Nomad-Test.exe");
+
+        // A ProgId the user never selected, pointing into the install tree —
+        // exactly what a browser's own "Make default" leaves behind.
+        let ours = "Software\\Classes\\NomadTestSweepHTM.unselected";
+        let ours_cmd = format!("{ours}\\shell\\open\\command");
+        hkcu.create_subkey(&ours_cmd)
+            .unwrap()
+            .0
+            .set_value(
+                "",
+                &r#""C:\Portables\NomadTestSweep\Browser\chrome.exe" --single-argument %1"#
+                    .to_owned(),
+            )
+            .unwrap();
+
+        // A per-exe "Open with" handler, one level deeper.
+        let app = "Software\\Classes\\Applications\\nomadtestsweep-chrome.exe";
+        let app_cmd = format!("{app}\\shell\\open\\command");
+        hkcu.create_subkey(&app_cmd)
+            .unwrap()
+            .0
+            .set_value(
+                "",
+                &r#""C:\Portables\NomadTestSweep\Browser\chrome.exe" -- "%1""#.to_owned(),
+            )
+            .unwrap();
+
+        // A foreign handler that must survive untouched.
+        let foreign_cmd = "Software\\Classes\\NomadTestSweepHTM.foreign\\shell\\open\\command";
+        let foreign_value = r#""C:\Program Files\Other\browser.exe" %1"#.to_owned();
+        hkcu.create_subkey(foreign_cmd)
+            .unwrap()
+            .0
+            .set_value("", &foreign_value)
+            .unwrap();
+
+        let repaired = win::repair_self_registration(install_dir, launcher);
+
+        let expected = format!("\"{}\" -- \"%1\"", launcher.display());
+        let got: String = hkcu.open_subkey(&ours_cmd).unwrap().get_value("").unwrap();
+        assert_eq!(
+            got, expected,
+            "a ProgId inside the install tree must be rerouted even when it is \
+             not the UserChoice selection"
+        );
+        let got_app: String = hkcu.open_subkey(&app_cmd).unwrap().get_value("").unwrap();
+        assert_eq!(
+            got_app, expected,
+            "Applications\\<exe> handlers must be swept too"
+        );
+        let got_foreign: String = hkcu
+            .open_subkey(foreign_cmd)
+            .unwrap()
+            .get_value("")
+            .unwrap();
+        assert_eq!(
+            got_foreign, foreign_value,
+            "a command pointing outside the install tree must never be touched"
+        );
+        assert!(repaired >= 2, "both in-tree commands must be counted");
+
+        hkcu.delete_subkey_all(ours).unwrap();
+        hkcu.delete_subkey_all(app).unwrap();
+        hkcu.delete_subkey_all("Software\\Classes\\NomadTestSweepHTM.foreign")
+            .unwrap();
+    }
+
+    /// An empty root must match nothing. Otherwise a caller that derives
+    /// `install_dir` from a bare exe name — whose parent is `""` — would turn
+    /// the sweep into "rewrite every handler command in `HKCU`".
+    #[test]
+    fn path_is_under_rejects_an_empty_root() {
+        assert!(!path_is_under(
+            Path::new(""),
+            Path::new(r"C:\Program Files\Other\browser.exe")
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn repair_self_registration_refuses_an_empty_install_dir() {
+        assert_eq!(
+            win::repair_self_registration(Path::new(""), Path::new(r"C:\x\Nomad.exe")),
+            0
+        );
     }
 
     #[test]

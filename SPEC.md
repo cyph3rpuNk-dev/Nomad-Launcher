@@ -191,7 +191,7 @@ language = "en-US"           # passed as --lang to browsers that accept it
 extra_args = []              # additional command-line arguments
 
 [hardening]
-enabled = true               # false = launch with no privacy hardening applied
+enabled = true               # false = launch with no privacy hardening applied (safe to toggle; profile storage is unaffected)
 clear_data_on_exit = false   # true = wipe Chromium cookies/sessions/history on exit (Chromium-only; breaks "stay signed in")
 scrub_prefetch = false       # true = delete Windows Prefetch entries on exit (requires UAC prompt for non-admin accounts)
 ```
@@ -235,7 +235,13 @@ enum Hardening {
 }
 ```
 
-Hardening runs on every launch (after extraction, and on launches where no update occurred), so a user-edited install is re-seeded each time. It is on by default and controlled by `[hardening] enabled` in `nomad.toml` (§4); when disabled, no flags are added and no files are written.
+Hardening runs on every launch (after extraction, and on launches where no update occurred), so a user-edited install is re-seeded each time. It is on by default and controlled by `[hardening] enabled` in `nomad.toml` (§4).
+
+**When disabled, the toggle must *withdraw* hardening, not merely stop applying it.** The two families differ because their hardening lives in different places:
+
+- **Chromium** hardening is launch flags, which simply stop being passed. The profile seeds (`Local State`, `Default/Preferences`) stay, because they were merged into the browser's own stores with user-wins semantics and cannot be cleanly un-merged; what stops is the re-enforcement of `LOCKED_SCALAR_PATHS`, which is the most that can be withdrawn. The profile-storage switches in `CHROMIUM_PORTABILITY_FLAGS` are unaffected either way — they are not hardening (see below).
+- **Gecko** hardening is files that persist between launches, so `remove_gecko_hardening` withdraws them: the Nomad-managed `user.js` fence (content outside the markers is preserved) and, for browsers that declare one, the autoconfig pair `defaults/pref/autoconfig.js` + `nomad.cfg`. Skipping the write alone left the previous fence and the locked `nomad.cfg` in force — a user who turned the setting off to unbreak a site saw no change at all, and `lockPref` values cannot be overridden from `about:config`. LibreWolf and Mullvad declare `autoconfig: None` and ship their own pair, which Nomad never writes and therefore never removes.
+- `distribution/policies.json` is deliberately **kept** when hardening is disabled. Nothing in the curated payload breaks a site (telemetry, updates, Pocket, first-run pages), so removing it does not serve the reason people turn hardening off; it carries the injected uBO `ExtensionSettings` entry, so deleting it would uninstall the user's ad blocker; and Nomad overwrites the vendor's own file on browsers that ship one, so the original could not be restored.
 
 ### Chromium-family (ungoogled-chromium, Helium) — launch flags + state seed
 
@@ -247,9 +253,16 @@ Chromium hardening uses three surfaces with distinct purposes:
 
 **First-run clobber (why surface 3 also rides in `initial_preferences`).** Chromium's first-run pipeline *regenerates* `Default/Preferences` from the `initial_preferences` template next to `chrome.exe`, discarding whatever Nomad wrote to `Default/Preferences` beforehand. So on a brand-new profile the surface-3 seed alone is inactive for the entire first session and only "heals" on the second launch (when `--no-first-run` is set and Chromium loads Nomad's seeded file normally). To make the hardening active on the first run, `prepare_launch` merges `preferences.json` into the `initial_preferences` payload via `hardening::build_initial_preferences()` — the one seed path Chromium honours on first profile creation, the same path that carries the MAC-protected `extensions.ui.developer_mode`. `preferences.json` remains the single source of truth (surface 3 still maintains established profiles); `Local State` is unaffected because Chromium merges that store rather than regenerating it. Verified end-to-end against ungoogled-chromium and guarded by `merged_initial_preferences_carry_developer_mode_and_profile_hardening`.
 
+**Profile-storage switches are not hardening and are never gated on `[hardening] enabled`.** `--disable-machine-id`, `--disable-encryption`, and `--disable-features=DeviceBoundSessions` live in `CHROMIUM_PORTABILITY_FLAGS` (`browsers/mod.rs`) and are applied by `launch_command`, beside `--user-data-dir`, on every launch. They decide *how the profile is stored*, not how private it is, and toggling them reformats an existing profile:
+
+- The host machine ID seeds the `Secure Preferences` MACs that protect tracked preferences, `extensions.settings` among them. Change the seed and every MAC fails validation, so Chromium's tracked-preference enforcement clears the protected values, the extension registry comes up empty, and `ExtensionGarbageCollector` deletes the now-unreferenced directories under `Default\Extensions`.
+- The encryption switch decides whether cookies and auth tokens are DPAPI-sealed to the host OS user. Data written in one mode cannot be decrypted in the other, and Chromium drops rows it cannot read.
+- `DeviceBoundSessions` (Chrome 146+) binds sessions to the host TPM.
+
+Gating these on the config toggle is what made `[hardening] enabled = false` → `true` wipe a user's extensions and sign-ins (#38). Keep them in `launch_command`, which takes no config, rather than in `build_launch_args`, which exists to interpret config. When hardening *is* enabled its `--disable-features=` bundle is a superset and wins by position (Chromium honours only the last occurrence); guarded by `hardening_disable_features_bundle_wins_over_the_portability_one`.
+
 The command-line set is the **safe subset** of ungoogled-chromium's documented switches:
 
-- **Portability (Windows-mandatory):** `--disable-machine-id`, `--disable-encryption`.
 - **Stock Chromium hygiene:** `--disable-sync`, `--disable-background-networking`, `--disable-breakpad`, `--disable-component-update`, `--disable-features=JumpList`, `--no-default-browser-check`, `--disable-top-sites`.
 - **Anti-tracking / fingerprinting:** `--disable-search-engine-collection`, `--fingerprinting-canvas-image-data-noise`, `--fingerprinting-canvas-measuretext-noise`, `--fingerprinting-client-rects-noise`, `--force-punycode-hostnames`.
 - **Network / TLS privacy:** `--no-pings`, `--disable-grease-tls`, `--http-accept-header=…` (Tor Browser's value, pairs with `--disable-grease-tls`), `--webrtc-ip-handling-policy=default_public_interface_only`.
@@ -455,7 +468,12 @@ Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are 
 
 Browsers can register *themselves* as URL/HTML handlers (the "Make default" button in their own settings). For a Nomad-managed install that registration points straight at the browser exe inside the portable tree (e.g. `"...\Browser\chrome.exe" --single-argument %1`), bypassing the launcher entirely: the browser then starts with its default host-profile location (`%LOCALAPPDATA%`) instead of the portable `Data` dir. Every clicked link opens a second, empty-profile instance — and the trace scrub deletes that host profile on exit, which reads as "the browser deleted my logins".
 
-On every launch, `registry::repair_self_registration` therefore inspects the `HKCU` `UserChoice` ProgIds for `http`/`https`/`ftp` and `.htm`/`.html`/`.shtml`/`.xhtml`, plus `HKCU\Software\Clients\StartMenuInternet` clients, and rewrites any `shell\open\command` whose executable lives **strictly inside this launcher's `install_dir`** to route through the launcher (`"<launcher>" -- "%1"`). This is the one registry write permitted outside `--register-default`; it is `HKCU`-only, touches only commands that already point into Nomad's own install tree (never other browsers, other Nomad launchers, or system installs), and repairs state the browser itself wrote about Nomad's files. Combined with the launcher's stable `--user-data-dir`/`--profile`, a clicked URL reaches the already-running portable instance as a new tab (Chromium process singleton; Gecko per-profile remoting — which is also why Gecko launch commands must **not** pass `--no-remote`).
+`registry::repair_self_registration` therefore sweeps **every** ProgId under `HKCU\Software\Classes` (including the per-exe `Applications\<exe>` handlers) plus the `HKCU\Software\Clients\StartMenuInternet` clients, and rewrites any `shell\open\command` whose executable lives **strictly inside this launcher's `install_dir`** to route through the launcher (`"<launcher>" -- "%1"`). This is the one registry write permitted outside `--register-default`; it is `HKCU`-only, touches only commands that already point into Nomad's own install tree (never other browsers, other Nomad launchers, or system installs), and repairs state the browser itself wrote about Nomad's files. Combined with the launcher's stable `--user-data-dir`/`--profile`, a clicked URL reaches the already-running portable instance as a new tab (Chromium process singleton; Gecko per-profile remoting — which is also why Gecko launch commands must **not** pass `--no-remote`).
+
+Two properties of the sweep are load-bearing:
+
+- **It is not restricted to the ProgIds currently selected via `UserChoice`.** A third-party redirector (Winhance's `OpenWebSearch` stub, MSEdgeRedirect, …) commonly owns the `http`/`https` `UserChoice` slot and dispatches onward to the browser's own ProgId — so the command that actually launches the browser is frequently not the selected one. Scanning only `UserChoice` left those commands pointing straight at the browser exe. Safety comes entirely from the `install_dir` containment check, not from the narrowness of the candidate set; an empty `install_dir` is refused outright so containment can never degenerate into "every path".
+- **It runs after browser exit as well as before launch.** The user clicks "Make default" *inside* the browser, mid-session, when no launcher is running to notice. The launch-time pass alone leaves every clicked link misrouted until the next launch, so the detached cleanup watcher re-runs the repair once the browser tree is down, deriving `install_dir` from the launched browser executable's own path.
 
 ---
 
@@ -517,6 +535,7 @@ On every launch, `registry::repair_self_registration` therefore inspects the `HK
 - Downloading when `auto_download = false` (the window waits on the "Update" button).
 
 ### Never do
+- Delete a host directory that holds a **browser installation the user owns**. The brand dirs the trace scrub clears (`%LOCALAPPDATA%\Chromium`, `%LOCALAPPDATA%\imput\Helium`, the Gecko brand dirs) are also where a user-level install of the same browser lives, and the tree delete does not stop at profile data — it takes the binaries too, leaving Start Menu shortcuts, `App Paths`, and file associations pointing at nothing. `remove_runtime_dir_unless_installed` detects an installation (Chromium: `<dir>\Application\<exe>`; Gecko: the brand exe directly in `<dir>`) and skips the directory entirely, logging a `WARN` that names the remedy. The install's profile is left with it: it is the user's real profile and cannot be told apart from leakage. Accepting an unscrubbed privacy trace is the correct trade against destroying software the user installed.
 - Write to `HKLM` (requires elevation and breaks the portability promise).
 - Execute a downloaded binary that has not passed hash (and, where applicable, GPG or Authenticode) verification.
 - **Bitwarden:** use the `-x64.appx` (inert when unpacked), build it from source, or run any NSIS/web installer — only the official portable `.exe` is wrapped. Do not relocate the vault (`App\Data`) outside `install_dir` *without* keeping the `preserve_state_across_update` copy, and do not drop the Authenticode signer check.
