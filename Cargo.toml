@@ -6,7 +6,7 @@ members = ["core", "launchers/*"]
 version = "1.0.7"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-rust-version = "1.77"
+rust-version = "1.88"
 
 [workspace.dependencies]
 nomad-core = { path = "core" }
