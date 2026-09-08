@@ -77,7 +77,7 @@ mod imp {
                     std::ptr::null_mut(),
                     CLSCTX_INPROC_SERVER,
                     &IID_ITASKBAR_LIST3,
-                    &mut ptr,
+                    &raw mut ptr,
                 )
             };
             if hr != 0 || ptr.is_null() {
@@ -165,7 +165,7 @@ pub fn acquire_hwnd() -> Option<Hwnd> {
             let state = unsafe { &mut *(lparam as *mut State) };
             let mut pid: u32 = 0;
             // SAFETY: hwnd is a valid HWND supplied by EnumWindows.
-            unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+            unsafe { GetWindowThreadProcessId(hwnd, &raw mut pid) };
             // SAFETY: hwnd is a valid HWND supplied by EnumWindows.
             if pid == state.pid && unsafe { IsWindowVisible(hwnd) } != 0 {
                 state.hwnd = hwnd;

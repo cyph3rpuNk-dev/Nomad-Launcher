@@ -693,6 +693,7 @@ mod tests {
     // Repair round-trip against a synthetic HKCU key (Windows-only: registry).
     #[cfg(windows)]
     #[test]
+    #[ignore = "writes HKCU; run manually only in an isolated test account"]
     fn repair_command_key_rewrites_only_commands_inside_install_dir() {
         use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
@@ -752,6 +753,7 @@ mod tests {
     /// second instance.
     #[cfg(windows)]
     #[test]
+    #[ignore = "writes HKCU; run manually only in an isolated test account"]
     fn repair_rewrites_progids_that_are_not_the_userchoice_selection() {
         use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
@@ -859,6 +861,7 @@ mod tests {
     // Only runs on Windows because the registry is Windows-only.
     #[cfg(windows)]
     #[test]
+    #[ignore = "writes HKCU; run manually only in an isolated test account"]
     fn register_writes_sidecar_and_unregister_removes_it() {
         let dir = tempfile::tempdir().unwrap();
         let sidecar = dir.path().join("nomad.reg-state.json");
