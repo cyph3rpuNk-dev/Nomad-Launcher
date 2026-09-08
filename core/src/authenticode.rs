@@ -185,17 +185,17 @@ mod imp {
             data.dwUIChoice = WTD_UI_NONE;
             data.fdwRevocationChecks = revocation_checks;
             data.dwUnionChoice = WTD_CHOICE_FILE;
-            data.Anonymous.pFile = &mut file_info;
+            data.Anonymous.pFile = &raw mut file_info;
             data.dwStateAction = WTD_STATEACTION_VERIFY;
 
             let mut action: GUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
             let data_ptr: *mut core::ffi::c_void = ptr::addr_of_mut!(data).cast();
 
-            let status = WinVerifyTrust(ptr::null_mut(), &mut action, data_ptr);
+            let status = WinVerifyTrust(ptr::null_mut(), &raw mut action, data_ptr);
 
             // Release the state data regardless of the verify result.
             data.dwStateAction = WTD_STATEACTION_CLOSE;
-            WinVerifyTrust(ptr::null_mut(), &mut action, data_ptr);
+            WinVerifyTrust(ptr::null_mut(), &raw mut action, data_ptr);
 
             status
         }
@@ -227,8 +227,8 @@ mod imp {
                 ptr::null_mut(),
                 ptr::null_mut(),
                 ptr::null_mut(),
-                &mut h_store,
-                &mut h_msg,
+                &raw mut h_store,
+                &raw mut h_msg,
                 ptr::null_mut(),
             )
         };
@@ -244,7 +244,13 @@ mod imp {
             let mut cb: u32 = 0;
             // SAFETY: first call with a null buffer queries the required size.
             let sized = unsafe {
-                CryptMsgGetParam(h_msg, CMSG_SIGNER_INFO_PARAM, 0, ptr::null_mut(), &mut cb)
+                CryptMsgGetParam(
+                    h_msg,
+                    CMSG_SIGNER_INFO_PARAM,
+                    0,
+                    ptr::null_mut(),
+                    &raw mut cb,
+                )
             };
             if sized == 0 || cb == 0 {
                 return Err(AuthenticodeError::Signer(
@@ -259,7 +265,7 @@ mod imp {
                     CMSG_SIGNER_INFO_PARAM,
                     0,
                     buf.as_mut_ptr().cast(),
-                    &mut cb,
+                    &raw mut cb,
                 )
             };
             if got == 0 {
