@@ -1961,8 +1961,10 @@ fn lnk_target_path(data: &[u8]) -> Option<std::path::PathBuf> {
         let uc_offset = u32::from_le_bytes(li[28..32].try_into().ok()?) as usize;
         if uc_offset > 0 && uc_offset + 2 <= li_size {
             let chars: Vec<u16> = li[uc_offset..]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|chunk| u16::from_le_bytes(*chunk))
                 .take_while(|&c| c != 0)
                 .collect();
             if !chars.is_empty() {
