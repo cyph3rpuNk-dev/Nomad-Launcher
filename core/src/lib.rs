@@ -17,6 +17,7 @@ pub mod extract;
 pub mod gpg;
 pub mod hardening;
 pub mod install;
+mod instance;
 pub mod registry;
 pub mod taskbar;
 pub mod ui;
@@ -119,7 +120,7 @@ where
         return handle_register_flag(make);
     }
     if own_args.iter().any(|a| a == "--unregister-default") {
-        return handle_unregister_flag();
+        return handle_unregister_flag(make);
     }
     if let Some(cleanup) = parse_cleanup_pid(own_args) {
         return handle_cleanup_flag(cleanup);
@@ -183,6 +184,17 @@ where
             return ExitCode::FAILURE;
         }
     };
+    let Some(base) = exe_path.parent() else {
+        show_msgbox(
+            "Registration failed: could not locate the launcher directory",
+            true,
+        );
+        return ExitCode::FAILURE;
+    };
+    if let Err(error) = instance::ensure(base, browser.id(), true) {
+        show_msgbox(&format!("Registration failed: {error}"), true);
+        return ExitCode::FAILURE;
+    }
     let sidecar = exe_path.parent().map_or_else(
         || std::path::PathBuf::from("nomad.reg-state.json"),
         |dir| config::nomad_subdir(dir).join("nomad.reg-state.json"),
@@ -209,7 +221,12 @@ where
 
 /// Removes the registration created by `--register-default` and shows the
 /// result in a message box.
-fn handle_unregister_flag() -> ExitCode {
+fn handle_unregister_flag<B, F>(make: F) -> ExitCode
+where
+    B: BrowserFamily + 'static,
+    F: FnOnce(Arch) -> B,
+{
+    let browser = make(Arch::X64);
     let exe_path = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
@@ -217,6 +234,17 @@ fn handle_unregister_flag() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let Some(base) = exe_path.parent() else {
+        show_msgbox(
+            "Unregistration failed: could not locate the launcher directory",
+            true,
+        );
+        return ExitCode::FAILURE;
+    };
+    if let Err(error) = instance::ensure(base, browser.id(), false) {
+        show_msgbox(&format!("Unregistration failed: {error}"), true);
+        return ExitCode::FAILURE;
+    }
     let sidecar = exe_path.parent().map_or_else(
         || std::path::PathBuf::from("nomad.reg-state.json"),
         |dir| config::nomad_subdir(dir).join("nomad.reg-state.json"),
@@ -313,7 +341,9 @@ where
     } else {
         Arch::default()
     };
+    let protocol_invocation = !forwarded_args.is_empty();
     let browser = make(arch);
+    instance::ensure(base, browser.id(), !protocol_invocation)?;
     let config = Config::load_or_init(base, browser.default_config())?;
     let browser = Arc::new(browser);
     // Reject absolute paths and '..' components: `base.join(abs)` silently
@@ -335,10 +365,24 @@ where
         .into());
     }
     let install_dir = base.join(&config.browser.install_dir);
-    let opts = UpdateOptions {
-        check_on_launch: config.update.check_on_launch,
-        auto_download: config.update.auto_download,
-    };
+    if protocol_invocation && browser.installed_version(&install_dir).is_none() {
+        return Err(BrowserError::ProtocolInvocation(format!(
+            "{} is not installed in this portable folder; run the launcher directly once before opening links through it",
+            browser.display_name()
+        ))
+        .into());
+    }
+    if protocol_invocation {
+        tracing::info!(
+            browser = browser.id(),
+            "protocol invocation: launching existing install without update or provisioning"
+        );
+    }
+    let opts = effective_update_options(
+        config.update.check_on_launch,
+        config.update.auto_download,
+        protocol_invocation,
+    );
     let mut launch_args = build_launch_args(&*browser, &config);
     // The forwarded tail (everything after `--` on our own command line)
     // goes last, after every switch: it carries positional arguments such as
@@ -361,6 +405,20 @@ where
         );
     })
     .map_err(|e| RunError::Ui(e.to_string()))
+}
+
+/// Derives update permissions for a launch origin. The OS protocol handler is
+/// deliberately launch-only: a clicked link must never become an implicit
+/// software installation or update trigger.
+fn effective_update_options(
+    check_on_launch: bool,
+    auto_download: bool,
+    protocol_invocation: bool,
+) -> UpdateOptions {
+    UpdateOptions {
+        check_on_launch: check_on_launch && !protocol_invocation,
+        auto_download: auto_download && !protocol_invocation,
+    }
 }
 
 /// Builds the browser's launch arguments: the privacy-hardening flags
@@ -723,6 +781,7 @@ async fn update_check_phase<B: BrowserFamily>(
         // permanently unverifiable after a launcher upgrade.
         if cached.is_fresh() && cached.is_url_plausible() && cached.has_integrity_material() {
             let latest = cached.into_version_info();
+            browser.validate_update(&latest)?;
             tracing::debug!(
                 browser = browser.id(),
                 version = %latest.browser_version,
@@ -749,6 +808,7 @@ async fn update_check_phase<B: BrowserFamily>(
 
     let latest = match browser.fetch_latest_version().await {
         Ok(info) => {
+            browser.validate_update(&info)?;
             version_cache::VersionCache::from_version_info(&info)
                 .with_preserved_ubo_version(&cache_path)
                 .save(&cache_path);
@@ -864,6 +924,7 @@ async fn download_and_install_phase<B: BrowserFamily>(
         install_dir,
         latest,
         hardening.enabled,
+        branding,
         progress_tx,
         |step| {
             let (lines, progress) = match step {
@@ -1181,7 +1242,7 @@ fn apply_branding(
                 StatusLines::new("Applying branding\u{2026}"),
                 ProgressState::Indeterminate,
             );
-            branding::ensure_branding(install_dir, br);
+            let _ = branding::ensure_branding(install_dir, br);
         }
     }
 }
@@ -1725,7 +1786,7 @@ fn processes_matching(exe: &str) -> Vec<u32> {
             {
                 entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
             }
-            if Process32FirstW(snapshot, &mut entry) != 0 {
+            if Process32FirstW(snapshot, &raw mut entry) != 0 {
                 loop {
                     let len = entry
                         .szExeFile
@@ -1740,7 +1801,7 @@ fn processes_matching(exe: &str) -> Vec<u32> {
                     {
                         pids.push(entry.th32ProcessID);
                     }
-                    if Process32NextW(snapshot, &mut entry) == 0 {
+                    if Process32NextW(snapshot, &raw mut entry) == 0 {
                         break;
                     }
                 }
@@ -1780,7 +1841,7 @@ fn image_path_matches(pid: u32, target_path: &str) -> bool {
         let mut buf = vec![0u16; 32768];
         #[allow(clippy::cast_possible_truncation)] // 32768 fits in u32
         let mut len = buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len);
+        let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &raw mut len);
         CloseHandle(handle);
         if ok == 0 {
             return false;
@@ -2136,7 +2197,7 @@ fn kill_all_processes_named(exe_name: &str) {
                 entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
             }
             let target = exe_name.to_ascii_lowercase();
-            if Process32FirstW(snapshot, &mut entry) != 0 {
+            if Process32FirstW(snapshot, &raw mut entry) != 0 {
                 loop {
                     let len = entry
                         .szExeFile
@@ -2153,7 +2214,7 @@ fn kill_all_processes_named(exe_name: &str) {
                             CloseHandle(h);
                         }
                     }
-                    if Process32NextW(snapshot, &mut entry) == 0 {
+                    if Process32NextW(snapshot, &raw mut entry) == 0 {
                         break;
                     }
                 }
@@ -3722,7 +3783,26 @@ mod tests {
         ];
         let (own, forwarded) = split_forwarded_args(&tricky);
         assert!(!own.iter().any(|a| a == "--register-default"));
+
         assert_eq!(forwarded, &["--register-default".to_owned()][..]);
+    }
+
+    #[test]
+    fn protocol_invocations_cannot_check_or_download_updates() {
+        let direct = effective_update_options(true, true, false);
+        assert!(direct.check_on_launch);
+        assert!(direct.auto_download);
+
+        let protocol = effective_update_options(true, true, true);
+        assert!(!protocol.check_on_launch);
+        assert!(!protocol.auto_download);
+    }
+
+    #[test]
+    fn protocol_invocation_cannot_reenable_download_independently() {
+        let protocol = effective_update_options(false, true, true);
+        assert!(!protocol.check_on_launch);
+        assert!(!protocol.auto_download);
     }
 
     #[test]

@@ -105,10 +105,14 @@ pub fn is_pending(_install_dir: &Path, _branding: &Branding) -> bool {
 /// browser still launches, just with its stock icon. The marker (recording the
 /// new fingerprint) is written only when every target file is patched
 /// successfully, so a partial failure is retried on the next launch.
+/// The boolean result lets staged-update callers treat an incomplete overlay
+/// as fatal before the atomic swap, while launch-time callers may continue
+/// with stock branding and retry on the next run.
 #[cfg(windows)]
-pub fn ensure_branding(install_dir: &Path, branding: &Branding) {
+#[must_use]
+pub fn ensure_branding(install_dir: &Path, branding: &Branding) -> bool {
     if !is_pending(install_dir, branding) {
-        return;
+        return true;
     }
 
     let mut all_ok = true;
@@ -140,19 +144,24 @@ pub fn ensure_branding(install_dir: &Path, branding: &Branding) {
         all_ok = false;
     }
 
-    if all_ok {
-        let marker = install_dir.join(MARKER);
-        let fingerprint = branding_fingerprint(install_dir, branding);
-        if let Err(e) = std::fs::write(&marker, fingerprint) {
-            tracing::warn!(error = %e, "could not write branding marker");
-        }
+    if !all_ok {
+        return false;
     }
+    let marker = install_dir.join(MARKER);
+    let fingerprint = branding_fingerprint(install_dir, branding);
+    if let Err(e) = std::fs::write(&marker, fingerprint) {
+        tracing::warn!(error = %e, "could not write branding marker");
+        return false;
+    }
+    true
 }
 
 /// PE icon branding is a no-op on non-Windows targets.
 #[cfg(not(windows))]
-pub fn ensure_branding(_install_dir: &Path, _branding: &Branding) {
+#[must_use]
+pub fn ensure_branding(_install_dir: &Path, _branding: &Branding) -> bool {
     tracing::debug!("PE icon branding is supported only on Windows");
+    true
 }
 
 /// Computes a fingerprint of the current branding state: a SHA-256 digest over
@@ -503,7 +512,8 @@ fn png_dims_match(existing: &[u8], replacement: &[u8]) -> bool {
 /// clobbering whatever now lives at that ID. Non-image replacements (only used
 /// by the low-level offset tests) are written unconditionally.
 #[cfg(any(windows, test))]
-fn apply_resource_patches(resources: &mut [(u16, Vec<u8>)], patches: &[(u16, &[u8])]) {
+fn apply_resource_patches(resources: &mut [(u16, Vec<u8>)], patches: &[(u16, &[u8])]) -> bool {
+    let mut complete = true;
     for &(target_id, replacement) in patches {
         let Some((_, data)) = resources.iter_mut().find(|(id, _)| *id == target_id) else {
             tracing::warn!(
@@ -511,6 +521,7 @@ fn apply_resource_patches(resources: &mut [(u16, Vec<u8>)], patches: &[(u16, &[u
                 "PAK resource id not found (Chromium may have renumbered grit IDs); \
                  skipping logo patch"
             );
+            complete = false;
             continue;
         };
         if png_dimensions(replacement).is_some() && !png_dims_match(data.as_slice(), replacement) {
@@ -519,10 +530,12 @@ fn apply_resource_patches(resources: &mut [(u16, Vec<u8>)], patches: &[(u16, &[u
                 "PAK resource is not the expected logo image (Chromium may have renumbered \
                  grit IDs); skipping to avoid clobbering the wrong resource"
             );
+            complete = false;
             continue;
         }
         *data = replacement.to_vec();
     }
+    complete
 }
 
 /// Parses a version-5 Chromium PAK, replaces resources whose IDs appear in
@@ -543,7 +556,7 @@ fn apply_resource_patches(resources: &mut [(u16, Vec<u8>)], patches: &[(u16, &[u
 /// across Chromium versions: rather than silently overwriting whatever now lives
 /// at the ID, the logo patch is dropped and the drift is logged.
 #[cfg(any(windows, test))]
-fn rebuild_pak(bytes: &[u8], patches: &[(u16, &[u8])]) -> Result<Vec<u8>, PakError> {
+fn rebuild_pak(bytes: &[u8], patches: &[(u16, &[u8])]) -> Result<(Vec<u8>, bool), PakError> {
     if bytes.len() < 12 {
         return Err(PakError::TooShort);
     }
@@ -602,7 +615,7 @@ fn rebuild_pak(bytes: &[u8], patches: &[(u16, &[u8])]) -> Result<Vec<u8>, PakErr
         resources.push((id, bytes[off..next].to_vec()));
     }
 
-    apply_resource_patches(&mut resources, patches);
+    let complete = apply_resource_patches(&mut resources, patches);
 
     // Compute new offsets.
     // Layout: header(12) + entries(n×6) + sentinel(2) + end_offset(4) + aliases + data
@@ -637,7 +650,7 @@ fn rebuild_pak(bytes: &[u8], patches: &[(u16, &[u8])]) -> Result<Vec<u8>, PakErr
     for (_, data) in &resources {
         out.extend_from_slice(data);
     }
-    Ok(out)
+    Ok((out, complete))
 }
 
 /// Applies all `pak_patches` whose `pak_file` lives under `install_dir`.
@@ -671,7 +684,12 @@ fn apply_pak_patches(install_dir: &Path, patches: &[PakPatch]) -> bool {
             }
         };
         match rebuild_pak(&data, &file_patches) {
-            Ok(new_pak) => {
+            Ok((new_pak, complete)) => {
+                if !complete {
+                    // A success marker must mean every required resource was
+                    // patched. Leave it absent so a compatible launcher can retry.
+                    all_ok = false;
+                }
                 // Atomic write: temp file beside the target, then rename.
                 // A plain overwrite truncates first; power-loss mid-write on
                 // USB leaves a corrupt PAK that never self-heals (the branding
@@ -825,7 +843,9 @@ mod tests {
     fn pak_patch_replaces_target_resource() {
         let original = make_pak_v5(&[(100, b"hello"), (200, b"world"), (300, b"unchanged")]);
         let replacement = b"NEW_DATA";
-        let patched = rebuild_pak(&original, &[(200, replacement)]).expect("rebuild must succeed");
+        let (patched, complete) =
+            rebuild_pak(&original, &[(200, replacement)]).expect("rebuild must succeed");
+        assert!(complete);
         let resources = parse_pak_resources(&patched);
         assert_eq!(resources[0], (100, b"hello".to_vec()));
         assert_eq!(resources[1], (200, replacement.to_vec()));
@@ -836,7 +856,9 @@ mod tests {
     fn pak_patch_updates_offsets_consistently() {
         let original = make_pak_v5(&[(10, b"aa"), (20, b"bbb"), (30, b"cccc")]);
         // Replace id=20 with something larger.
-        let patched = rebuild_pak(&original, &[(20, b"XXXXXXXXXX")]).expect("rebuild must succeed");
+        let (patched, complete) =
+            rebuild_pak(&original, &[(20, b"XXXXXXXXXX")]).expect("rebuild must succeed");
+        assert!(complete);
         // All offsets in the rebuilt PAK must be self-consistent.
         let rc = usize::from(u16::from_le_bytes([patched[8], patched[9]]));
         let end_off_pos = 12 + rc * 6 + 2;
@@ -853,10 +875,15 @@ mod tests {
     }
 
     #[test]
-    fn pak_patch_silently_skips_unknown_id() {
+    fn pak_patch_reports_unknown_id_as_incomplete() {
         let original = make_pak_v5(&[(10, b"data")]);
         // Patch targets an ID that doesn't exist — should be a no-op.
-        let patched = rebuild_pak(&original, &[(99, b"never")]).expect("rebuild must succeed");
+        let (patched, complete) =
+            rebuild_pak(&original, &[(99, b"never")]).expect("rebuild must parse");
+        assert!(
+            !complete,
+            "a missing resource must prevent the success marker"
+        );
         let resources = parse_pak_resources(&patched);
         assert_eq!(resources[0], (10, b"data".to_vec()));
     }
@@ -894,11 +921,12 @@ mod tests {
         // Patch both IDs with our 16×16 logo. id=100 matches dimensions → replaced;
         // id=200 mismatches → skipped by the guard, leaving the resource intact.
         let new_logo = fake_png(16, 16, b"NEWLOGO");
-        let patched = rebuild_pak(
+        let (patched, complete) = rebuild_pak(
             &original,
             &[(100, new_logo.as_slice()), (200, new_logo.as_slice())],
         )
         .expect("rebuild must succeed");
+        assert!(!complete, "a mismatch must prevent the success marker");
         let res = parse_pak_resources(&patched);
         assert_eq!(
             &res.iter().find(|(id, _)| *id == 100).unwrap().1,
@@ -948,5 +976,22 @@ mod tests {
         assert_eq!(grp.len(), 6 + 2 * 14);
         assert_eq!(u16::from_le_bytes([grp[18], grp[19]]), 5100);
         assert_eq!(u16::from_le_bytes([grp[32], grp[33]]), 5101);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn missing_required_target_never_creates_success_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let branding = Branding {
+            targets: &["missing.exe"],
+            icons: &[],
+            pak_patches: &[],
+        };
+
+        assert!(!super::ensure_branding(dir.path(), &branding));
+        assert!(
+            !dir.path().join(super::MARKER).exists(),
+            "an incomplete overlay must remain retryable"
+        );
     }
 }

@@ -333,6 +333,15 @@ pub enum BrowserError {
     /// Archive extraction failed.
     #[error("extraction failed: {0}")]
     Extract(String),
+    /// A launcher does not own the portable folder it was asked to use.
+    #[error("portable-folder ownership error: {0}")]
+    Ownership(String),
+    /// An OS protocol invocation would require installing software.
+    #[error("protocol launch refused: {0}")]
+    ProtocolInvocation(String),
+    /// A resolved upstream build has not been certified for this launcher.
+    #[error("update compatibility check failed: {0}")]
+    Compatibility(String),
 }
 
 /// Result alias for [`BrowserFamily`] operations.
@@ -376,6 +385,21 @@ pub trait BrowserFamily: Send + Sync {
     /// Returns [`BrowserError::Network`] if the request fails, or
     /// [`BrowserError::Parse`] if the response cannot be understood.
     fn fetch_latest_version(&self) -> impl Future<Output = Result<VersionInfo>> + Send;
+
+    /// Validates that this launcher understands the resolved release layout.
+    ///
+    /// Verification proves package authenticity, but not that extraction,
+    /// executable discovery, policy overlays, or resource patches still match
+    /// a changed upstream build. Implementors with version-sensitive behavior
+    /// override this hook and fail closed until the new release is certified.
+    ///
+    /// # Errors
+    /// Returns [`BrowserError::Compatibility`] when the release must not be
+    /// installed by this launcher version.
+    fn validate_update(&self, info: &VersionInfo) -> Result<()> {
+        let _ = info;
+        Ok(())
+    }
 
     /// Downloads the package described by `info` to `dest`, reporting
     /// progress (`0.0..=1.0`) through `progress`.

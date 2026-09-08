@@ -14,6 +14,9 @@ Nomad Launcher is a set of single-file portable browser launchers for Windows. C
 
 The project is functionally complete and in daily use. It was inspired by [chrlauncher](https://github.com/henrypp/chrlauncher).
 
+The fail-closed update model, portable-folder ownership rule, and migration
+guidance are documented in [Update and instance safety](docs/UPDATE-SAFETY.md).
+
 ## Supported browsers
 
 | Launcher | Browser | Verification |
@@ -130,18 +133,33 @@ C:\Portables\Firefox\
 └── Nomad-Firefox.exe
 ```
 
+A portable folder is owned by exactly one launcher family. Do not place
+different Nomad launcher executables beside the same `Browser/`, `Data/`, and
+`Nomad/` directories. The ownership marker makes a mismatch fail visibly
+instead of letting, for example, Helium replace a Chromium bundle.
+
+When Windows invokes a registered Nomad browser to open a URL or file, the
+launcher uses the existing portable install and skips all software download and
+update work. The browser receives the URL with the same portable profile, so its
+normal single-instance behavior opens a tab in the existing window. Run the
+launcher directly when you want to install or update it.
+
 To reset to first-run state, delete `Nomad/`. To remove everything, delete the whole folder.
 
 ## Building from source
 
-Requires Rust 1.77+ on Windows 10/11.
+Requires Rust 1.88+ on Windows 10/11.
 
 ```powershell
+pwsh -NoProfile -File scripts/check.ps1  # canonical local/CI validation gate
 cargo build --workspace          # debug build
 .\dist.ps1                       # release build → target/release/Nomad-<browser>.exe
 cargo test --workspace           # test suite
 cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+The repository uses rolling stable for development and separately checks the
+declared Rust 1.88 minimum supported version in CI.
 
 `dist.ps1` also writes a `SHA256SUMS` manifest and, when `NOMAD_SIGNING_KEY` is set, a detached `SHA256SUMS.asc` signature.
 

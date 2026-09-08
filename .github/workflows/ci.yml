@@ -29,14 +29,8 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
-      - name: Format check
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Test
-        run: cargo test --workspace
+      - name: Canonical check
+        run: pwsh -NoProfile -File scripts/check.ps1 -SkipAudit
 
   audit:
     name: Dependency advisories
@@ -69,8 +63,18 @@ jobs:
         # nothing. No semver-compatible fix exists (zbus_xml 4.0 pins 0.30,
         # wayland-scanner pins 0.39; fixed in 0.41). Re-evaluate on the next
         # eframe upgrade.
-        run: >-
-          cargo audit
-          --ignore RUSTSEC-2023-0071
-          --ignore RUSTSEC-2026-0194
-          --ignore RUSTSEC-2026-0195
+        run: pwsh -NoProfile -File scripts/check.ps1 -AuditOnly
+
+  msrv:
+    name: Rust 1.88 compatibility
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: '1.88'
+      - name: Check workspace at MSRV
+        run: cargo +1.88 check --workspace --locked
