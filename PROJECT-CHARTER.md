@@ -5,7 +5,7 @@
 - Name: Nomad Launcher
 - Status: ACTIVE
 - Visibility: Public
-- License: MIT OR Apache-2.0
+- License: MIT
 
 ## Purpose
 
