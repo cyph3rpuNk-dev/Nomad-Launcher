@@ -20,7 +20,6 @@ are never modified beyond the documented privacy configuration. If you are a
 rights holder and object to any use of your mark or icon, please open an
 issue and it will be replaced promptly.
 
-Nomad's own code is dual-licensed MIT OR Apache-2.0 (see `LICENSE-MIT` and
-`LICENSE-APACHE`). Third-party license obligations for components bundled
-inside the binaries are covered in `THIRD-PARTY-NOTICES.txt`, shipped beside
-every release.
+Nomad's own code is licensed under MIT (see `LICENSE-MIT`). Third-party license
+obligations for components bundled inside the binaries are covered in
+`THIRD-PARTY-NOTICES.txt`, shipped beside every release.

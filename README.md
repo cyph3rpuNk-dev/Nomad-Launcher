@@ -7,13 +7,22 @@
   <a href="https://github.com/cyph3rpuNk-dev/Nomad-Launcher/releases"><img src="https://img.shields.io/github/downloads/cyph3rpuNk-dev/Nomad-Launcher/total" alt="Total downloads"></a>
   <a href="https://github.com/cyph3rpuNk-dev/Nomad-Launcher/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cyph3rpuNk-dev/Nomad-Launcher/ci.yml?branch=main&label=build" alt="CI status"></a>
   <a href="https://github.com/cyph3rpuNk-dev/Nomad-Launcher/issues"><img src="https://img.shields.io/github/issues/cyph3rpuNk-dev/Nomad-Launcher" alt="Open issues"></a>
-  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="License"></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
 </p>
 
-Nomad Launcher is a set of single-file portable browser launchers for Windows. Copy a `Nomad-<browser>.exe` to any folder you can write to (a USB stick, a network share, a local directory) and run it. The launcher downloads the browser, verifies the download against upstream signatures or hashes, applies a privacy-hardening profile, and starts it. Everything stays inside that one folder: there is no installer, no `HKLM` registry writes, no services, and nothing in `%APPDATA%`. After the browser exits, Nomad also cleans up the traces that Windows itself writes to the host. Some OS-level records are beyond its reach; the [Post-exit cleanup](#post-exit-cleanup) section lists both sides honestly.
+Nomad Launcher provides single-file Windows launchers that download, verify,
+configure, and start a browser from a portable directory.
 
-The project is functionally complete and in daily use. It was inspired by [chrlauncher](https://github.com/henrypp/chrlauncher).
+A direct launch downloads the selected browser from its official upstream
+source and verifies the package before extraction. The browser bundle, profile,
+and Nomad configuration are stored beside the launcher rather than installed
+into `Program Files`.
 
+Windows and browsers can still create host-level traces while running. Nomad
+performs best-effort cleanup after exit, but it is not an anti-forensics tool.
+See [Post-exit cleanup](#post-exit-cleanup) and [SECURITY.md](SECURITY.md).
+
+Nomad was inspired by [chrlauncher](https://github.com/henrypp/chrlauncher).
 The fail-closed update model, portable-folder ownership rule, and migration
 guidance are documented in [Update and instance safety](docs/UPDATE-SAFETY.md).
 
@@ -33,10 +42,22 @@ guidance are documented in [Update and instance safety](docs/UPDATE-SAFETY.md).
 
 ## Getting started
 
-1. Copy the `.exe` to any folder you have write access to.
-2. Run it.
+1. Download the launcher you want from the [latest release](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/releases/latest).
+2. [Verify the release](#verifying-a-release) before running it.
+3. Create a dedicated empty folder and copy that one launcher into it.
+4. Run the launcher directly.
 
-The first run creates a `Nomad/` subfolder with a default `nomad.toml`, then downloads and launches the browser. A small status window shows progress and closes once the browser is up. No admin rights are needed at any point.
+> **One browser family per folder:** never place Chromium, Helium, Floorp, or
+> another Nomad launcher beside the same `Browser/`, `Data/`, and `Nomad/`
+> directories. Nomad refuses a mismatched launcher instead of replacing the
+> existing browser or opening an incompatible profile.
+
+The first direct run creates `Nomad/instance.toml` and a default `nomad.toml`,
+then downloads and launches the browser. A small status window shows progress
+and closes once the browser is up.
+
+Normal operation does not require administrator rights. The optional
+`scrub_prefetch = true` setting requests elevation when cleaning Prefetch.
 
 <p align="center">
   <img src="docs/launcher.png" width="520" alt="Nomad Launcher downloading and updating Firefox">
@@ -72,7 +93,9 @@ reduce_system_info = true    # Chromium only: ReducedSystemInfo fingerprint hard
 
 ## Privacy hardening
 
-Nomad applies a "safe" hardening profile: the privacy measures that don't break everyday sites. Aggressive settings that do break sites are deliberately left out. If you'd rather configure the browser yourself, set `[hardening] enabled = false`.
+Nomad applies an opinionated privacy baseline intended for general browsing.
+Some defaults intentionally trade functionality for privacy; review the
+trade-offs below. To manage the browser yourself, set `[hardening] enabled = false`.
 
 Turning it off removes the privacy settings but not the portability ones. On Chromium the browser still starts on the portable profile with machine-ID binding, DPAPI encryption, and TPM session binding switched off, because those three decide how the profile is stored rather than how private it is. Changing them on an existing profile makes Chromium discard your extensions and sign you out of everything, so they are applied the same way whichever position the toggle is in. On Gecko, the `user.js` block and the locked preference file that Nomad wrote are removed, and anything you added yourself is left in place. `policies.json` stays, because nothing in it breaks a site and it is what installs uBlock Origin.
 
@@ -127,9 +150,11 @@ C:\Portables\Firefox\
 ├── Browser\              # browser install
 ├── Data\                 # browser profile
 ├── Nomad\
-│   ├── nomad.toml
+│   ├── instance.toml             # permanent browser-family ownership
+│   ├── nomad.toml                # user configuration
 │   ├── nomad.log
-│   └── nomad-version-cache.toml
+│   ├── nomad-version-cache.toml
+│   └── nomad.reg-state.json      # present after default registration
 └── Nomad-Firefox.exe
 ```
 
@@ -138,13 +163,13 @@ different Nomad launcher executables beside the same `Browser/`, `Data/`, and
 `Nomad/` directories. The ownership marker makes a mismatch fail visibly
 instead of letting, for example, Helium replace a Chromium bundle.
 
-When Windows invokes a registered Nomad browser to open a URL or file, the
-launcher uses the existing portable install and skips all software download and
-update work. The browser receives the URL with the same portable profile, so its
-normal single-instance behavior opens a tab in the existing window. Run the
-launcher directly when you want to install or update it.
+To reset generated settings, close the browser and delete only
+`Nomad/nomad.toml`; Nomad recreates it on the next direct launch. Do not delete
+or edit `Nomad/instance.toml` while keeping `Browser/` or `Data/`, because it is
+the guard that prevents another launcher family from claiming those paths.
 
-To reset to first-run state, delete `Nomad/`. To remove everything, delete the whole folder.
+For a completely fresh start, first run `--unregister-default` if registration
+was enabled, close the browser, and then delete the entire portable folder.
 
 ## Building from source
 
@@ -204,6 +229,13 @@ Nomad-Firefox.exe --unregister-default
 
 Writes to `HKCU` only, so there is no UAC prompt. State is tracked in `Nomad/nomad.reg-state.json`.
 
+When Windows invokes a registered Nomad browser for a URL or file, the launcher
+requires an existing browser installation and skips all browser and extension
+update work. It forwards the URL to the same executable and portable profile,
+allowing Chromium's normal single-instance handoff to open a tab in the existing
+window. Run the launcher directly when you want to install or update software.
+If the portable folder moves, register it again from its new path.
+
 Browsers can also register themselves. If you use the browser's own "make this my default" button, Windows records the browser executable rather than the launcher, and a clicked link then starts the browser on its default profile under `%LOCALAPPDATA%` instead of the portable one. That second copy has none of your extensions or sign-ins, and older versions then deleted its profile when the browser closed.
 
 To prevent that, each launch inspects the `HKCU` handler entries and rewrites any whose command runs a file inside the launcher's own folder, so those links go through the launcher and land in the portable profile. The check runs again after the browser exits, because the "make default" button can be used while the browser is open. Handlers pointing anywhere else, including other browsers and separately installed copies of the same browser, are left as they are. This is the only registry write Nomad makes without being asked, and it is confined to `HKCU`.
@@ -214,7 +246,11 @@ To prevent that, each launch inspects the `HKCU` handler entries and rewrites an
 
 **"Launch failed: window error" / won't start in a virtual machine.** The status window needs OpenGL 2.0, which VMs without 3D acceleration don't provide (they fall back to Windows' software GL 1.1). Enable it and relaunch. VirtualBox: install Guest Additions and tick **Settings → Display → 3D Acceleration**. VMware: tick **Accelerate 3D graphics** in the VM's display settings. Hyper-V's basic display adapter has no GL acceleration, so you'd need an enhanced-session GPU (GPU-P) or a different hypervisor.
 
-**"Windows protected your PC" on first launch.** This is expected and isn't a malware detection. The launchers are unsigned, so Microsoft Defender SmartScreen flags them as "unrecognized" until they accrue download reputation, which happens to any new unsigned executable. The binary is unmodified and still verifiable against `SHA256SUMS`. To run it, click **More info** → **Run anyway**, or clear the download mark first with `Unblock-File .\Nomad-Firefox.exe` in PowerShell (or right-click → Properties → tick **Unblock**). There's no reason to disable SmartScreen system-wide for this; unblocking the one file is enough.
+**"Windows protected your PC" on first launch.** A SmartScreen reputation
+warning is not by itself a malware verdict, but it should not be ignored
+blindly. Verify the binary against `SHA256SUMS` and the build attestation first.
+If verification succeeds, unblock only that file; do not disable SmartScreen
+system-wide.
 
 **uBlock Origin isn't installed.** Close and re-launch once. If it still doesn't appear, check that `Nomad/Gecko-extensions/uBlock0.xpi` exists and contains `META-INF/mozilla.rsa`.
 
@@ -229,16 +265,25 @@ To prevent that, each launch inspects the `HKCU` handler entries and rewrites an
 ## FAQ
 
 **Does this require administrator privileges?**
-No. Everything runs as the current user. The optional `--register-default` flag writes to `HKCU` only, with no UAC prompt.
+Normal launching, updates, and default registration run as the current user.
+Only optional Prefetch cleanup requests elevation.
 
 **Where does the browser get installed?**
-In a `Browser/` folder beside the launcher (see [On-disk layout](#on-disk-layout)). Nothing is written to `Program Files`, `%APPDATA%`, or `%LOCALAPPDATA%`. The one thing Nomad changes outside its own folder during normal operation is the `HKCU` handler repair described under [Default browser registration](#default-browser-registration), which corrects entries the browser itself created.
+Durable browser files and profile data stay in `Browser/` and `Data/` beside
+the launcher. Windows and the browser may create temporary runtime artifacts
+elsewhere; Nomad cleans supported traces after exit. Default-browser registration
+and handler repair write only to `HKCU`.
 
 **Does it work from a USB drive?**
-Yes. The launcher and its `Browser/` and `Data/` folders are fully portable. Move them anywhere and they behave the same.
+Yes. Close the browser before moving the complete portable folder. If it was
+registered as the default browser, register it again from the new path.
 
 **Does it leave anything behind after I delete it?**
-No files or configuration: runtime traces Windows writes on its own are scrubbed when the browser closes, and deleting the launcher's folder removes everything Nomad and the browser wrote. Windows itself still keeps some execution records that Nomad cannot remove (see [What Nomad cannot scrub](#what-nomad-cannot-scrub)). If you used `--register-default`, run `--unregister-default` first to remove the `HKCU` entries. If you made the browser your default from inside the browser instead, its handler was rewritten to run the launcher, so pick a different default browser in Windows Settings before you delete the folder.
+Not completely. Nomad performs best-effort cleanup, but Windows retains some
+execution records described under [What Nomad cannot scrub](#what-nomad-cannot-scrub).
+Before deleting a registered portable folder, run `--unregister-default` or
+select another default browser in Windows Settings. Deleting the portable folder
+then removes Nomad's durable browser, profile, and configuration data.
 
 **What happens if a download fails verification?**
 The launcher aborts before extracting or running anything. Any existing install is left untouched.
@@ -247,7 +292,8 @@ The launcher aborts before extracting or running anything. Any existing install 
 Nomad keeps a local version cache with a 6-hour TTL. Within that window it skips the network check entirely and launches immediately. An entry recorded at a moment when the upstream hash was unavailable is discarded rather than reused, so a temporary problem upstream doesn't leave updates failing verification until the cache expires.
 
 **Can each launcher have its own `nomad.toml`?**
-Yes. Every launcher reads the `nomad.toml` in its own `Nomad/` folder independently.
+Each separate portable instance has its own `Nomad/nomad.toml`. Different
+browser families must not share the same portable folder.
 
 ## Compatibility
 
@@ -255,8 +301,8 @@ Yes. Every launcher reads the `nomad.toml` in its own `Nomad/` folder independen
 |---|---|
 | Operating system | Windows 10 or Windows 11 (64-bit) |
 | Launcher build | `x86_64-pc-windows-msvc` |
-| Browser architecture | `x64` (default), `x86`, or `arm64`, selectable via `[browser] arch` |
-| Runtime dependencies | None beyond stock Windows 10/11 DLLs |
+| Browser architecture | `x64` by default; `x86` and `arm64` availability varies by browser and upstream release |
+| Runtime dependencies | Stock Windows components and a graphics driver with OpenGL 2.0 support |
 | Network | Required for first run and update checks |
 
 ## Acknowledgements
@@ -271,7 +317,7 @@ Nomad is an independent project and is not affiliated with, endorsed by, or spon
 
 ## License
 
-MIT or Apache 2.0, at your option. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
+Nomad Launcher source code is licensed under the [MIT License](LICENSE-MIT).
 
 Nomad bundles Atkinson Hyperlegible (SIL OFL 1.1) and 7-Zip 24.09 (LGPL-2.1) inside its binaries. License texts ship in `licenses/` alongside each release.
 

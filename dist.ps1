@@ -56,12 +56,11 @@ if ($cert) {
 
 # --- License bundling: third-party notices must ship beside the binaries ---
 # The OFL (font) and LGPL (7-Zip) require their license text to travel with the
-# distributed artifact; stage them plus Nomad's own licenses into licenses\.
+# distributed artifact; stage them plus Nomad's MIT license into licenses\.
 $licDir = Join-Path $relDir "licenses"
 New-Item -ItemType Directory -Force -Path $licDir | Out-Null
 $licenseFiles = @(
     @{ Src = "LICENSE-MIT";                    Dst = "Nomad-LICENSE-MIT.txt" },
-    @{ Src = "LICENSE-APACHE";                 Dst = "Nomad-LICENSE-APACHE.txt" },
     @{ Src = "core\payloads\fonts\OFL.txt";    Dst = "AtkinsonHyperlegible-OFL.txt" },
     @{ Src = "core\payloads\7zip\LICENSE.txt"; Dst = "7-Zip-LICENSE.txt" }
 )
@@ -74,8 +73,8 @@ $notices = @'
 Nomad Launcher - Third-Party Notices
 ====================================
 
-Nomad Launcher itself is dual-licensed MIT OR Apache-2.0
-(licenses/Nomad-LICENSE-MIT.txt, licenses/Nomad-LICENSE-APACHE.txt).
+Nomad Launcher itself is licensed under the MIT License
+(licenses/Nomad-LICENSE-MIT.txt).
 
 Components bundled INSIDE the Nomad launcher binaries
 -----------------------------------------------------
