@@ -71,6 +71,13 @@ async fn assert_verifiable<B: BrowserFamily>(browser: &B) {
         info.browser_version
     );
 
+    browser.validate_update(&info).unwrap_or_else(|error| {
+        panic!(
+            "{id}: release {} is authentic but incompatible with this launcher: {error}",
+            info.browser_version
+        )
+    });
+
     println!(
         "ok  {id}: {} (gpg={gpg}, sha256={}, sha512={})",
         info.browser_version,

@@ -1,0 +1,10 @@
+{
+  "editor.formatOnSave": true,
+  "files.eol": "\n",
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.check.extraArgs": [
+    "--workspace",
+    "--all-targets"
+  ],
+  "rust-analyzer.cargo.allTargets": true
+}

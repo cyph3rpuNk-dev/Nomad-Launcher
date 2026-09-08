@@ -135,6 +135,7 @@ pub async fn update<B: BrowserFamily>(
     }
 
     let latest = browser.fetch_latest_version().await?;
+    browser.validate_update(&latest)?;
     let installed = browser.installed_version(install_dir);
     if !needs_update(installed.as_ref(), &latest) {
         tracing::info!(
@@ -157,7 +158,7 @@ pub async fn update<B: BrowserFamily>(
     // Headless callers carry no hardening config; payloads are written
     // unconditionally, matching the config default (`enabled = true`).
     let (progress, _receiver) = watch::channel(0.0_f32);
-    download_and_install(browser, install_dir, &latest, true, progress, |_| {}).await?;
+    download_and_install(browser, install_dir, &latest, true, None, progress, |_| {}).await?;
     Ok(UpdateOutcome::Updated(latest.browser_version))
 }
 
@@ -185,9 +186,11 @@ pub(crate) async fn download_and_install<B: BrowserFamily>(
     install_dir: &Path,
     latest: &VersionInfo,
     hardening_enabled: bool,
+    branding: Option<&crate::Branding>,
     progress: watch::Sender<f32>,
     mut on_step: impl FnMut(InstallStep),
 ) -> Result<()> {
+    browser.validate_update(latest)?;
     let stage_dir = crate::install::stage_dir(install_dir);
     let backup_dir = crate::install::backup_dir(install_dir);
     std::fs::create_dir_all(&stage_dir)?;
@@ -222,6 +225,7 @@ pub(crate) async fn download_and_install<B: BrowserFamily>(
         &backup_dir,
         latest,
         hardening_enabled,
+        branding,
     )?;
 
     tracing::info!(
@@ -248,6 +252,7 @@ fn finalize_install<B: BrowserFamily>(
     backup_dir: &Path,
     latest: &VersionInfo,
     hardening_enabled: bool,
+    branding: Option<&crate::Branding>,
 ) -> Result<()> {
     if hardening_enabled {
         if let crate::browsers::Hardening::GeckoProfile {
@@ -263,6 +268,15 @@ fn finalize_install<B: BrowserFamily>(
             if let (Some(a), Some(c)) = (autoconfig, cfg) {
                 crate::hardening::write_autoconfig(stage_dir, a, c)?;
             }
+        }
+    }
+
+    if let Some(branding) = branding {
+        if !crate::branding::ensure_branding(stage_dir, branding) {
+            return Err(BrowserError::Compatibility(format!(
+                "required branding overlay is incompatible with {} {}; the working browser was not replaced",
+                browser.display_name(), latest.browser_version
+            )));
         }
     }
 
@@ -340,6 +354,7 @@ mod tests {
             &backup_dir,
             &latest,
             false,
+            None,
         )
         .unwrap();
 
@@ -430,5 +445,44 @@ mod tests {
     fn package_name_uses_the_last_url_segment() {
         assert_eq!(package_name("https://host/path/uc-x64.zip"), "uc-x64.zip");
         assert_eq!(package_name("https://host/trailing/"), "trailing");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn incompatible_staged_overlay_preserves_working_install() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let install_dir = dir.path().join("Browser");
+        let stage_dir = crate::install::stage_dir(&install_dir);
+        let backup_dir = crate::install::backup_dir(&install_dir);
+        std::fs::create_dir_all(&install_dir).expect("working install");
+        std::fs::write(install_dir.join("working.txt"), b"old").expect("working sentinel");
+        std::fs::create_dir_all(&stage_dir).expect("stage");
+        std::fs::write(stage_dir.join("chrome.exe"), b"new").expect("staged executable");
+
+        let browser = UngoogledChromium::new(Arch::X64);
+        let latest = version_info("152.0.7977.82-1.1", None);
+        let incompatible = crate::Branding {
+            targets: &["required-but-missing.exe"],
+            icons: &[],
+            pak_patches: &[],
+        };
+
+        let error = finalize_install(
+            &browser,
+            &install_dir,
+            &stage_dir,
+            &backup_dir,
+            &latest,
+            false,
+            Some(&incompatible),
+        )
+        .expect_err("missing required overlay target must abort before swap");
+
+        assert!(matches!(error, BrowserError::Compatibility(_)));
+        assert_eq!(
+            std::fs::read(install_dir.join("working.txt")).expect("working install retained"),
+            b"old"
+        );
+        assert!(!backup_dir.exists(), "the swap must not have started");
     }
 }
