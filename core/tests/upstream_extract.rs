@@ -8,6 +8,33 @@
 use nomad_core::updater::{self, UpdateOptions, UpdateOutcome};
 use nomad_core::{Arch, BrowserFamily, Floorp};
 
+#[cfg(windows)]
+#[tokio::test]
+#[ignore = "downloads, verifies, and brands the current Chromium release without launching it"]
+async fn chromium_release_passes_the_production_compatibility_gate() {
+    let temp = tempfile::tempdir().expect("isolated compatibility directory");
+    let install = temp.path().join("Browser");
+    let browser = nomad_core::UngoogledChromium::new(Arch::X64);
+    let outcome = updater::update(
+        &browser,
+        &install,
+        UpdateOptions {
+            check_on_launch: true,
+            auto_download: true,
+        },
+    )
+    .await
+    .expect("authenticated Chromium staging and required branding must succeed");
+    assert!(matches!(outcome, UpdateOutcome::Updated(_)));
+    assert!(install.join("chrome.exe").is_file());
+    assert!(install.join(".branding-patched").is_file());
+    assert!(browser.installed_version(&install).is_some());
+    assert!(
+        !temp.path().join("Data").exists(),
+        "never provision a profile"
+    );
+}
+
 #[tokio::test]
 #[ignore = "downloads and extracts the current upstream release"]
 async fn floorp_release_downloads_verifies_and_extracts() {

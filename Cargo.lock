@@ -3197,6 +3197,7 @@ dependencies = [
  "httpmock",
  "ico",
  "pgp",
+ "png 0.17.16",
  "rand",
  "reqwest",
  "serde",

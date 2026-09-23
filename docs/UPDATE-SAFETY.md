@@ -52,11 +52,26 @@ signature proves that a package matches what upstream published. The
 compatibility gate proves that this launcher understands that package's layout
 and required overlays. Both must pass.
 
-Ungoogled Chromium is certified by major version because its required branding
-uses version-sensitive PAK resources. The weekly upstream workflow deliberately
-fails when a newer major appears. Maintainers then inspect the official portable
-archive, update and verify the overlay manifest, exercise extraction, and raise
-the certified major in the same reviewed change.
+Ungoogled Chromium compatibility is checked against the authenticated staged
+artifact instead of a maximum major version. Both GUI and headless updates must
+find the required executable, DLL, resource bundle, ICU data, and both logo PAKs.
+The launcher decodes reviewed upstream logo references and locates each logo by
+its pixels and dimensions, independently of grit resource numbers. PNG
+recompression and resource renumbering are supported; matching dimensions alone
+are insufficient. Missing, changed, malformed, or ambiguous logos fail closed.
+PAK aliases retain their canonical resource indexes when the archive is rebuilt.
+
+All required branding must be applied before the version marker and swap. A
+branding marker supplied in an upstream archive is discarded. On Windows, the
+patched PAKs are read back to verify the replacements. No browser or downloaded
+installer is executed by compatibility checks. Profiles remain outside staging.
+
+The Windows Chromium compatibility workflow runs the production authenticated
+download, extraction, and branding path against the current release in a
+temporary directory. The weekly upstream check runs the same test. A new major
+with compatible artifacts needs no launcher rebuild; an actual upstream layout
+or artwork change still requires a reviewed compatibility update. This cannot
+guarantee compatibility with arbitrary future browser changes.
 
 Floorp's weekly check goes beyond metadata parsing: it downloads the current
 release, verifies its published SHA-256, extracts it to a temporary directory,
