@@ -1,0 +1,67 @@
+name: Chromium Compatibility
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'core/**'
+      - 'launchers/ungoogled-chromium/**'
+      - 'Cargo.*'
+      - 'scripts/check.ps1'
+      - 'dist.ps1'
+      - '.github/workflows/chromium-compatibility.yml'
+  pull_request:
+    paths:
+      - 'core/**'
+      - 'launchers/ungoogled-chromium/**'
+      - 'Cargo.*'
+      - 'scripts/check.ps1'
+      - 'dist.ps1'
+      - '.github/workflows/chromium-compatibility.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  msrv:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: '1.88'
+      - name: Check workspace at the minimum Rust version
+        run: cargo +1.88 check --workspace --locked
+  chromium:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Install dependency audit tool
+        run: cargo install cargo-audit --locked
+      - name: Canonical validation
+        run: pwsh -NoProfile -File scripts/check.ps1
+      - name: Verify current Chromium archive, layout, and all required overlays
+        run: cargo test -p nomad-core --test upstream_extract chromium_release -- --ignored --nocapture
+      - name: Build reviewable launchers and checksum manifest
+        run: .\dist.ps1
+      - name: Upload validated build for review
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: chromium-compatible-launchers
+          path: |
+            target/release/Nomad-*.exe
+            target/release/SHA256SUMS
+            target/release/licenses/
+            target/release/THIRD-PARTY-NOTICES.txt
+            target/release/TRADEMARKS.md
+          if-no-files-found: error
+          retention-days: 14

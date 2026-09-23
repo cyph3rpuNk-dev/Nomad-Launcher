@@ -63,6 +63,7 @@ $licenseFiles = @(
     @{ Src = "LICENSE-MIT";                    Dst = "Nomad-LICENSE-MIT.txt" },
     @{ Src = "core\payloads\fonts\OFL.txt";    Dst = "AtkinsonHyperlegible-OFL.txt" },
     @{ Src = "core\payloads\7zip\LICENSE.txt"; Dst = "7-Zip-LICENSE.txt" }
+    @{ Src = "core\payloads\chromium\logos\LICENSE"; Dst = "Chromium-logo-LICENSE.txt" }
 )
 foreach ($f in $licenseFiles) {
     $src = Join-Path $PSScriptRoot $f.Src
@@ -82,6 +83,8 @@ Components bundled INSIDE the Nomad launcher binaries
   -> licenses/AtkinsonHyperlegible-OFL.txt
 * 7-Zip 24.09 (7z.exe + 7z.dll, distributed unmodified) - GNU LGPL-2.1
   -> licenses/7-Zip-LICENSE.txt    Source: https://www.7-zip.org/
+* Chromium reference logos (used for compatibility checks) - BSD-3-Clause
+  -> licenses/Chromium-logo-LICENSE.txt    Source: https://chromium.googlesource.com/chromium/src/
 
 Software Nomad downloads at RUNTIME (NOT bundled in these binaries)
 ------------------------------------------------------------------

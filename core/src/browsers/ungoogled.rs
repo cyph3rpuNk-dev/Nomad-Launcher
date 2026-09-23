@@ -37,12 +37,6 @@ const GORHILL_KEY: &[u8] = include_bytes!("../../keys/gorhill.asc");
 /// bug (mis-bundled key file).
 const GORHILL_KEY_FINGERPRINT: &str = "91BFC93FDEC1D00C365C061EF5630CAE62A14316";
 
-/// Highest Chromium major whose archive layout and required branding resources
-/// have been certified with this launcher. The weekly live check fails when
-/// upstream advances, and runtime refuses the update until this value and the
-/// associated overlay manifest are reviewed together.
-const CERTIFIED_CHROMIUM_MAJOR: u32 = 152;
-
 /// Launchable executable name inside an ungoogled-chromium install.
 const EXECUTABLE: &str = "chrome.exe";
 
@@ -274,12 +268,17 @@ impl BrowserFamily for UngoogledChromium {
                     info.engine_version
                 ))
             })?;
-        if major > CERTIFIED_CHROMIUM_MAJOR {
+        if major == 0 {
             return Err(BrowserError::Compatibility(format!(
-                "Chromium {major} is newer than certified major {CERTIFIED_CHROMIUM_MAJOR}; update the launcher after its archive and branding overlays pass compatibility checks"
+                "invalid Chromium major in `{}`",
+                info.engine_version
             )));
         }
         Ok(())
+    }
+
+    fn validate_staged_install(&self, stage_dir: &Path) -> Result<()> {
+        crate::branding::validate_chromium_stage(stage_dir)
     }
 
     async fn download(
@@ -792,19 +791,25 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_gate_blocks_uncertified_chromium_major() {
+    fn compatibility_is_checked_on_the_artifact_not_a_major_version_ceiling() {
         let release: Release = serde_json::from_str(FIXTURE_RELEASE).unwrap();
         let mut info = parse_release(&release, Arch::X64).expect("release must parse");
         let browser = UngoogledChromium::new(Arch::X64);
-        browser
-            .validate_update(&info)
-            .expect("older certified major");
+        browser.validate_update(&info).expect("metadata is valid");
 
-        info.engine_version = "153.0.8000.0".to_owned();
-        let error = browser
-            .validate_update(&info)
-            .expect_err("future major must be blocked");
-        assert!(matches!(error, BrowserError::Compatibility(_)));
+        for version in ["153.0.8010.52", "200.0.0.0"] {
+            info.engine_version = version.to_owned();
+            browser
+                .validate_update(&info)
+                .expect("staging decides compatibility");
+        }
+        for version in ["", "not-a-version", "0.0.0.0"] {
+            info.engine_version = version.to_owned();
+            assert!(matches!(
+                browser.validate_update(&info),
+                Err(BrowserError::Compatibility(_))
+            ));
+        }
     }
 
     #[test]

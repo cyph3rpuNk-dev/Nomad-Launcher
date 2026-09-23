@@ -17,6 +17,85 @@
 
 use std::path::Path;
 
+mod chromium;
+pub use chromium::CHROMIUM;
+
+/// Artifact compatibility replaces the Chromium major-version ceiling. This
+/// hook is mandatory even for headless callers that supply no branding config.
+pub(crate) fn validate_chromium_stage(stage: &Path) -> crate::browsers::Result<()> {
+    use crate::browsers::BrowserError;
+
+    // Never trust a success marker supplied inside an upstream archive.
+    let marker = stage.join(".branding-patched");
+    if marker.exists() {
+        std::fs::remove_file(marker)?;
+    }
+    for name in [
+        "chrome.exe",
+        "chrome.dll",
+        "resources.pak",
+        "icudtl.dat",
+        "chrome_100_percent.pak",
+        "chrome_200_percent.pak",
+    ] {
+        if !std::fs::metadata(stage.join(name)).is_ok_and(|m| m.is_file() && m.len() > 0) {
+            return Err(BrowserError::Compatibility(format!(
+                "required Chromium file `{name}` is missing or empty; the working browser was not replaced"
+            )));
+        }
+    }
+    for name in ["chrome_100_percent.pak", "chrome_200_percent.pak"] {
+        let bytes = std::fs::read(stage.join(name))?;
+        let patches: Vec<&PakPatch> = CHROMIUM
+            .pak_patches
+            .iter()
+            .filter(|p| p.pak_file == name)
+            .collect();
+        let compatible =
+            rebuild_pak_with(&bytes, |resources| apply_logo_patches(resources, &patches))
+                .is_ok_and(|(_, complete)| complete);
+        if !compatible {
+            return Err(BrowserError::Compatibility(format!(
+                "required Chromium logos in `{name}` are missing, changed, or ambiguous; the working browser was not replaced"
+            )));
+        }
+    }
+    #[cfg(windows)]
+    for (name, group) in [("chrome.exe", 100), ("chrome.dll", 101)] {
+        read_pe_resource(&stage.join(name), RT_GROUP_ICON, &ResName::Id(group), false).map_err(
+            |error| {
+                BrowserError::Compatibility(format!(
+                    "required Chromium icon group {group} in `{name}` is incompatible: {error}"
+                ))
+            },
+        )?;
+    }
+    if !ensure_branding(stage, &CHROMIUM) {
+        return Err(BrowserError::Compatibility(
+            "required Chromium branding could not be applied; the working browser was not replaced"
+                .to_owned(),
+        ));
+    }
+    #[cfg(windows)]
+    for name in ["chrome_100_percent.pak", "chrome_200_percent.pak"] {
+        let bytes = std::fs::read(stage.join(name))?;
+        let patches: Vec<&PakPatch> = CHROMIUM
+            .pak_patches
+            .iter()
+            .filter(|p| p.pak_file == name)
+            .collect();
+        if !rebuild_pak_with(&bytes, |resources| apply_logo_patches(resources, &patches))
+            .is_ok_and(|(patched, complete)| complete && patched == bytes)
+        {
+            let _ = std::fs::remove_file(stage.join(".branding-patched"));
+            return Err(BrowserError::Compatibility(format!(
+                "Chromium branding readback failed for `{name}`; the working browser was not replaced"
+            )));
+        }
+    }
+    Ok(())
+}
+
 // ── Public configuration types ───────────────────────────────────────────────
 
 /// Resource name of an `RT_GROUP_ICON` to replace.
@@ -48,8 +127,11 @@ pub struct PakPatch {
     /// PAK file path relative to the browser install directory —
     /// e.g. `"chrome_100_percent.pak"`.
     pub pak_file: &'static str,
-    /// Chromium grit resource ID to replace inside the PAK.
+    /// Historical Chromium grit ID, retained as a diagnostic hint only.
     pub resource_id: u16,
+    /// Known upstream logo. Resource IDs are hints only; decoded pixels must
+    /// identify exactly one resource, even when grit renumbers the archive.
+    pub expected_png_bytes: &'static [u8],
     /// Raw PNG bytes of the replacement image, embedded via `include_bytes!`.
     pub png_bytes: &'static [u8],
 }
@@ -187,6 +269,7 @@ fn branding_fingerprint(install_dir: &Path, branding: &Branding) -> String {
     for patch in branding.pak_patches {
         hasher.update(patch.pak_file.as_bytes());
         hasher.update(patch.resource_id.to_le_bytes());
+        hasher.update(patch.expected_png_bytes);
         hasher.update((patch.png_bytes.len() as u64).to_le_bytes());
         hasher.update(patch.png_bytes);
         let size = std::fs::metadata(install_dir.join(patch.pak_file)).map_or(0, |m| m.len());
@@ -289,10 +372,12 @@ fn build_group_icon(frames: &[IcoFrame], first_id: u16) -> Vec<u8> {
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 #[cfg(windows)]
-use windows_sys::Win32::Foundation::{GetLastError, HANDLE};
+use windows_sys::Win32::Foundation::{FreeLibrary, GetLastError, HANDLE, HMODULE};
 #[cfg(windows)]
 use windows_sys::Win32::System::LibraryLoader::{
-    BeginUpdateResourceW, EndUpdateResourceW, UpdateResourceW,
+    BeginUpdateResourceW, EndUpdateResourceW, FindResourceExW, FindResourceW, LoadLibraryExW,
+    LoadResource, LockResource, SizeofResource, UpdateResourceW,
+    LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE, LOAD_LIBRARY_AS_IMAGE_RESOURCE,
 };
 
 /// `RT_ICON` resource type.
@@ -328,6 +413,81 @@ enum BrandingError {
     /// An embedded `.ico` could not be parsed.
     #[error("malformed .ico data")]
     BadIco,
+    #[error("PE resource read failed: {0}")]
+    ResourceRead(String),
+    #[error("PE icon readback did not match the required overlay")]
+    ResourceMismatch,
+}
+
+/// A resource-only mapping: no entry point, imports, or browser code is run.
+#[cfg(windows)]
+struct ResourceModule(HMODULE);
+
+#[cfg(windows)]
+impl Drop for ResourceModule {
+    fn drop(&mut self) {
+        // SAFETY: this handle is owned and came from LoadLibraryExW below.
+        unsafe {
+            FreeLibrary(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn read_pe_resource(
+    path: &Path,
+    resource_type: u16,
+    name: &ResName<'_>,
+    exact_language: bool,
+) -> Result<Vec<u8>, BrandingError> {
+    let path = path
+        .canonicalize()
+        .map_err(|e| BrandingError::ResourceRead(e.to_string()))?;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: absolute NUL-terminated path; DATAFILE/IMAGE_RESOURCE explicitly
+    // map bytes without executing code, resolving imports, or calling DllMain.
+    let handle = unsafe {
+        LoadLibraryExW(
+            wide.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE,
+        )
+    };
+    if handle.is_null() {
+        return Err(BrandingError::ResourceRead(last_error().to_string()));
+    }
+    let module = ResourceModule(handle);
+    let named: Vec<u16>;
+    let name_ptr = match name {
+        ResName::Id(id) => usize::from(*id) as *const u16,
+        ResName::Named(value) => {
+            named = value.encode_utf16().chain(Some(0)).collect();
+            named.as_ptr()
+        }
+    };
+    let type_ptr = usize::from(resource_type) as *const u16;
+    // SAFETY: module is a live resource mapping and names use the Win32
+    // integer-resource convention or a live NUL-terminated string.
+    let resource = unsafe {
+        if exact_language {
+            FindResourceExW(module.0, type_ptr, name_ptr, LANG_EN_US)
+        } else {
+            FindResourceW(module.0, name_ptr, type_ptr)
+        }
+    };
+    if resource.is_null() {
+        return Err(BrandingError::ResourceRead(last_error().to_string()));
+    }
+    // SAFETY: the resource belongs to this live mapping. Data is copied before
+    // the mapping is released, and the length is supplied by the Windows loader.
+    unsafe {
+        let size = SizeofResource(module.0, resource) as usize;
+        let data = LockResource(LoadResource(module.0, resource));
+        if data.is_null() || size == 0 {
+            return Err(BrandingError::ResourceRead(last_error().to_string()));
+        }
+        Ok(std::slice::from_raw_parts(data.cast::<u8>(), size).to_vec())
+    }
 }
 
 /// Returns the calling thread's last Win32 error code.
@@ -390,6 +550,33 @@ fn patch_pe_icons(path: &Path, icons: &[BrandingIcon]) -> Result<(), BrandingErr
     patch_result?;
     if end_ok == 0 {
         return Err(BrandingError::EndUpdate(last_error()));
+    }
+    verify_pe_icons(path, icons)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn verify_pe_icons(path: &Path, icons: &[BrandingIcon]) -> Result<(), BrandingError> {
+    let mut first_id = ICON_ID_BASE;
+    for icon in icons {
+        let frames = parse_ico(icon.ico).ok_or(BrandingError::BadIco)?;
+        let name = match icon.group {
+            BrandingGroup::Id(id) => ResName::Id(id),
+            BrandingGroup::Named(value) => ResName::Named(value),
+        };
+        if read_pe_resource(path, RT_GROUP_ICON, &name, true)?
+            != build_group_icon(&frames, first_id)
+        {
+            return Err(BrandingError::ResourceMismatch);
+        }
+        let mut id = first_id;
+        for frame in frames {
+            if read_pe_resource(path, RT_ICON, &ResName::Id(id), true)? != frame.data {
+                return Err(BrandingError::ResourceMismatch);
+            }
+            id += 1;
+        }
+        first_id += ICON_ID_STRIDE;
     }
     Ok(())
 }
@@ -466,7 +653,6 @@ fn update_resource(
 // ── Chromium PAK file patching ────────────────────────────────────────────────
 
 /// Failure from a PAK resource-replacement operation.
-#[cfg(any(windows, test))]
 #[derive(Debug, thiserror::Error)]
 enum PakError {
     #[error("file too short to be a valid PAK")]
@@ -475,6 +661,8 @@ enum PakError {
     UnsupportedVersion(u32),
     #[error("resource offset out of bounds in PAK")]
     InvalidOffset,
+    #[error("invalid PAK resource or alias table")]
+    InvalidTable,
     #[error("PAK file too large for 32-bit offset field")]
     OffsetOverflow,
     #[error(transparent)]
@@ -483,7 +671,6 @@ enum PakError {
 
 /// Width and height read from a PNG's IHDR header, or `None` if `bytes` is not
 /// a PNG. Only the 8-byte signature + IHDR dimensions are inspected.
-#[cfg(any(windows, test))]
 fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     if bytes.len() < 24 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || bytes[12..16] != *b"IHDR" {
         return None;
@@ -497,12 +684,76 @@ fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 /// dimensions — the guard that a PAK resource ID still points at the logo we
 /// expect before overwriting it. grit can renumber resource IDs between
 /// Chromium versions, so a blind replace could clobber the wrong resource.
-#[cfg(any(windows, test))]
 fn png_dims_match(existing: &[u8], replacement: &[u8]) -> bool {
     matches!(
         (png_dimensions(existing), png_dimensions(replacement)),
         (Some(a), Some(b)) if a == b
     )
+}
+
+/// Decode only small logo-sized PNGs, with a bounded decoder allocation.
+/// Compare pixels rather than compressed bytes so PNG recompression is harmless.
+fn logo_pixels(bytes: &[u8]) -> Option<Vec<u8>> {
+    let (width, height) = png_dimensions(bytes)?;
+    if width == 0 || height == 0 || width > 64 || height > 64 || bytes.len() > 256 * 1024 {
+        return None;
+    }
+    let mut decoder = png::Decoder::new(bytes);
+    decoder.set_limits(png::Limits { bytes: 1024 * 1024 });
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buffer).ok()?;
+    let samples = &buffer[..info.buffer_size()];
+    let pixels = match info.color_type {
+        png::ColorType::Rgba => samples.to_vec(),
+        png::ColorType::Rgb => samples
+            .chunks_exact(3)
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
+        png::ColorType::Grayscale => samples.iter().flat_map(|&p| [p, p, p, 255]).collect(),
+        png::ColorType::GrayscaleAlpha => samples
+            .chunks_exact(2)
+            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .collect(),
+        png::ColorType::Indexed => return None,
+    };
+    Some(pixels)
+}
+
+/// Resolve every required logo before mutating any resource. Neither a matching
+/// grit ID nor matching dimensions alone proves that an image is our logo.
+fn apply_logo_patches(resources: &mut [(u16, Vec<u8>)], patches: &[&PakPatch]) -> bool {
+    let mut resolved = Vec::new();
+    for patch in patches {
+        let Some(expected) = logo_pixels(patch.expected_png_bytes) else {
+            return false;
+        };
+        let Some(replacement) = logo_pixels(patch.png_bytes) else {
+            return false;
+        };
+        if !png_dims_match(patch.expected_png_bytes, patch.png_bytes) {
+            return false;
+        }
+        let matches: Vec<u16> = resources
+            .iter()
+            .filter(|(_, data)| png_dims_match(data, patch.expected_png_bytes))
+            .filter(|(_, data)| {
+                logo_pixels(data).is_some_and(|pixels| pixels == expected || pixels == replacement)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        if matches.len() != 1 || resolved.iter().any(|(id, _)| *id == matches[0]) {
+            tracing::warn!(
+                file = patch.pak_file,
+                matches = matches.len(),
+                "required Chromium logo is missing or ambiguous; refusing overlay"
+            );
+            return false;
+        }
+        resolved.push((matches[0], patch.png_bytes));
+    }
+    apply_resource_patches(resources, &resolved)
 }
 
 /// Overwrites the resources named in `patches`. For image (PNG) replacements —
@@ -511,7 +762,6 @@ fn png_dims_match(existing: &[u8], replacement: &[u8]) -> bool {
 /// resource IDs between versions) is skipped with a loud warning instead of
 /// clobbering whatever now lives at that ID. Non-image replacements (only used
 /// by the low-level offset tests) are written unconditionally.
-#[cfg(any(windows, test))]
 fn apply_resource_patches(resources: &mut [(u16, Vec<u8>)], patches: &[(u16, &[u8])]) -> bool {
     let mut complete = true;
     for &(target_id, replacement) in patches {
@@ -538,25 +788,23 @@ fn apply_resource_patches(resources: &mut [(u16, Vec<u8>)], patches: &[(u16, &[u
     complete
 }
 
-/// Parses a version-5 Chromium PAK, replaces resources whose IDs appear in
-/// `patches`, and returns the rebuilt bytes with all offsets recalculated.
+/// Parses a version-5 Chromium PAK, applies the supplied resource transformation,
+/// and rebuilds all offsets while preserving alias indexes.
 ///
 /// Version-5 layout (all little-endian):
 /// ```text
 /// [u32 version=5][u32 encoding][u16 resource_count][u16 alias_count]
 /// [resource_count × (u16 id, u32 offset)]
 /// [u16 0 sentinel][u32 end_offset]
-/// [alias_count × (u16 alias_id, u16 canonical_id)]
+/// [alias_count × (u16 alias_id, u16 canonical_entry_index)]
 /// [resource data …]
 /// ```
 ///
-/// A patch is skipped (with a `WARN`) when its target ID is absent, or — for
-/// image (PNG) replacements — when the resource currently at that ID is not a
-/// PNG of the same dimensions. The latter guards against grit renumbering IDs
-/// across Chromium versions: rather than silently overwriting whatever now lives
-/// at the ID, the logo patch is dropped and the drift is logged.
-#[cfg(any(windows, test))]
-fn rebuild_pak(bytes: &[u8], patches: &[(u16, &[u8])]) -> Result<(Vec<u8>, bool), PakError> {
+/// The callback reports whether all required resources were compatible.
+fn rebuild_pak_with(
+    bytes: &[u8],
+    patch_resources: impl FnOnce(&mut [(u16, Vec<u8>)]) -> bool,
+) -> Result<(Vec<u8>, bool), PakError> {
     if bytes.len() < 12 {
         return Err(PakError::TooShort);
     }
@@ -584,6 +832,14 @@ fn rebuild_pak(bytes: &[u8], patches: &[(u16, &[u8])]) -> Result<(Vec<u8>, bool)
     ]))
     .unwrap_or(usize::MAX);
     let alias_bytes = bytes[alias_start..alias_end].to_vec();
+    if end_offset < alias_end || end_offset > bytes.len() {
+        return Err(PakError::InvalidOffset);
+    }
+    for alias in alias_bytes.chunks_exact(4) {
+        if usize::from(u16::from_le_bytes([alias[2], alias[3]])) >= resource_count {
+            return Err(PakError::InvalidTable);
+        }
+    }
 
     // Parse entries.
     let mut entries: Vec<(u16, usize)> = Vec::with_capacity(resource_count);
@@ -597,6 +853,9 @@ fn rebuild_pak(bytes: &[u8], patches: &[(u16, &[u8])]) -> Result<(Vec<u8>, bool)
             bytes[p + 5],
         ]))
         .unwrap_or(usize::MAX);
+        if id == 0 || entries.last().is_some_and(|&(previous, _)| previous >= id) {
+            return Err(PakError::InvalidTable);
+        }
         entries.push((id, off));
     }
 
@@ -609,20 +868,31 @@ fn rebuild_pak(bytes: &[u8], patches: &[(u16, &[u8])]) -> Result<(Vec<u8>, bool)
         } else {
             end_offset
         };
-        if off > bytes.len() || next > bytes.len() || off > next {
+        if off < alias_end || off > bytes.len() || next > bytes.len() || off > next {
             return Err(PakError::InvalidOffset);
         }
         resources.push((id, bytes[off..next].to_vec()));
     }
 
-    let complete = apply_resource_patches(&mut resources, patches);
+    let complete = patch_resources(&mut resources);
+
+    Ok((encode_pak(encoding, &alias_bytes, &resources)?, complete))
+}
+
+fn encode_pak(
+    encoding: u32,
+    alias_bytes: &[u8],
+    resources: &[(u16, Vec<u8>)],
+) -> Result<Vec<u8>, PakError> {
+    let resource_count = resources.len();
+    let alias_count = alias_bytes.len() / 4;
 
     // Compute new offsets.
     // Layout: header(12) + entries(n×6) + sentinel(2) + end_offset(4) + aliases + data
     let new_data_start = 12 + resource_count * 6 + 6 + alias_count * 4;
     let mut new_offsets: Vec<usize> = Vec::with_capacity(resource_count);
     let mut cursor = new_data_start;
-    for (_, data) in &resources {
+    for (_, data) in resources {
         new_offsets.push(cursor);
         cursor += data.len();
     }
@@ -646,11 +916,18 @@ fn rebuild_pak(bytes: &[u8], patches: &[(u16, &[u8])]) -> Result<(Vec<u8>, bool)
     out.extend_from_slice(&0u16.to_le_bytes()); // sentinel
     let end32 = u32::try_from(new_end_offset).map_err(|_| PakError::OffsetOverflow)?;
     out.extend_from_slice(&end32.to_le_bytes());
-    out.extend_from_slice(&alias_bytes);
+    out.extend_from_slice(alias_bytes);
     for (_, data) in &resources {
         out.extend_from_slice(data);
     }
-    Ok((out, complete))
+    Ok(out)
+}
+
+#[cfg(test)]
+fn rebuild_pak(bytes: &[u8], patches: &[(u16, &[u8])]) -> Result<(Vec<u8>, bool), PakError> {
+    rebuild_pak_with(bytes, |resources| {
+        apply_resource_patches(resources, patches)
+    })
 }
 
 /// Applies all `pak_patches` whose `pak_file` lives under `install_dir`.
@@ -664,10 +941,9 @@ fn apply_pak_patches(install_dir: &Path, patches: &[PakPatch]) -> bool {
             continue;
         }
         done.push(patch.pak_file);
-        let file_patches: Vec<(u16, &[u8])> = patches
+        let file_patches: Vec<&PakPatch> = patches
             .iter()
             .filter(|p| p.pak_file == patch.pak_file)
-            .map(|p| (p.resource_id, p.png_bytes))
             .collect();
         let path = install_dir.join(patch.pak_file);
         if !path.exists() {
@@ -683,12 +959,15 @@ fn apply_pak_patches(install_dir: &Path, patches: &[PakPatch]) -> bool {
                 continue;
             }
         };
-        match rebuild_pak(&data, &file_patches) {
+        match rebuild_pak_with(&data, |resources| {
+            apply_logo_patches(resources, &file_patches)
+        }) {
             Ok((new_pak, complete)) => {
                 if !complete {
                     // A success marker must mean every required resource was
                     // patched. Leave it absent so a compatible launcher can retry.
                     all_ok = false;
+                    continue;
                 }
                 // Atomic write: temp file beside the target, then rename.
                 // A plain overwrite truncates first; power-loss mid-write on
@@ -697,10 +976,17 @@ fn apply_pak_patches(install_dir: &Path, patches: &[PakPatch]) -> bool {
                 let mut tmp_os = path.as_os_str().to_owned();
                 tmp_os.push(".tmp");
                 let tmp_path = std::path::PathBuf::from(tmp_os);
-                match std::fs::write(&tmp_path, new_pak)
+                match std::fs::write(&tmp_path, &new_pak)
                     .and_then(|()| std::fs::rename(&tmp_path, &path))
                 {
-                    Ok(()) => tracing::info!(file = %patch.pak_file, "PAK logo patched"),
+                    Ok(()) => {
+                        if std::fs::read(&path).is_ok_and(|written| written == new_pak) {
+                            tracing::info!(file = %patch.pak_file, "PAK logo patched and verified");
+                        } else {
+                            all_ok = false;
+                            tracing::warn!(file = %patch.pak_file, "PAK readback did not match");
+                        }
+                    }
                     Err(e) => {
                         let _ = std::fs::remove_file(&tmp_path);
                         tracing::warn!(file = %patch.pak_file, error = %e, "could not write patched PAK");
@@ -895,6 +1181,152 @@ mod tests {
         pak[0] = 4;
         let err = rebuild_pak(&pak, &[]).expect_err("wrong version must fail");
         assert!(matches!(err, PakError::UnsupportedVersion(4)));
+    }
+
+    #[test]
+    fn content_matching_survives_renumbering_and_png_reencoding() {
+        let patch = &super::CHROMIUM.pak_patches[0];
+        let pixels = super::logo_pixels(patch.expected_png_bytes).unwrap();
+        let mut reencoded = Vec::new();
+        let image = ico::IconImage::from_rgba_data(32, 32, pixels);
+        image.write_png(&mut reencoded).unwrap();
+        let original = make_pak_v5(&[(7, &reencoded), (14321, patch.png_bytes)]);
+        // Even the historical ID cannot disambiguate two matching images.
+        let (_, complete) = super::rebuild_pak_with(&original, |resources| {
+            super::apply_logo_patches(resources, &[patch])
+        })
+        .unwrap();
+        assert!(!complete);
+
+        let original = make_pak_v5(&[(7, &reencoded), (14321, b"unrelated resource")]);
+        let (patched, complete) = super::rebuild_pak_with(&original, |resources| {
+            super::apply_logo_patches(resources, &[patch])
+        })
+        .unwrap();
+        assert!(complete);
+        let resources = parse_pak_resources(&patched);
+        assert_eq!(resources[0].1, patch.png_bytes);
+        assert_eq!(resources[1].1, b"unrelated resource");
+        let (again, complete) = super::rebuild_pak_with(&patched, |resources| {
+            super::apply_logo_patches(resources, &[patch])
+        })
+        .unwrap();
+        assert!(complete);
+        assert_eq!(again, patched, "branding must remain idempotent");
+    }
+
+    #[test]
+    fn all_embedded_logos_decode_and_match_their_replacement_dimensions() {
+        for patch in super::CHROMIUM.pak_patches {
+            assert!(super::logo_pixels(patch.expected_png_bytes).is_some());
+            assert!(super::logo_pixels(patch.png_bytes).is_some());
+            assert!(super::png_dims_match(
+                patch.expected_png_bytes,
+                patch.png_bytes
+            ));
+        }
+    }
+
+    #[test]
+    fn content_matching_rejects_wrong_image_at_the_right_id_without_partial_changes() {
+        let patches: Vec<_> = super::CHROMIUM
+            .pak_patches
+            .iter()
+            .filter(|p| p.pak_file == "chrome_100_percent.pak")
+            .collect();
+        let mut wrong_png = Vec::new();
+        ico::IconImage::from_rgba_data(16, 16, vec![255; 16 * 16 * 4])
+            .write_png(&mut wrong_png)
+            .unwrap();
+        let original = make_pak_v5(&[(14321, patches[0].expected_png_bytes), (14323, &wrong_png)]);
+        let (unchanged, complete) = super::rebuild_pak_with(&original, |resources| {
+            super::apply_logo_patches(resources, &patches)
+        })
+        .unwrap();
+        assert!(!complete);
+        assert_eq!(unchanged, original);
+    }
+
+    #[test]
+    fn content_matching_rejects_missing_and_malformed_logos() {
+        let patch = &super::CHROMIUM.pak_patches[0];
+        for bytes in [b"not a PNG".as_slice(), &patch.expected_png_bytes[..24]] {
+            let original = make_pak_v5(&[(14321, bytes)]);
+            let (_, complete) = super::rebuild_pak_with(&original, |resources| {
+                super::apply_logo_patches(resources, &[patch])
+            })
+            .unwrap();
+            assert!(!complete);
+        }
+    }
+
+    #[test]
+    fn pak_parser_rejects_duplicate_ids_and_offsets_into_the_table() {
+        let duplicate = make_pak_v5(&[(1, b"one"), (1, b"two")]);
+        assert!(rebuild_pak(&duplicate, &[]).is_err());
+        let mut invalid_offset = make_pak_v5(&[(1, b"one")]);
+        invalid_offset[14..18].copy_from_slice(&0u32.to_le_bytes());
+        assert!(rebuild_pak(&invalid_offset, &[]).is_err());
+    }
+
+    #[test]
+    fn content_patch_preserves_aliases_and_rejects_invalid_alias_indexes() {
+        let patch = &super::CHROMIUM.pak_patches[0];
+        let mut pak = make_pak_v5(&[(7, patch.expected_png_bytes)]);
+        pak[10..12].copy_from_slice(&1u16.to_le_bytes());
+        for offset in [14, 20] {
+            let old = u32::from_le_bytes(pak[offset..offset + 4].try_into().unwrap());
+            pak[offset..offset + 4].copy_from_slice(&(old + 4).to_le_bytes());
+        }
+        pak.splice(24..24, [8, 0, 0, 0]); // id 8 aliases canonical entry index 0
+        let (patched, complete) = super::rebuild_pak_with(&pak, |resources| {
+            super::apply_logo_patches(resources, &[patch])
+        })
+        .unwrap();
+        assert!(complete);
+        assert_eq!(&patched[24..28], &[8, 0, 0, 0]);
+        assert_eq!(parse_pak_resources(&patched)[0].1, patch.png_bytes);
+        pak[26] = 1; // only index 0 exists
+        assert!(rebuild_pak(&pak, &[]).is_err());
+    }
+
+    #[test]
+    fn chromium_layout_failure_never_creates_a_success_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".branding-patched"),
+            b"untrusted archive marker",
+        )
+        .unwrap();
+        let error = super::validate_chromium_stage(dir.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::browsers::BrowserError::Compatibility(_)
+        ));
+        assert!(!dir.path().join(".branding-patched").exists());
+        assert!(!dir.path().join(".nomad-version").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pe_overlay_readback_detects_missing_and_changed_icons_without_execution() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fixture.exe");
+        std::fs::write(&path, include_bytes!("../payloads/7zip/7z.exe")).unwrap();
+        assert!(super::read_pe_resource(
+            &path,
+            super::RT_GROUP_ICON,
+            &super::ResName::Id(65530),
+            true
+        )
+        .is_err());
+        super::patch_pe_icons(&path, super::CHROMIUM.icons).unwrap();
+        super::verify_pe_icons(&path, super::CHROMIUM.icons).unwrap();
+        let wrong = BrandingIcon {
+            group: BrandingGroup::Id(100),
+            ico: super::CHROMIUM.icons[3].ico,
+        };
+        assert!(super::verify_pe_icons(&path, &[wrong]).is_err());
     }
 
     /// Builds the bytes `png_dimensions` inspects: the 8-byte signature + an
