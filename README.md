@@ -288,6 +288,14 @@ then removes Nomad's durable browser, profile, and configuration data.
 **What happens if a download fails verification?**
 The launcher aborts before extracting or running anything. Any existing install is left untouched.
 
+**Why does Chromium say it is newer than the certified major?**
+Older launchers used a fixed Chromium major-version ceiling. The updated launcher
+checks the verified browser's layout and identifies its branding resources by
+image content before replacing the working installation. Compatible major-version
+updates therefore need no ceiling bump. Install a rebuilt launcher containing
+this change to migrate; meanwhile, **Launch anyway** opens your existing browser.
+Actual incompatible resources still block an update and preserve the working copy.
+
 **What if I'm already on the latest version?**
 Nomad keeps a local version cache with a 6-hour TTL. Within that window it skips the network check entirely and launches immediately. An entry recorded at a moment when the upstream hash was unavailable is discarded rather than reused, so a temporary problem upstream doesn't leave updates failing verification until the cache expires.
 

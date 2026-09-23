@@ -401,6 +401,16 @@ pub trait BrowserFamily: Send + Sync {
         Ok(())
     }
 
+    /// Validates required layout and overlays in the authenticated staging tree.
+    /// Called by every update path before writing a version marker or swapping.
+    ///
+    /// # Errors
+    /// Returns an error if the staged browser is incompatible with this launcher.
+    fn validate_staged_install(&self, stage_dir: &Path) -> Result<()> {
+        let _ = stage_dir;
+        Ok(())
+    }
+
     /// Downloads the package described by `info` to `dest`, reporting
     /// progress (`0.0..=1.0`) through `progress`.
     ///
