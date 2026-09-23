@@ -254,6 +254,7 @@ fn finalize_install<B: BrowserFamily>(
     hardening_enabled: bool,
     branding: Option<&crate::Branding>,
 ) -> Result<()> {
+    browser.validate_staged_install(stage_dir)?;
     if hardening_enabled {
         if let crate::browsers::Hardening::GeckoProfile {
             policies,
