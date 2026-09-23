@@ -61,15 +61,7 @@ pub(crate) fn validate_chromium_stage(stage: &Path) -> crate::browsers::Result<(
         }
     }
     #[cfg(windows)]
-    for (name, group) in [("chrome.exe", 100), ("chrome.dll", 101)] {
-        read_pe_resource(&stage.join(name), RT_GROUP_ICON, &ResName::Id(group), false).map_err(
-            |error| {
-                BrowserError::Compatibility(format!(
-                    "required Chromium icon group {group} in `{name}` is incompatible: {error}"
-                ))
-            },
-        )?;
-    }
+    check_upstream_icon_groups(stage)?;
     if !ensure_branding(stage, &CHROMIUM) {
         return Err(BrowserError::Compatibility(
             "required Chromium branding could not be applied; the working browser was not replaced"
@@ -92,6 +84,28 @@ pub(crate) fn validate_chromium_stage(stage: &Path) -> crate::browsers::Result<(
                 "Chromium branding readback failed for `{name}`; the working browser was not replaced"
             )));
         }
+    }
+    Ok(())
+}
+
+/// Requires the icon groups that upstream Chromium ships and the overlay
+/// replaces. Upstream `chrome.exe` carries only named groups (verified for
+/// 152 and 153); numeric group 100 is added by branding, never shipped.
+#[cfg(windows)]
+fn check_upstream_icon_groups(stage: &Path) -> crate::browsers::Result<()> {
+    for (name, group, label) in [
+        (
+            "chrome.exe",
+            ResName::Named("IDR_MAINFRAME"),
+            "IDR_MAINFRAME",
+        ),
+        ("chrome.dll", ResName::Id(101), "101"),
+    ] {
+        read_pe_resource(&stage.join(name), RT_GROUP_ICON, &group, false).map_err(|error| {
+            crate::browsers::BrowserError::Compatibility(format!(
+                "required Chromium icon group {label} in `{name}` is incompatible: {error}"
+            ))
+        })?;
     }
     Ok(())
 }
@@ -569,12 +583,10 @@ fn verify_pe_icons(path: &Path, icons: &[BrandingIcon]) -> Result<(), BrandingEr
         {
             return Err(BrandingError::ResourceMismatch);
         }
-        let mut id = first_id;
-        for frame in frames {
+        for (id, frame) in (first_id..).zip(frames) {
             if read_pe_resource(path, RT_ICON, &ResName::Id(id), true)? != frame.data {
                 return Err(BrandingError::ResourceMismatch);
             }
-            id += 1;
         }
         first_id += ICON_ID_STRIDE;
     }
@@ -708,13 +720,17 @@ fn logo_pixels(bytes: &[u8]) -> Option<Vec<u8>> {
     let pixels = match info.color_type {
         png::ColorType::Rgba => samples.to_vec(),
         png::ColorType::Rgb => samples
-            .chunks_exact(3)
-            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b]| [r, g, b, 255])
             .collect(),
         png::ColorType::Grayscale => samples.iter().flat_map(|&p| [p, p, p, 255]).collect(),
         png::ColorType::GrayscaleAlpha => samples
-            .chunks_exact(2)
-            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|&[v, a]| [v, v, v, a])
             .collect(),
         png::ColorType::Indexed => return None,
     };
@@ -835,7 +851,7 @@ fn rebuild_pak_with(
     if end_offset < alias_end || end_offset > bytes.len() {
         return Err(PakError::InvalidOffset);
     }
-    for alias in alias_bytes.chunks_exact(4) {
+    for alias in alias_bytes.as_chunks::<4>().0 {
         if usize::from(u16::from_le_bytes([alias[2], alias[3]])) >= resource_count {
             return Err(PakError::InvalidTable);
         }
@@ -917,7 +933,7 @@ fn encode_pak(
     let end32 = u32::try_from(new_end_offset).map_err(|_| PakError::OffsetOverflow)?;
     out.extend_from_slice(&end32.to_le_bytes());
     out.extend_from_slice(alias_bytes);
-    for (_, data) in &resources {
+    for (_, data) in resources {
         out.extend_from_slice(data);
     }
     Ok(out)
@@ -1327,6 +1343,38 @@ mod tests {
             ico: super::CHROMIUM.icons[3].ico,
         };
         assert!(super::verify_pe_icons(&path, &[wrong]).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn upstream_icon_check_accepts_named_only_chrome_exe_and_rejects_missing_mainframe() {
+        let icon = |group| BrandingIcon {
+            group,
+            ico: super::CHROMIUM.icons[0].ico,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("chrome.exe");
+        let dll = dir.path().join("chrome.dll");
+        std::fs::write(&dll, include_bytes!("../payloads/7zip/7z.exe")).unwrap();
+        super::patch_pe_icons(&dll, &[icon(BrandingGroup::Id(101))]).unwrap();
+
+        // Missing IDR_MAINFRAME must fail closed.
+        std::fs::write(&exe, include_bytes!("../payloads/7zip/7z.exe")).unwrap();
+        assert!(matches!(
+            super::check_upstream_icon_groups(dir.path()),
+            Err(crate::browsers::BrowserError::Compatibility(_))
+        ));
+
+        // Upstream shape (152/153): named groups only, no numeric group 100.
+        super::patch_pe_icons(&exe, &[icon(BrandingGroup::Named("IDR_MAINFRAME"))]).unwrap();
+        assert!(super::read_pe_resource(
+            &exe,
+            super::RT_GROUP_ICON,
+            &super::ResName::Id(100),
+            false
+        )
+        .is_err());
+        super::check_upstream_icon_groups(dir.path()).expect("upstream layout is compatible");
     }
 
     /// Builds the bytes `png_dimensions` inspects: the 8-byte signature + an
