@@ -189,6 +189,25 @@ between checks and operations, or a compromised host/portable drive. The existin
 still applies. The bundled extractor remains responsible for its own archive
 format handling; the checks do not execute downloaded installers or browsers.
 
+## Required package signatures
+
+`BrowserFamily::public_key()` is a requirement for detached package-signature
+verification, not a preference. If it returns `Some` (currently Mullvad), both
+GUI and headless install paths reject a release with no signature URL before
+creating a stage or downloading the package. This applies to cached metadata
+too. `updater::verify_package` independently rejects a missing signature file
+even when the SHA-256 or SHA-512 digest matches. An unreadable/invalid signature
+or a failed signature download also aborts before extraction and promotion.
+The active installation, version marker and profile remain intact.
+
+Firefox uses a separate existing chain: its adapter authenticates `SHA256SUMS`
+with the embedded Mozilla key during release resolution, then returns the
+package's digest with no detached package-signing key. Hash-only adapters and
+Bitwarden's additional Authenticode check retain their existing verification
+paths. No trust anchors or extension signature policies change in this fix.
+Tests use local mock HTTP and inert files in owned temporary directories;
+live-upstream compatibility and signing-key freshness are separate checks.
+
 ## Settings and extension preservation
 
 Chromium preference merges accept missing or empty files as first-run state;

@@ -46,16 +46,15 @@ pub fn needs_update(installed: Option<&InstalledVersion>, latest: &VersionInfo) 
 
 /// Verifies a downloaded package before it is extracted.
 ///
-/// A GPG signature is checked when the browser publishes a key and a
-/// signature file was fetched; the SHA-256/512 hash is checked whenever the
-/// upstream publishes one. **Fail-closed:** if neither a GPG signature nor a
-/// hash could actually be verified, the package is rejected rather than
-/// extracted — this guards against, e.g., a separately-fetched sums file that
-/// failed to download (leaving both hashes `None`).
+/// A detached GPG signature is required whenever the adapter exposes a package
+/// signing key. A missing, unreadable or invalid signature cannot fall back to
+/// a hash. The SHA-256/512 hash is also checked whenever published. Adapters
+/// without a package signing key still require verifiable integrity material;
+/// Firefox authenticates its checksum manifest earlier in release resolution.
 ///
 /// # Errors
 /// Returns [`BrowserError::Verification`] if the signature or hash does not
-/// validate, or if no integrity material was available at all, and
+/// validate, a required signature is absent, or no integrity material was available, and
 /// [`BrowserError::Io`] if the package cannot be read.
 pub fn verify_package<B: BrowserFamily + ?Sized>(
     browser: &B,
@@ -73,12 +72,7 @@ pub fn verify_package<B: BrowserFamily + ?Sized>(
             tracing::debug!(browser = browser.id(), "GPG signature verified");
             verified = true;
         }
-        (Some(_), None) => {
-            tracing::warn!(
-                browser = browser.id(),
-                "GPG key is configured but no signature was published; relying on hash only"
-            );
-        }
+        (Some(_), None) => return Err(missing_package_signature(browser.id())),
         (None, _) => {
             tracing::warn!(
                 browser = browser.id(),
@@ -115,6 +109,12 @@ pub fn verify_package<B: BrowserFamily + ?Sized>(
         )));
     }
     Ok(())
+}
+
+fn missing_package_signature(browser_id: &str) -> BrowserError {
+    BrowserError::Verification(format!(
+        "required detached signature missing for {browser_id}; refusing hash-only verification"
+    ))
 }
 
 /// Runs the check → download → verify → extract → prep flow for `browser`.
@@ -206,6 +206,11 @@ pub(crate) async fn download_and_install<B: BrowserFamily>(
 ) -> Result<()> {
     lock.check_install_dir(install_dir)?;
     browser.validate_update(latest)?;
+    // The shared UI/headless path must reject incomplete signature metadata
+    // before downloading or creating a stage, including cached releases.
+    if browser.public_key().is_some() && latest.signature_url.is_none() {
+        return Err(missing_package_signature(browser.id()));
+    }
     let stage_dir = crate::install::stage_dir(install_dir);
     let backup_dir = crate::install::backup_dir(install_dir);
     // Recovery must have removed any stale stage under this same lock.
@@ -735,6 +740,175 @@ mod tests {
         let browser = UngoogledChromium::new(Arch::X64);
         verify_package(&browser, &info, &package, None)
             .expect("a matching hash must pass verification");
+    }
+
+    #[test]
+    fn embedded_key_requires_signature_even_with_a_matching_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("pkg.exe");
+        let contents = b"inert signed-browser package fixture";
+        std::fs::write(&package, contents).unwrap();
+        let browser = crate::browsers::mullvad::Mullvad::new(Arch::X64);
+        assert!(browser.public_key().is_some());
+        for sha512 in [false, true] {
+            let mut info = version_info("2.0", Some(&gpg::sha256::hex(contents)));
+            if sha512 {
+                use sha2::Digest;
+                info.sha256 = None;
+                info.sha512 = Some(hex::encode(sha2::Sha512::digest(contents)));
+            }
+            let error = verify_package(&browser, &info, &package, None)
+                .expect_err("a matching digest cannot replace a required signature");
+            assert!(matches!(error, BrowserError::Verification(_)));
+            assert!(error.to_string().contains("required detached signature"));
+        }
+        assert_eq!(std::fs::read(&package).unwrap(), contents);
+    }
+
+    #[test]
+    fn invalid_or_unreadable_signature_cannot_fall_back_to_matching_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("pkg.exe");
+        let signature = dir.path().join("pkg.sig");
+        let contents = b"inert package fixture";
+        std::fs::write(&package, contents).unwrap();
+        let info = version_info("2.0", Some(&gpg::sha256::hex(contents)));
+        let browser = crate::browsers::mullvad::Mullvad::new(Arch::X64);
+        // A supplied path must not count as a successful signature check.
+        for body in [None, Some(b"not an OpenPGP signature".as_slice())] {
+            if let Some(body) = body {
+                std::fs::write(&signature, body).unwrap();
+            }
+            assert!(matches!(
+                verify_package(&browser, &info, &package, Some(&signature)),
+                Err(BrowserError::Verification(_))
+            ));
+        }
+        assert_eq!(std::fs::read(&package).unwrap(), contents);
+    }
+
+    #[tokio::test]
+    async fn missing_signature_url_stops_before_download_or_stage_creation() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        let package_request = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/pkg.exe");
+                then.status(500); // this must not be reached
+            })
+            .await;
+        let fixture = tempfile::tempdir().unwrap();
+        let install = fixture.path().join("Browser");
+        let profile = fixture.path().join("Data");
+        std::fs::create_dir(&install).unwrap();
+        std::fs::create_dir(&profile).unwrap();
+        std::fs::write(install.join("firefox.exe"), b"working browser").unwrap();
+        std::fs::write(profile.join("sentinel"), b"user data").unwrap();
+        let previous = InstalledVersion {
+            browser_version: "1.0".into(),
+            engine_version: "1.0".into(),
+        };
+        write_version_marker(&install, &previous).unwrap();
+        let lock = crate::install::InstanceLock::acquire(&install).unwrap();
+        let browser = crate::browsers::mullvad::Mullvad::new(Arch::X64);
+        let mut info = version_info("2.0", Some(&gpg::sha256::hex(b"inert fixture")));
+        info.download_url = server.url("/pkg.exe");
+        let (progress, _rx) = watch::channel(0.0);
+        let mut steps = Vec::new();
+        let result = download_and_install(
+            &browser,
+            &install,
+            &info,
+            false,
+            None,
+            progress,
+            |step| steps.push(step),
+            &lock,
+        )
+        .await;
+        assert!(matches!(result, Err(BrowserError::Verification(_))));
+        package_request.assert_calls_async(0).await;
+        assert!(steps.is_empty());
+        assert!(!crate::install::stage_dir(&install).exists());
+        assert!(!crate::install::backup_dir(&install).exists());
+        assert_eq!(
+            browser.installed_version(&install).unwrap().browser_version,
+            "1.0"
+        );
+        assert_eq!(
+            std::fs::read(install.join("firefox.exe")).unwrap(),
+            b"working browser"
+        );
+        assert_eq!(
+            std::fs::read(profile.join("sentinel")).unwrap(),
+            b"user data"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_signature_download_preserves_current_install_and_profile() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        let contents = b"inert package fixture";
+        let package_request = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/pkg.exe");
+                then.status(200).body(contents);
+            })
+            .await;
+        let signature_request = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/pkg.sig");
+                then.status(404);
+            })
+            .await;
+        let fixture = tempfile::tempdir().unwrap();
+        let install = fixture.path().join("Browser");
+        let profile = fixture.path().join("Data");
+        std::fs::create_dir(&install).unwrap();
+        std::fs::create_dir(&profile).unwrap();
+        std::fs::write(install.join("firefox.exe"), b"working browser").unwrap();
+        std::fs::write(profile.join("sentinel"), b"user data").unwrap();
+        let previous = InstalledVersion {
+            browser_version: "1.0".into(),
+            engine_version: "1.0".into(),
+        };
+        write_version_marker(&install, &previous).unwrap();
+        let lock = crate::install::InstanceLock::acquire(&install).unwrap();
+        let browser = crate::browsers::mullvad::Mullvad::new(Arch::X64);
+        let mut info = version_info("2.0", Some(&gpg::sha256::hex(contents)));
+        info.download_url = server.url("/pkg.exe");
+        info.signature_url = Some(server.url("/pkg.sig"));
+        let (progress, _rx) = watch::channel(0.0);
+        let mut steps = Vec::new();
+        let result = download_and_install(
+            &browser,
+            &install,
+            &info,
+            false,
+            None,
+            progress,
+            |step| steps.push(step),
+            &lock,
+        )
+        .await;
+        assert!(result.is_err());
+        package_request.assert_calls_async(1).await;
+        signature_request.assert_calls_async(1).await;
+        assert!(!steps.contains(&InstallStep::Installing));
+        assert!(!crate::install::backup_dir(&install).exists());
+        assert_eq!(
+            browser.installed_version(&install).unwrap().browser_version,
+            "1.0"
+        );
+        assert_eq!(
+            std::fs::read(install.join("firefox.exe")).unwrap(),
+            b"working browser"
+        );
+        assert_eq!(
+            std::fs::read(profile.join("sentinel")).unwrap(),
+            b"user data"
+        );
     }
 
     #[test]
