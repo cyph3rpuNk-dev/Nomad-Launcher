@@ -224,6 +224,40 @@ records advance only after successful promotion. Protocol launch remains free
 of extension provisioning. Tests use inert files, mock HTTP and owned temporary
 folders; they never install an extension into a running browser.
 
+## Network and extraction budgets
+
+All production HTTP clients share `core/src/network.rs`: a 15-second connect
+timeout, a 30-second per-read stall timeout, and a total request deadline of
+60 seconds for metadata or 20 minutes for package/extension-archive transfers.
+These are built-in safeguards, not `nomad.toml` options. Redirect protections
+and signature/digest verification remain required. Metadata includes release
+JSON, signed checksum files, signatures and tag verification responses.
+
+Metadata responses are streamed into buffers capped at 16 MiB; Chromium
+extension ZIP responses use 128 MiB. Both declared lengths and bytes actually
+received are checked, including chunked responses. Package/XPI file downloads
+retain the 1 GiB cap. Metadata connection/timeouts use the existing offline
+fallback; package failures follow the existing error/retry/fallback flow.
+Oversized responses are failures. Failed transfers preserve the prior
+destination and remove only their own partial temporary file. Optional extension
+checks keep their existing graceful failure behavior.
+
+Browser ZIP extraction retains its cumulative 8 GiB decompressed cap; Chromium
+extension ZIP extraction retains 512 MiB. The bundled 7-Zip extraction path now
+has a 10-minute deadline and checks its raw output tree against 8 GiB and
+100,000 entries, before flattening or promotion. The watchdog polls every
+50 milliseconds plus scan time, checks the deadline during traversal, and
+terminates and reaps the owned extractor on failure. Standard streams are
+discarded and the Windows console is hidden. Downloaded installers are never
+executed. A failed staged extraction leaves the active browser/profile intact.
+
+The 7-Zip output cap is observed, not an OS disk quota: writes can overshoot
+between scans, and OS process/filesystem calls can take longer than a deadline.
+ZIP byte caps are enforced while copying; they are not CPU/memory quotas for
+the archive parser. These limits bound individual operations, not the sum of
+several sequential update requests or a hostile host. Tests use delayed local
+HTTP, inert ZIPs, and a child test helper in owned temporary folders.
+
 ## Direct launch versus protocol launch
 
 The registry command uses `"Nomad-<browser>.exe" -- "%1"`. A `--` separator

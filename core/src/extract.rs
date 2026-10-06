@@ -160,11 +160,27 @@ fn extract_zip_with_budget(package: &Path, install_dir: &Path, budget: u64) -> R
 ///
 /// # Errors
 /// Returns [`BrowserError::Extract`] on 7-Zip spawn failure, non-zero exit, or
-/// when `marker_exe` cannot be located in the extracted tree.
+/// when `marker_exe` cannot be located, or an extraction budget/deadline is exceeded.
 pub(crate) fn extract_nsis_with_7zip(
     installer: &Path,
     install_dir: &Path,
     marker_exe: &str,
+) -> Result<()> {
+    extract_nsis_with_limits(
+        installer,
+        install_dir,
+        marker_exe,
+        MAX_DECOMPRESSED_BYTES,
+        std::time::Duration::from_mins(10),
+    )
+}
+
+fn extract_nsis_with_limits(
+    installer: &Path,
+    install_dir: &Path,
+    marker_exe: &str,
+    max_bytes: u64,
+    timeout: std::time::Duration,
 ) -> Result<()> {
     crate::fs_safety::ensure_file(installer)?;
     crate::fs_safety::create_dir_all(install_dir)?;
@@ -177,20 +193,15 @@ pub(crate) fn extract_nsis_with_7zip(
     }
     crate::fs_safety::create_dir_all(&raw_dir)?;
 
-    let status = Command::new(&tools.exe)
+    let mut command = Command::new(&tools.exe);
+    command
         .arg("x")
         .arg(installer)
         .arg(format!("-o{}", raw_dir.display()))
         .arg("-y")
-        .arg("-bso0") // silence stdout
-        .arg("-bse0") // silence stderr
-        .status()
-        .map_err(|e| BrowserError::Extract(format!("failed to spawn 7-Zip: {e}")))?;
-    if !status.success() {
-        return Err(BrowserError::Extract(format!(
-            "7-Zip exited with status {status}"
-        )));
-    }
+        .arg("-bso0")
+        .arg("-bse0");
+    run_bounded_extractor(&mut command, &raw_dir, max_bytes, timeout)?;
 
     crate::fs_safety::ensure_tree(&raw_dir)?;
     let exe_dir = find_marker_dir(&raw_dir, marker_exe)
@@ -210,6 +221,120 @@ pub(crate) fn extract_nsis_with_7zip(
         let _ = std::fs::remove_dir_all(&p);
     }
     Ok(())
+}
+
+/// Poll the owned extractor and its ordinary output tree. This is an observed
+/// size limit, not an OS disk quota: output may overshoot between scans.
+fn run_bounded_extractor(
+    command: &mut Command,
+    output: &Path,
+    max_bytes: u64,
+    timeout: std::time::Duration,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    // Never inherit the UI's console or allow captured pipes to fill up.
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| BrowserError::Extract(format!("failed to spawn extractor: {error}")))?;
+    let result = loop {
+        if let Err(error) = check_extracted_budget(output, max_bytes, deadline) {
+            break Err(error);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Recheck after exit: the last scan can precede the last write.
+                break if status.success() {
+                    check_extracted_budget(output, max_bytes, deadline)
+                } else {
+                    Err(BrowserError::Extract(format!(
+                        "extractor exited with status {status}"
+                    )))
+                };
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(error) => break Err(error.into()),
+        }
+    };
+    if result.is_err() {
+        // Stop and reap before the staging/helper directories may be dropped.
+        // A natural exit between polling and kill is also safe to reap.
+        if let Err(error) = child.kill() {
+            if child.try_wait()?.is_none() {
+                return Err(BrowserError::Extract(format!(
+                    "cannot stop extractor: {error}"
+                )));
+            }
+        }
+        child.wait()?;
+    }
+    result
+}
+
+fn check_extracted_budget(root: &Path, max_bytes: u64, deadline: std::time::Instant) -> Result<()> {
+    check_extracted_budget_with_entries(root, max_bytes, 100_000, deadline)
+}
+
+fn check_extracted_budget_with_entries(
+    root: &Path,
+    max_bytes: u64,
+    max_entries: usize,
+    deadline: std::time::Instant,
+) -> Result<()> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut bytes = 0_u64;
+    let mut entries = 0;
+    while let Some(directory) = pending.pop() {
+        check_extraction_deadline(deadline)?;
+        crate::fs_safety::ensure_directory(&directory)?;
+        for entry in std::fs::read_dir(directory)? {
+            check_extraction_deadline(deadline)?;
+            let path = entry?.path();
+            entries += 1;
+            if entries > max_entries {
+                return Err(BrowserError::Extract(format!(
+                    "extraction exceeds the {max_entries}-entry budget"
+                )));
+            }
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.is_dir() {
+                crate::fs_safety::ensure_directory(&path)?;
+                pending.push(path);
+            } else {
+                crate::fs_safety::ensure_file(&path)?;
+                if !metadata.is_file() {
+                    return Err(BrowserError::Extract(
+                        "extractor produced a non-regular file".into(),
+                    ));
+                }
+                bytes = bytes
+                    .checked_add(metadata.len())
+                    .ok_or_else(|| BrowserError::Extract("extracted-size overflow".into()))?;
+                if bytes > max_bytes {
+                    return Err(BrowserError::Extract(format!(
+                        "extraction exceeds the {max_bytes} B budget"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_extraction_deadline(deadline: std::time::Instant) -> Result<()> {
+    if std::time::Instant::now() >= deadline {
+        Err(BrowserError::Extract("extraction deadline exceeded".into()))
+    } else {
+        Ok(())
+    }
 }
 
 /// Moves every entry of `install_dir/<subdir>/` up into `install_dir/` and
@@ -412,6 +537,152 @@ fn flatten_into(src: &Path, dest: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+
+    // Child runs this same inert test helper, never an installer or browser.
+    #[test]
+    fn extractor_process_fixture() {
+        let Some(output) = std::env::var_os("NOMAD_EXTRACTOR_TEST_OUTPUT") else {
+            return;
+        };
+        let mode = std::env::var("NOMAD_EXTRACTOR_TEST_MODE").unwrap();
+        if mode == "oversize" {
+            std::fs::write(Path::new(&output).join("inert.bin"), [0; 512]).unwrap();
+        }
+        if mode == "exit-oversize" {
+            std::fs::write(Path::new(&output).join("inert.bin"), [0; 512]).unwrap();
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        // Kill/reap must prevent this delayed write, even after failure returns.
+        std::fs::write(Path::new(&output).join("still-running"), b"bad").unwrap();
+    }
+
+    fn fixture_command(output: &Path, mode: &str) -> Command {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "extract::tests::extractor_process_fixture"])
+            .env("NOMAD_EXTRACTOR_TEST_OUTPUT", output)
+            .env("NOMAD_EXTRACTOR_TEST_MODE", mode);
+        command
+    }
+
+    #[test]
+    fn extractor_deadline_kills_and_reaps_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let start = std::time::Instant::now();
+        let mut command = fixture_command(dir.path(), "sleep");
+        let error = run_bounded_extractor(
+            &mut command,
+            dir.path(),
+            1024,
+            std::time::Duration::from_millis(100),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("deadline"));
+        assert!(start.elapsed() < std::time::Duration::from_secs(4));
+        assert!(!dir.path().join("still-running").exists());
+        // Removing the directory after reaping cannot race with a live writer.
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn extractor_budget_kills_and_reaps_running_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = fixture_command(dir.path(), "oversize");
+        let error = run_bounded_extractor(
+            &mut command,
+            dir.path(),
+            64,
+            std::time::Duration::from_secs(4),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("budget"));
+        assert!(!dir.path().join("still-running").exists());
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn successful_extractor_exit_still_checks_final_output_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = fixture_command(dir.path(), "exit-oversize");
+        assert!(run_bounded_extractor(
+            &mut command,
+            dir.path(),
+            64,
+            std::time::Duration::from_secs(4)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn zero_length_files_still_consume_the_entry_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("one"), b"").unwrap();
+        std::fs::write(dir.path().join("two"), b"").unwrap();
+        let error = check_extracted_budget_with_entries(
+            dir.path(),
+            1024,
+            1,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("entry budget"));
+    }
+
+    #[test]
+    fn extractor_nonzero_exit_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.arg("--not-a-test-harness-option");
+        assert!(run_bounded_extractor(
+            &mut command,
+            dir.path(),
+            1024,
+            std::time::Duration::from_secs(4)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn bundled_extraction_rejects_output_over_the_budget_before_promotion() {
+        let fixture = tempfile::tempdir().unwrap();
+        let archive = fixture.path().join("pkg.zip");
+        let output = fixture.path().join("Browser.stage");
+        let active = fixture.path().join("Browser");
+        let profile = fixture.path().join("Data");
+        std::fs::create_dir(&active).unwrap();
+        std::fs::create_dir(&profile).unwrap();
+        std::fs::write(active.join("firefox.exe"), b"working browser").unwrap();
+        std::fs::write(profile.join("sentinel"), b"user data").unwrap();
+        let mut zip = zip::ZipWriter::new(File::create(&archive).unwrap());
+        zip.start_file(
+            "bundle/firefox.exe",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(&[b'x'; 512]).unwrap();
+        zip.finish().unwrap();
+        let result = extract_nsis_with_limits(
+            &archive,
+            &output,
+            "firefox.exe",
+            64,
+            std::time::Duration::from_secs(10),
+        );
+        assert!(
+            result.is_err(),
+            "over-budget extracted output must not be promoted"
+        );
+        assert!(!output.join("firefox.exe").exists());
+        assert_eq!(
+            std::fs::read(active.join("firefox.exe")).unwrap(),
+            b"working browser"
+        );
+        assert_eq!(
+            std::fs::read(profile.join("sentinel")).unwrap(),
+            b"user data"
+        );
+    }
 
     #[test]
     fn archive_promotion_rejects_linked_sources_without_removing_them() {

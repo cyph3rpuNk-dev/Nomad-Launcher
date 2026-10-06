@@ -11,8 +11,8 @@ use std::process::Command;
 use serde::Deserialize;
 
 use super::{
-    github::map_network_err, read_version_marker, BrowserError, BrowserFamily, Engine, Hardening,
-    InstalledVersion, ProgressSink, Result, VersionInfo,
+    read_version_marker, BrowserError, BrowserFamily, Engine, Hardening, InstalledVersion,
+    ProgressSink, Result, VersionInfo,
 };
 use crate::config::Arch;
 use crate::extensions::{stage_chromium_ubo_from_gorhill_zip, staged_ubo_dir};
@@ -240,21 +240,8 @@ impl BrowserFamily for UngoogledChromium {
     }
 
     async fn fetch_latest_version(&self) -> Result<VersionInfo> {
-        let client = reqwest::Client::builder()
-            .user_agent("nomad-portable")
-            .redirect(crate::downloader::redirect_policy())
-            .build()
-            .map_err(|e| BrowserError::Network(e.to_string()))?;
-        let body = client
-            .get(&self.releases_url)
-            .send()
-            .await
-            .map_err(map_network_err)?
-            .error_for_status()
-            .map_err(map_network_err)?
-            .text()
-            .await
-            .map_err(map_network_err)?;
+        let client = super::github::build_client()?;
+        let body = crate::network::fetch_text(&client, &self.releases_url).await?;
         let release: Release =
             serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))?;
         parse_release(&release, self.arch)
@@ -619,7 +606,7 @@ async fn update_ubo_from_gorhill(
         url = asset.browser_download_url,
         "downloading gorhill uBO zip (release tag GPG-verified, asset provenance checked)"
     );
-    let zip_bytes = super::github::fetch_raw(&client, &asset.browser_download_url).await?;
+    let zip_bytes = super::github::fetch_archive(&client, &asset.browser_download_url).await?;
 
     stage_chromium_ubo_from_gorhill_zip(install_dir, &zip_bytes, &upstream_version)?;
     crate::version_cache::update_ubo_version(cache_path, &upstream_version);
@@ -641,48 +628,21 @@ async fn fetch_gorhill_tag_verification(
     tag: &str,
 ) -> Result<Option<GitTagVerification>> {
     let tag_ref_url = format!("{api_base_url}/git/refs/tags/{tag}");
-    let body = client
-        .get(&tag_ref_url)
-        .send()
-        .await
-        .map_err(super::github::map_network_err)?
-        .error_for_status()
-        .map_err(super::github::map_network_err)?
-        .text()
-        .await
-        .map_err(super::github::map_network_err)?;
+    let body = crate::network::fetch_text(client, &tag_ref_url).await?;
     let tag_ref: GitTagRef =
         serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))?;
 
     match tag_ref.object.object_type.as_str() {
         "commit" => {
             let url = format!("{api_base_url}/commits/{}", tag_ref.object.sha);
-            let body = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(super::github::map_network_err)?
-                .error_for_status()
-                .map_err(super::github::map_network_err)?
-                .text()
-                .await
-                .map_err(super::github::map_network_err)?;
+            let body = crate::network::fetch_text(client, &url).await?;
             let commit: GitCommitResponse =
                 serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))?;
             Ok(commit.commit.verification)
         }
         "tag" => {
             let url = format!("{api_base_url}/git/tags/{}", tag_ref.object.sha);
-            let body = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(super::github::map_network_err)?
-                .error_for_status()
-                .map_err(super::github::map_network_err)?
-                .text()
-                .await
-                .map_err(super::github::map_network_err)?;
+            let body = crate::network::fetch_text(client, &url).await?;
             let tag_obj: GitTagObject =
                 serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))?;
             Ok(tag_obj.verification)
