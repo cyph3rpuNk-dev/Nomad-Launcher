@@ -349,6 +349,10 @@ impl BrowserFamily for UngoogledChromium {
         Ok(())
     }
 
+    fn preserve_state_across_update(&self, current_install: &Path, stage_dir: &Path) -> Result<()> {
+        crate::extensions::preserve_chromium_ubo(current_install, stage_dir)
+    }
+
     fn profile_dir(&self, install_dir: &Path) -> Option<std::path::PathBuf> {
         install_dir.parent().map(|base| base.join("Data"))
     }

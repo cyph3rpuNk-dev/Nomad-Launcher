@@ -189,6 +189,41 @@ between checks and operations, or a compromised host/portable drive. The existin
 still applies. The bundled extractor remains responsible for its own archive
 format handling; the checks do not execute downloaded installers or browsers.
 
+## Settings and extension preservation
+
+Chromium preference merges accept missing or empty files as first-run state;
+other read errors and invalid existing JSON stop the write. An unreadable file
+must never be silently replaced with defaults. Hardening writers prepare and
+flush a complete replacement in an exclusively created sibling directory before
+promoting it. The old settings file is never opened for truncation. Replacement
+is per file; two separate settings files are not a multi-file transaction.
+
+Windows replacement uses [ReplaceFileW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew)
+with metadata/ACL preservation and an owned backup path. Documented native
+failures can move the original to the backup; Nomad attempts restoration before
+cleaning up. A failed restoration retains the private directory and reports the
+original's location. Read-only settings remain untouched. These checks do not
+serialize writes by a running browser or protect against a hostile drive writer.
+
+Chromium uBlock updates extract into `uBlock0.stage`, enforce the decompressed
+budget and ordinary-path checks, and require a parseable manifest with a nonempty
+version before touching the active `uBlock0` directory. This is a minimum layout
+check, not a full Chromium manifest/schema or runtime validation. An OS file lock
+serializes extension transactions. The old directory moves to `uBlock0.backup`
+only for promotion; a failed promotion attempts rollback and never discards the
+remaining backup. Interrupted swaps restore a valid backup on the next update.
+The launch path can use that valid backup if the current directory is unavailable.
+The browser-update preserve-state hook also carries the working extension into
+the staged browser so a subsequent offline check does not erase it.
+
+Gecko XPI downloads likewise go into an owned private stage. The existing
+signature-file sanity check must pass before replacement. This does not add
+cryptographic Mozilla signature verification. Failed download, verification or
+promotion leaves the prior XPI and extension version cache unchanged; version
+records advance only after successful promotion. Protocol launch remains free
+of extension provisioning. Tests use inert files, mock HTTP and owned temporary
+folders; they never install an extension into a running browser.
+
 ## Direct launch versus protocol launch
 
 The registry command uses `"Nomad-<browser>.exe" -- "%1"`. A `--` separator
