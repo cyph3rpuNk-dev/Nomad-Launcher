@@ -449,7 +449,7 @@ A narrow window containing two stacked cards and a footer link.
 ### Behavior
 - **Auto-close** — once the browser process is spawned, the window closes itself automatically. No user interaction is required on the happy path.
 - **Update available, `auto_download = false`** — the status block shows the new version with two buttons: "Update" and "Launch current". The window waits for the user.
-- **Error** — on any failure (network, GPG, hash, extract) the window does *not* auto-close. It shows the error message and offers "Retry" and, where a usable install already exists, "Launch anyway" and "Close".
+- **Error** — on any failure (network, GPG, hash, extract) the window does *not* auto-close. It shows the error message and offers "Retry" and, where a usable install already exists, "Launch anyway" and "Close". If fallback process creation fails, the error remains visible with Retry/Close only; no cleanup watcher starts and success is not signaled. Retry returns to the existing pipeline loop. Successful process creation retains the normal auto-close behavior; it does not prove the browser completed startup.
 
 ### Taskbar progress
 While the window is open and a download is active, the taskbar button shows the Windows progress overlay via `ITaskbarList3` (`TBPF_NORMAL` during download → `TBPF_NOPROGRESS` on completion → `TBPF_ERROR` on failure).
