@@ -243,6 +243,26 @@ records advance only after successful promotion. Protocol launch remains free
 of extension provisioning. Tests use inert files, mock HTTP and owned temporary
 folders; they never install an extension into a running browser.
 
+## Chromium hardening toggle and first-run settings
+
+Helium and Ungoogled Chromium seed `preferences.json` into
+`Browser/initial_preferences` only when `[hardening] enabled = true`. Disabled
+hardening writes the base developer-mode template; Helium additionally forces
+its built-in browser updater off, independently of privacy hardening. This
+matches the existing gating of Chromium privacy flags and profile-state seeds.
+The portable profile/storage switches remain required in either mode.
+
+Launch preparation rewrites the first-run seed on every attempt, including
+true-to-false toggles, so stale privacy defaults cannot reach a future fresh
+profile. Parse/write errors propagate and block preparation; the atomic writer
+preserves the old seed on replacement failure. Chromium consults this seed for
+new profiles. Disabling hardening does not reset values already saved in an
+existing profile, because Nomad cannot distinguish past defaults from the
+user's own choices. Existing preferences survive preparation except for
+Helium's mandatory updater-disable field. Tests cover fresh/existing profiles,
+false/true/false toggles, and read-only replacement failures using inert owned
+temporary files. Actual browser first-run behavior has not been retested here.
+
 ## Network and extraction budgets
 
 All production HTTP clients share `core/src/network.rs`: a 15-second connect

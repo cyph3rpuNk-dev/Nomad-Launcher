@@ -301,36 +301,18 @@ impl BrowserFamily for UngoogledChromium {
     fn prepare_launch(
         &self,
         install_dir: &Path,
-        _hardening_config: crate::config::HardeningConfig,
+        hardening_config: crate::config::HardeningConfig,
     ) -> Result<()> {
-        // Drop `initial_preferences` next to chrome.exe so freshly created
-        // profiles start with Developer mode = ON (required for the toggle in
-        // chrome://extensions to be visibly enabled) *and* the profile-pref
-        // hardening (PREFERENCES). Chromium regenerates Default/Preferences from
-        // initial_preferences on first run, so prefs must travel through here to
-        // be active on the first launch rather than only the second.
-        let initial_prefs =
-            match crate::hardening::build_initial_preferences(INITIAL_PREFERENCES, PREFERENCES) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!(
-                        browser = self.id(),
-                        error = %e,
-                        "failed to merge profile prefs into initial_preferences; \
-                         falling back to template (first-run profile hardening will not apply)"
-                    );
-                    INITIAL_PREFERENCES.to_owned()
-                }
-            };
-        if let Err(e) =
-            crate::hardening::write_chromium_initial_preferences(install_dir, &initial_prefs)
-        {
-            tracing::warn!(
-                browser = self.id(),
-                error = %e,
-                "failed to write initial_preferences; new profiles will start with Developer mode off"
-            );
-        }
+        // Chromium regenerates new profiles from this template. Gate privacy
+        // defaults on the same toggle as the profile seed; keep Developer mode
+        // from the base template in either case. Rewrite on each preparation
+        // so disabling hardening also clears a stale hardened first-run seed.
+        let initial_prefs = if hardening_config.enabled {
+            crate::hardening::build_initial_preferences(INITIAL_PREFERENCES, PREFERENCES)?
+        } else {
+            INITIAL_PREFERENCES.to_owned()
+        };
+        crate::hardening::write_chromium_initial_preferences(install_dir, &initial_prefs)?;
         // uBO is staged in fetch_extension_updates (async, GPG-verified download
         // from gorhill/uBlock). Nothing synchronous to stage here.
         Ok(())
@@ -1030,6 +1012,94 @@ mod tests {
         assert_eq!(
             v["net"]["network_prediction_options"], 2,
             "first-run profile must disable network prediction (nested net.* key)"
+        );
+    }
+
+    #[test]
+    fn prepare_launch_respects_hardening_toggle_in_initial_preferences() {
+        for existing_profile in [false, true] {
+            let fixture = tempfile::tempdir().unwrap();
+            let install = fixture.path().join("Browser");
+            let profile = fixture.path().join("Data/Default/Preferences");
+            let user_prefs = br#"{"homepage":"keep","enable_do_not_track":false,"custom":[1,2]}"#;
+            if existing_profile {
+                std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+                std::fs::write(&profile, user_prefs).unwrap();
+            }
+            let browser = UngoogledChromium::new(Arch::X64);
+            // Starts unhardened, enables hardening, then removes the stale
+            // first-run privacy payload again. No real browser is launched.
+            for enabled in [false, true, false] {
+                let config = crate::config::HardeningConfig {
+                    enabled,
+                    ..Default::default()
+                };
+                browser.prepare_launch(&install, config).unwrap();
+                let initial: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(install.join("initial_preferences")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(initial["extensions"]["ui"]["developer_mode"], true);
+                if enabled {
+                    assert_eq!(initial["https_only_mode_enabled"], true);
+                    assert_eq!(initial["safebrowsing"]["enabled"], false);
+                    assert_eq!(initial["profile"]["cookie_controls_mode"], 1);
+                } else {
+                    assert_eq!(
+                        initial,
+                        serde_json::json!({"extensions":{"ui":{"developer_mode":true}}}),
+                        "disabled hardening must not seed privacy defaults"
+                    );
+                }
+                if existing_profile {
+                    let actual: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&profile).unwrap()).unwrap();
+                    let expected: serde_json::Value = serde_json::from_slice(user_prefs).unwrap();
+
+                    assert_eq!(
+                        actual, expected,
+                        "existing user settings must survive the toggle"
+                    );
+                } else {
+                    assert!(
+                        !fixture.path().join("Data").exists(),
+                        "leave new profile creation to Chromium"
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepare_launch_rejects_failed_toggle_write_and_preserves_old_seed() {
+        let fixture = tempfile::tempdir().unwrap();
+        let install = fixture.path().join("Browser");
+        let browser = UngoogledChromium::new(Arch::X64);
+        browser
+            .prepare_launch(&install, crate::config::HardeningConfig::default())
+            .unwrap();
+        let path = install.join("initial_preferences");
+        let original = std::fs::read(&path).unwrap();
+        let permissions = std::fs::metadata(&path).unwrap().permissions();
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(&path, readonly).unwrap();
+        let config = crate::config::HardeningConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let result = browser.prepare_launch(&install, config);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        assert!(
+            result.is_err(),
+            "a stale hardened template must not silently survive disabling hardening"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(
+            std::fs::read_dir(&install).unwrap().count(),
+            1,
+            "private write stage must be cleaned"
         );
     }
 
