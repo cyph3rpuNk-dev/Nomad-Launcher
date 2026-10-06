@@ -380,8 +380,10 @@ pub trait BrowserFamily: Send + Sync {
     /// writing a version marker. Additional validation hooks cannot bypass it.
     fn staged_install_layout(&self) -> StagedInstallLayout;
 
-    /// Embedded ASCII-armored GPG public key, or `None` when the upstream
-    /// publishes no detached signature (verification is then SHA-256 only).
+    /// Embedded ASCII-armored package-signing key. `Some` requires a detached
+    /// package signature; missing signatures must never fall back to a hash.
+    /// `None` uses the adapter's hash/other verification path (Firefox verifies
+    /// a signed checksum manifest before returning release metadata).
     fn public_key(&self) -> Option<&'static [u8]>;
 
     /// Reads the version metadata of the installation in `install_dir`,

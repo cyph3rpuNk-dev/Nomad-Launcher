@@ -165,7 +165,7 @@ pub trait BrowserFamily: Send + Sync {
 ```
 
 - `Engine` is `Chromium`, `Gecko`, or `Electron`. `Electron` (Bitwarden's desktop app) exists so the Chromium/Gecko launch-flag injection in `build_launch_args` never fires for a non-browser app.
-- `public_key()` returns `None` for browsers whose upstream does not publish GPG signatures; verification then falls back to SHA-256 (or SHA-512 for Waterfox), plus Authenticode signer pinning for Bitwarden.
+- `public_key()` exposes a detached package-signing key: `Some` requires the package signature, and a missing signature cannot fall back to a hash. `None` uses the adapter's hash/other verification path, plus Authenticode signer pinning for Bitwarden. Firefox returns `None` here because it authenticates its checksum manifest during release resolution.
 - `VersionInfo` carries: browser version, underlying engine version, download URL, optional signature URL, optional SHA-256 hash, optional SHA-512 hash.
 - `InstalledVersion` carries the browser version and engine version parsed from the local install.
 - `hardening()` returns the browser's privacy-hardening payload (see §5): `Hardening::LaunchFlags { flags, local_state, preferences }` for Chromium-family browsers (flags appended at launch, JSON state seeded), `Hardening::GeckoProfile { user_js, policies, autoconfig, cfg, ublock_xpi_releases_url }` for Gecko-family browsers (files written into the install).
@@ -477,15 +477,17 @@ nomad-<browser>.exe started
   │     └── on "Update" (or auto_download == true): go to DOWNLOAD
   │
   DOWNLOAD:
+  ├── require a signature URL when public_key() is Some:
+  │     missing → verification error before stage creation/download
   ├── status: "Downloading <version>…"   (progress bar driven by ProgressSink)
   │     downloader::fetch(url)  →  {tmp_pkg}
   │     if VersionInfo has a signature URL:
   │       downloader::fetch(sig_url)  →  {tmp_sig}
   ├── status: "Verifying signature…"
-  │     if public_key() is Some and a signature was fetched:
-  │       gpg::verify(tmp_pkg, tmp_sig, public_key())
-  │         Err  →  delete tmp files, show error state
-  │     else: log WARN "no GPG signature; SHA-256 only"
+  │     if public_key() is Some:
+  │       require tmp_sig and gpg::verify(tmp_pkg, tmp_sig, public_key())
+  │         missing/unreadable/invalid → error, no extraction or swap
+  │     else: use the adapter's hash/other verification path
   │     sha256::verify(tmp_pkg, expected_hash)
   │       Err  →  delete tmp files, show error state
   ├── status: "Extracting…"
@@ -511,7 +513,7 @@ Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are 
 ## 9. Signature & Hash Verification
 
 - Every download is verified against the expected SHA-256 hash before extraction.
-- Where the upstream publishes a GPG detached signature, the package is additionally verified against an embedded ASCII-armored public key using the `pgp` crate (pure Rust, MIT/Apache-2.0).
+- An adapter exposing a package-signing key requires a valid GPG detached package signature, verified with `pgp` against the embedded key. Missing signature metadata is rejected before stage creation/download; failed downloads and unreadable/invalid signatures abort before extraction. A matching hash cannot bypass this requirement. Firefox instead verifies the GPG signature over `SHA256SUMS` during release resolution, then verifies the downloaded package against that authenticated digest.
 - **GPG-verified browsers:** Firefox Stable, Firefox ESR (Mozilla release key) and Mullvad Browser (Tor Browser Developers key, plus the SHA-256 GitHub asset digest). Keys are embedded into `nomad-core` via `include_bytes!` from `core/keys/<browser>.asc`.
 - **Authenticode-verified apps:** Bitwarden. It publishes no GPG key, so in addition to the SHA-256 GitHub asset digest, `core/src/authenticode.rs` runs `WinVerifyTrust` (generic-verify policy, no UI, whole-chain revocation checking with a no-revocation fallback when the revocation status is undeterminable) and extracts the signer certificate's subject via `CryptQueryObject`/`CryptMsgGetParam`/`CertGetNameStringW`; the subject must equal `Bitwarden Inc.` (case-insensitive) or the package is rejected before staging. This is a publisher pin on top of the byte pin — the spirit of GPG verification for an artifact with no GPG key. Windows-only; `unsafe` is confined behind a safe wrapper.
 - **Hash-only browsers:** ungoogled-chromium, Floorp, Helium, LibreWolf (SHA-256) and Waterfox (SHA-512, from the `.sha512` file published beside each CDN installer). For these, `public_key()` returns `None`, `verify_signature` is not invoked, and the absence of a GPG signature is logged at `WARN` level on every download. For GitHub-released browsers the SHA-256 hash is taken from the release asset's `digest` field (`sha256:…`) recorded by GitHub. If no hash is available from any source, the package is rejected (fail-closed; see `updater::verify_package`).
