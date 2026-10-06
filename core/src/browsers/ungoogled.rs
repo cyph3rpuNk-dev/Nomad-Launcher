@@ -1431,7 +1431,7 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
                 .await
                 .expect("already-current must not error");
             assert_eq!(
-                tag_ref_mock.hits(),
+                tag_ref_mock.calls(),
                 0,
                 "no further API calls when already current and staged"
             );
@@ -1496,7 +1496,7 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
                 .await
                 .expect("deferred update must not error");
             assert_eq!(
-                tag_ref_mock.hits(),
+                tag_ref_mock.calls(),
                 0,
                 "no GPG/download when auto_download = false"
             );
