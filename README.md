@@ -119,7 +119,23 @@ Nomad applies an opinionated privacy baseline intended for general browsing.
 Some defaults intentionally trade functionality for privacy; review the
 trade-offs below. To manage the browser yourself, set `[hardening] enabled = false`.
 
-Turning it off removes the privacy settings but not the portability ones. On Chromium the browser still starts on the portable profile with machine-ID binding, DPAPI encryption, and TPM session binding switched off, because those three decide how the profile is stored rather than how private it is. Changing them on an existing profile makes Chromium discard your extensions and sign you out of everything, so they are applied the same way whichever position the toggle is in. On Gecko, the `user.js` block and the locked preference file that Nomad wrote are removed, and anything you added yourself is left in place. `policies.json` stays, because nothing in it breaks a site and it is what installs uBlock Origin.
+Turning it off stops applying privacy defaults and launch flags while keeping
+portability settings. For new Chromium profiles, `initial_preferences` contains
+privacy defaults only while hardening is enabled. Switching it off replaces
+that seed with developer mode and, for Helium, the disabled browser updater.
+If the seed cannot be updated, launch preparation fails. Existing Chromium
+profile preferences are not automatically reset; change previously saved
+values through the browser settings.
+
+Chromium still starts on the portable profile with machine-ID binding, DPAPI
+encryption, and TPM session binding switched off. These control how the profile
+is stored. Changing them on an existing profile makes Chromium discard your
+extensions and sign you out, so they are applied whichever position the
+hardening toggle is in.
+
+On Gecko, the `user.js` block and locked preference file that Nomad wrote are
+removed, and anything you added yourself is left in place. `policies.json`
+stays, because nothing in it breaks a site and it is what installs uBlock Origin.
 
 What each browser family gets:
 
