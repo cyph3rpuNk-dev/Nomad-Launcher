@@ -192,7 +192,8 @@ struct NomadWindow {
 }
 
 impl eframe::App for NomadWindow {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         // Snapshot state without holding the lock during rendering.
         let (phase, view) = {
             let (lock, _) = &*self.state;
@@ -248,7 +249,7 @@ impl eframe::App for NomadWindow {
                     .fill(theme::BG)
                     .inner_margin(egui::Margin::same(8)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.set_min_width(340.0);
 
                 identity::identity_card(ui, &view, self.logo.as_ref());
@@ -264,7 +265,7 @@ impl eframe::App for NomadWindow {
                         message,
                         has_fallback,
                     } => {
-                        self.render_error(ui, ctx, message, *has_fallback);
+                        self.render_error(ui, &ctx, message, *has_fallback);
                     }
                     _ => {
                         footer(
@@ -659,6 +660,36 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_font_renders_with_the_updated_font_backend() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        setup_visuals(&ctx, theme::ACCENT);
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for font in [
+                egui::FontId::proportional(15.0),
+                egui::FontId::monospace(15.0),
+            ] {
+                let galley = ui.painter().layout_no_wrap(
+                    "Nomad Launcher 1.0.8 — Firefox".to_owned(),
+                    font,
+                    theme::TEXT_PRIMARY,
+                );
+                assert!(galley.size().x > 0.0 && galley.size().y > 0.0);
+                ui.painter()
+                    .galley(egui::Pos2::ZERO, galley, theme::TEXT_PRIMARY);
+            }
+        });
+        let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+        assert!(
+            primitives.iter().any(|primitive| matches!(
+                &primitive.primitive,
+                egui::epaint::Primitive::Mesh(mesh) if !mesh.vertices.is_empty()
+            )),
+            "the bundled font must produce drawable glyph geometry without a GPU"
+        );
+    }
 
     #[test]
     fn embedded_nomad_emblem_decodes() {

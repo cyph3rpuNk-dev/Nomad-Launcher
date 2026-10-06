@@ -35,3 +35,18 @@ The launcher binaries are intentionally not Authenticode-signed; the GPG-signed 
 - **Write access to the portable drive.** The launcher, browser, and profile are not integrity-protected at rest, and Chromium profile encryption (DPAPI) is disabled for portability. Anyone who can write to the drive can compromise it; keep it on an encrypted volume.
 - **Network-level anonymity.** The hardening reduces fingerprinting and tracking. It does not hide your IP address or your traffic from the network operator. Use a VPN or Tor Browser for anonymity.
 - **Unsigned upstreams.** LibreWolf, Floorp, Waterfox, Ungoogled Chromium, and Helium publish no usable signing key, so their integrity chain is TLS to the distribution host plus the hash that host publishes. There is no publisher key to pin because none exists.
+
+## Dependency audit policy
+
+The canonical gate runs `cargo audit --deny warnings`, including yanked-crate
+checks. Unmaintained, unsound, and yanked dependency findings fail validation.
+`scripts/test-audit-gate.ps1` exercises clean and failure cases with mocked
+Cargo calls, so it requires no network or provisioning.
+
+The only advisory exception is `RUSTSEC-2023-0071` (`rsa`, the Marvin private-key
+timing attack). Nomad's production OpenPGP path verifies detached signatures
+with public keys; it does not decrypt or perform RSA private-key operations.
+Upstream has no patched release. Re-evaluate this exception if cryptographic
+usage changes or a fixed release becomes available. Signature verification is
+retained. The previous `quick-xml` exceptions were removed after upgrading its
+dependency paths to patched releases.

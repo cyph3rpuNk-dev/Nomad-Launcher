@@ -26,6 +26,9 @@ try {
     }
 
     if (-not $AuditOnly) {
+        Invoke-GateStep 'Audit gate regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-audit-gate.ps1')
+        }
         Invoke-GateStep 'Formatting' {
             cargo fmt --all -- --check
         }
@@ -43,10 +46,9 @@ try {
             throw 'cargo-audit is required. Install it with: cargo install cargo-audit --locked'
         }
         Invoke-GateStep 'Dependency advisories' {
-            cargo audit `
-                --ignore RUSTSEC-2023-0071 `
-                --ignore RUSTSEC-2026-0194 `
-                --ignore RUSTSEC-2026-0195
+            # RSA is used only for public-key signature verification. The
+            # unfixed private-key timing advisory is documented in SECURITY.md.
+            cargo audit --deny warnings --ignore RUSTSEC-2023-0071
         }
     }
 

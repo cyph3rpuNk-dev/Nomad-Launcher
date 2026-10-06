@@ -187,7 +187,7 @@ was enabled, close the browser, and then delete the entire portable folder.
 
 ## Building from source
 
-Requires Rust 1.88+ on Windows 10/11.
+Requires Rust 1.92+ on Windows 10/11.
 
 ```powershell
 pwsh -NoProfile -File scripts/check.ps1  # canonical local/CI validation gate
@@ -198,7 +198,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 The repository uses rolling stable for development and separately checks the
-declared Rust 1.88 minimum supported version in CI.
+declared Rust 1.92 minimum supported version in CI. The dependency gate treats
+all audit warnings, including yanked crates, as failures. Its sole documented
+advisory exception is the verification-only RSA timing finding; see
+[Dependency audit policy](SECURITY.md#dependency-audit-policy).
 
 `dist.ps1` also writes a `SHA256SUMS` manifest and, when `NOMAD_SIGNING_KEY` is set, a detached `SHA256SUMS.asc` signature.
 

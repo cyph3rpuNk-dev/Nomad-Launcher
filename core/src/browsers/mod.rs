@@ -725,7 +725,7 @@ mod tests {
             .await
             .expect("must not fail when already current");
         assert_eq!(
-            download_mock.hits(),
+            download_mock.calls(),
             0,
             "download must not be requested when XPI is current"
         );
