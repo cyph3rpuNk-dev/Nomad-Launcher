@@ -110,6 +110,10 @@ impl BrowserFamily for Mullvad {
         Engine::Gecko
     }
 
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::Gecko(EXECUTABLE)
+    }
+
     fn public_key(&self) -> Option<&'static [u8]> {
         if MULLVAD_KEY.is_empty() {
             None

@@ -163,6 +163,10 @@ impl BrowserFamily for Helium {
         Engine::Chromium
     }
 
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::Chromium(EXECUTABLE)
+    }
+
     fn public_key(&self) -> Option<&'static [u8]> {
         if HELIUM_KEY.is_empty() {
             None
@@ -384,6 +388,159 @@ mod tests {
 
     use super::super::{write_version_marker, BrowserError, InstalledVersion};
     use super::*;
+
+    #[tokio::test]
+    async fn authenticated_incomplete_archive_preserves_working_install() {
+        use std::io::Write;
+        let server = MockServer::start_async().await;
+        let mut archive = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut archive);
+            zip.start_file(
+                "helium/README.txt",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(b"authenticated archive with no browser")
+                .unwrap();
+            zip.finish().unwrap();
+        }
+        let bytes = archive.into_inner();
+        let digest = crate::gpg::sha256::hex(&bytes);
+        let package = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/helium.zip");
+                then.status(200).body(&bytes);
+            })
+            .await;
+        let release = serde_json::json!({
+            "tag_name": "2.0", "assets": [{
+                "name": "helium-2.0-windows-x64.zip",
+                "browser_download_url": server.url("/helium.zip"),
+                "digest": format!("sha256:{digest}")
+            }]
+        });
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/latest");
+                then.status(200).body(release.to_string());
+            })
+            .await;
+        let temp = tempfile::tempdir().unwrap();
+        let install = temp.path().join("Browser");
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::create_dir_all(temp.path().join("Data")).unwrap();
+        std::fs::write(install.join("chrome.exe"), b"working browser").unwrap();
+        write_version_marker(
+            &install,
+            &InstalledVersion {
+                browser_version: "1.0".into(),
+                engine_version: "1.0".into(),
+            },
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("Data/profile"), b"user data").unwrap();
+        let browser = browser_for_server(&server, Arch::X64);
+        let result = crate::updater::update(
+            &browser,
+            &install,
+            crate::updater::UpdateOptions {
+                check_on_launch: true,
+                auto_download: true,
+            },
+        )
+        .await;
+        assert!(
+            matches!(result, Err(BrowserError::Compatibility(_))),
+            "got {result:?}"
+        );
+        assert_eq!(
+            std::fs::read(install.join("chrome.exe")).unwrap(),
+            b"working browser"
+        );
+        assert_eq!(
+            browser.installed_version(&install).unwrap().browser_version,
+            "1.0"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("Data/profile")).unwrap(),
+            b"user data"
+        );
+        assert!(!crate::install::backup_dir(&install).exists());
+        assert!(!crate::install::stage_dir(&install)
+            .join(".nomad-version")
+            .exists());
+        package.assert_calls_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_complete_archive_installs_without_launching() {
+        use std::io::Write;
+        let server = MockServer::start_async().await;
+        let mut archive = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut archive);
+            for name in [
+                "chrome.exe",
+                "chrome.dll",
+                "resources.pak",
+                "icudtl.dat",
+                "chrome_100_percent.pak",
+                "chrome_200_percent.pak",
+            ] {
+                zip.start_file(
+                    format!("helium/{name}"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+                zip.write_all(b"inert fixture; never executed").unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let bytes = archive.into_inner();
+        let digest = crate::gpg::sha256::hex(&bytes);
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/helium.zip");
+                then.status(200).body(&bytes);
+            })
+            .await;
+        let release = serde_json::json!({ "tag_name": "2.0", "assets": [{
+            "name": "helium-2.0-windows-x64.zip", "browser_download_url": server.url("/helium.zip"),
+            "digest": format!("sha256:{digest}")
+        }]});
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/latest");
+                then.status(200).body(release.to_string());
+            })
+            .await;
+        let temp = tempfile::tempdir().unwrap();
+        let install = temp.path().join("Browser");
+        let browser = browser_for_server(&server, Arch::X64);
+        let result = crate::updater::update(
+            &browser,
+            &install,
+            crate::updater::UpdateOptions {
+                check_on_launch: true,
+                auto_download: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, crate::updater::UpdateOutcome::Updated("2.0".into()));
+        assert_eq!(
+            std::fs::read(install.join("chrome.exe")).unwrap(),
+            b"inert fixture; never executed"
+        );
+        assert_eq!(
+            browser.installed_version(&install).unwrap().browser_version,
+            "2.0"
+        );
+        assert!(!temp.path().join("Data").exists());
+        assert!(!crate::install::stage_dir(&install).exists());
+        assert!(!crate::install::backup_dir(&install).exists());
+    }
 
     fn prepared_preferences(enabled: bool) {
         let dir = tempfile::tempdir().unwrap();

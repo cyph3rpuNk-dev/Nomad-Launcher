@@ -227,6 +227,10 @@ impl BrowserFamily for UngoogledChromium {
         Engine::Chromium
     }
 
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::Chromium(EXECUTABLE)
+    }
+
     fn public_key(&self) -> Option<&'static [u8]> {
         None // ungoogled-chromium publishes no GPG signature.
     }

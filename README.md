@@ -14,7 +14,9 @@ Nomad Launcher provides single-file Windows launchers that download, verify,
 configure, and start a browser from a portable directory.
 
 A direct launch downloads the selected browser from its official upstream
-source and verifies the package before extraction. The browser bundle, profile,
+source and verifies the package before extraction. Required executable and
+runtime files are checked in staging before replacement; an incomplete update
+leaves the working installation intact. The browser bundle, profile,
 and Nomad configuration are stored beside the launcher rather than installed
 into `Program Files`.
 

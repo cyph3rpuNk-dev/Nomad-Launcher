@@ -131,6 +131,10 @@ impl BrowserFamily for Floorp {
         Engine::Gecko
     }
 
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::Gecko(EXECUTABLE)
+    }
+
     fn public_key(&self) -> Option<&'static [u8]> {
         None
     }
