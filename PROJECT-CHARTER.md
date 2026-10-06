@@ -40,7 +40,7 @@ failure classes:
 ## Technical baseline
 
 - Language: Rust 2021
-- Toolchains: rolling stable for development; Rust 1.88 MSRV compatibility gate
+- Toolchains: rolling stable for development; Rust 1.92 MSRV compatibility gate
 - Primary target: `x86_64-pc-windows-msvc`
 - Dependency strategy: Cargo with committed `Cargo.lock`
 - UI: eframe/egui with the glow renderer

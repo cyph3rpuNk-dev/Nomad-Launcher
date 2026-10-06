@@ -240,7 +240,7 @@ mod tests {
         // Serve the SHA-512 checksum file from the mock CDN.
         server.mock(|when, then| {
             when.method(GET)
-                .path_contains("Waterfox%20Setup%206.0.20.exe.sha512");
+                .path_includes("Waterfox%20Setup%206.0.20.exe.sha512");
             then.status(200)
                 .header("Content-Type", "text/plain")
                 .body(FIXTURE_SHA512);

@@ -149,7 +149,7 @@ async fn full_pipeline_downloads_verifies_and_installs_then_skips_when_current()
         .await
         .expect("second update must succeed");
     assert_eq!(outcome, UpdateOutcome::UpToDate);
-    download_mock.assert_hits_async(1).await;
+    download_mock.assert_calls_async(1).await;
 }
 
 #[tokio::test]

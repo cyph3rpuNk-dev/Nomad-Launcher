@@ -31,9 +31,9 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
-          toolchain: '1.88'
+          toolchain: '1.92'
       - name: Check workspace at the minimum Rust version
-        run: cargo +1.88 check --workspace --locked
+        run: cargo +1.92 check --workspace --locked
   chromium:
     runs-on: windows-latest
     timeout-minutes: 45

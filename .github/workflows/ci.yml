@@ -54,19 +54,11 @@ jobs:
         # (public-key operations), never to decrypt, and there is no fixed
         # upstream `rsa` release. Re-evaluate if a patched `rsa` ships or Nomad's
         # cryptographic usage changes.
-        #
-        # RUSTSEC-2026-0194 / RUSTSEC-2026-0195 (quick-xml DoS) never reach a
-        # shipped binary: quick-xml enters the lockfile only through Linux-only
-        # paths (zbus_xml -> atspi D-Bus accessibility, and wayland-scanner)
-        # behind eframe's wayland/x11 features, and Nomad ships Windows
-        # binaries only — `cargo tree -i quick-xml` on the Windows target finds
-        # nothing. No semver-compatible fix exists (zbus_xml 4.0 pins 0.30,
-        # wayland-scanner pins 0.39; fixed in 0.41). Re-evaluate on the next
-        # eframe upgrade.
+        # All warning classes (including yanked crates) fail the canonical gate.
         run: pwsh -NoProfile -File scripts/check.ps1 -AuditOnly
 
   msrv:
-    name: Rust 1.88 compatibility
+    name: Rust 1.92 compatibility
     runs-on: windows-latest
     permissions:
       contents: read
@@ -77,6 +69,6 @@ jobs:
       - name: Install MSRV toolchain
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
-          toolchain: '1.88'
+          toolchain: '1.92'
       - name: Check workspace at MSRV
-        run: cargo +1.88 check --workspace --locked
+        run: cargo +1.92 check --workspace --locked
