@@ -207,6 +207,18 @@ pub fn is_pending(_install_dir: &Path, _branding: &Branding) -> bool {
 #[cfg(windows)]
 #[must_use]
 pub fn ensure_branding(install_dir: &Path, branding: &Branding) -> bool {
+    for name in branding
+        .targets
+        .iter()
+        .copied()
+        .chain(branding.pak_patches.iter().map(|p| p.pak_file))
+        .chain(std::iter::once(MARKER))
+    {
+        if crate::fs_safety::ensure_file(install_dir.join(name)).is_err() {
+            tracing::warn!(file = name, "branding refused an unsafe filesystem path");
+            return false;
+        }
+    }
     if !is_pending(install_dir, branding) {
         return true;
     }
@@ -245,7 +257,7 @@ pub fn ensure_branding(install_dir: &Path, branding: &Branding) -> bool {
     }
     let marker = install_dir.join(MARKER);
     let fingerprint = branding_fingerprint(install_dir, branding);
-    if let Err(e) = std::fs::write(&marker, fingerprint) {
+    if let Err(e) = crate::fs_safety::write(&marker, fingerprint) {
         tracing::warn!(error = %e, "could not write branding marker");
         return false;
     }

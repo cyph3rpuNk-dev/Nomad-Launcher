@@ -549,47 +549,6 @@ mod tests {
     }
 
     fn make_directory_link(temp: &tempfile::TempDir, link: &Path, target: &Path) {
-        let root = std::fs::canonicalize(temp.path()).unwrap();
-        assert!(std::fs::canonicalize(link.parent().unwrap())
-            .unwrap()
-            .starts_with(&root));
-        assert!(std::fs::canonicalize(target).unwrap().starts_with(&root));
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            // mklink /J is unprivileged. Every path is an owned fixture; reject
-            // shell metacharacters before passing data to this Windows builtin.
-            for path in [link, target] {
-                assert!(path
-                    .to_str()
-                    .unwrap()
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || r"\/:. _-".contains(c)));
-            }
-            let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
-                .join("System32")
-                .join("cmd.exe");
-            // Rust's normal argument escaping follows CommandLineToArgvW,
-            // whereas cmd builtins use cmd's quoting rules. Paths were checked
-            // above to contain no shell metacharacters and stay in this fixture.
-            let command = format!(
-                r#"/d /s /c "mklink /J "{}" "{}"""#,
-                link.to_string_lossy().replace('/', "\\"),
-                target.to_string_lossy().replace('/', "\\")
-            );
-            let result = std::process::Command::new(cmd)
-                .raw_arg(&command)
-                .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
-                .output()
-                .unwrap();
-            assert!(
-                result.status.success(),
-                "owned fixture junction creation failed ({command}): {} {}",
-                String::from_utf8_lossy(&result.stdout),
-                String::from_utf8_lossy(&result.stderr)
-            );
-        }
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(target, link).unwrap();
+        crate::tests::owned_directory_link(temp, link, target);
     }
 }

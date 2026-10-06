@@ -157,6 +157,38 @@ assumption used to locate sibling profiles, extension caches, and update state.
 Invalid settings stop processing before staging recovery, downloads, or swaps.
 Existing files are not moved or deleted to repair a bad setting automatically.
 
+## Filesystem paths before mutation
+
+URL metadata never supplies a local download basename. Browser packages use
+`nomad-package.zip`, `nomad-package.exe`, or `nomad-package.bin` inside staging;
+only a recognized URL-path suffix selects the format. Query strings, fragments,
+drive names, separators and upstream executable names cannot become local paths
+or collide with the staged browser's executable.
+
+Shared filesystem checks inspect the original path and existing ancestors before
+canonicalization, directory creation, reads/writes, or transactional cleanup.
+Installation, stage, backup, state and profile paths must use ordinary entries;
+existing symlinks, Windows junctions/reparse points, wrong types and parent-path
+components fail closed. Invalid links and their targets are left untouched.
+The public/headless updater enforces the same installation folder-name rules as
+configuration. Staging must be newly created after locked recovery; an existing
+stage is never silently adopted for a download.
+
+ZIP destinations are checked before entry writes. The bundled extractor's raw
+tree is checked before marker discovery and promotion. Bitwarden's vault tree is
+checked before copying, and state preservation precedes the staged version marker.
+Configuration, ownership, logs, hardening, branding and cache writers share these
+checks too. Download/cache temporary files use exclusive creation; failure cleanup
+removes only a temporary file created by that operation. Existing temporary files
+are preserved; a stale cache temp requires review rather than automatic deletion.
+
+These checks reject pre-existing filesystem aliases. They are not a transaction
+of directory handles and cannot defeat a hostile process that replaces paths
+between checks and operations, or a compromised host/portable drive. The existing
+[drive-write-access threat boundary](../SECURITY.md#what-nomad-does-not-defend-against)
+still applies. The bundled extractor remains responsible for its own archive
+format handling; the checks do not execute downloaded installers or browsers.
+
 ## Direct launch versus protocol launch
 
 The registry command uses `"Nomad-<browser>.exe" -- "%1"`. A `--` separator

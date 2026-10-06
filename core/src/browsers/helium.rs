@@ -329,6 +329,7 @@ fn disable_existing_profile_updates(profile: &Path) -> Result<()> {
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
     let path = profile.join("Default").join("Preferences");
+    crate::fs_safety::ensure_file(&path)?;
     let original = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         // Leave fresh profile creation to Chromium's initial_preferences path.
@@ -347,6 +348,7 @@ fn disable_existing_profile_updates(profile: &Path) -> Result<()> {
     // A failed write must not truncate the user's existing profile preferences.
     let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("nomad-updates.{}.{}.tmp", std::process::id(), seq));
+    crate::fs_safety::ensure_file(&tmp)?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

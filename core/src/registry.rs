@@ -158,6 +158,8 @@ mod win {
         exe_path: &Path,
         sidecar: &Path,
     ) -> Result<()> {
+        // Refuse a redirected journal before making any registry changes.
+        crate::fs_safety::ensure_file(sidecar)?;
         let exe_str = exe_path.to_str().ok_or_else(|| {
             RegistryError::Sidecar("exe path contains non-UTF-8 characters".to_owned())
         })?;
@@ -220,14 +222,15 @@ mod win {
         let json = serde_json::to_string_pretty(&state)
             .map_err(|e| RegistryError::Sidecar(e.to_string()))?;
         if let Some(parent) = sidecar.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::fs_safety::create_dir_all(parent)?;
         }
-        std::fs::write(sidecar, json)?;
+        crate::fs_safety::write(sidecar, json)?;
 
         Ok(())
     }
 
     pub(super) fn unregister(sidecar: &Path) -> Result<()> {
+        crate::fs_safety::ensure_file(sidecar)?;
         if !sidecar.exists() {
             return Err(RegistryError::NotRegistered);
         }

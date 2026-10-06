@@ -108,6 +108,7 @@ impl VersionCache {
     /// Reads and deserialises a cache from `path`.  Returns `None` on any
     /// error (missing file, malformed TOML, etc.).
     pub fn load(path: &Path) -> Option<Self> {
+        crate::fs_safety::ensure_file(path).ok()?;
         let text = std::fs::read_to_string(path).ok()?;
         toml::from_str(&text).ok()
     }
@@ -123,12 +124,17 @@ impl VersionCache {
         // processes via the pid. Without it two writers could clobber the same
         // temp file before either rename completes.
         static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+        if crate::fs_safety::ensure_file(path).is_err() {
+            return;
+        }
 
         let Ok(text) = toml::to_string(self) else {
             return;
         };
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if crate::fs_safety::create_dir_all(parent).is_err() {
+                return;
+            }
         }
         // Write to a unique sibling temp file, then atomically replace the
         // target. `std::fs::rename` is MoveFileExW(MOVEFILE_REPLACE_EXISTING)
@@ -137,8 +143,7 @@ impl VersionCache {
         let pid = std::process::id();
         let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let tmp = path.with_extension(format!("tmp.{pid}.{seq}"));
-        if std::fs::write(&tmp, text).is_err() {
-            let _ = std::fs::remove_file(&tmp);
+        if crate::fs_safety::write_new(&tmp, text.as_bytes()).is_err() {
             return;
         }
         if std::fs::rename(&tmp, path).is_err() {
@@ -171,6 +176,34 @@ pub fn update_ubo_version(path: &Path, version: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linked_cache_directory_is_not_read_or_written() {
+        let fixture = tempfile::tempdir().unwrap();
+        let foreign = fixture.path().join("foreign");
+        std::fs::create_dir_all(&foreign).unwrap();
+        let link = fixture.path().join("state");
+        crate::tests::owned_directory_link(&fixture, &link, &foreign);
+        let info = crate::browsers::VersionInfo {
+            browser_version: "1.0".into(),
+            engine_version: "1.0".into(),
+            download_url: "https://example.invalid/pkg.zip".into(),
+            signature_url: None,
+            sha256: None,
+            sha512: None,
+        };
+        let cache = VersionCache::from_version_info(&info);
+        let original = toml::to_string(&cache).unwrap();
+        std::fs::write(foreign.join("cache.toml"), &original).unwrap();
+        let target = link.join("cache.toml");
+        assert!(VersionCache::load(&target).is_none());
+        cache.save(&target);
+        assert_eq!(
+            std::fs::read_to_string(foreign.join("cache.toml")).unwrap(),
+            original
+        );
+        assert_eq!(std::fs::read_dir(&foreign).unwrap().count(), 1);
+    }
 
     fn fixture_info(version: &str) -> VersionInfo {
         VersionInfo {
