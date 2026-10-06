@@ -25,7 +25,7 @@ The launcher binaries are intentionally not Authenticode-signed; the GPG-signed 
 ### What Nomad defends against
 
 - **Tampered browser downloads.** Every package is hash-verified (SHA-256, or SHA-512 for Waterfox). Where the upstream signs, the signature is verified against an embedded key: Firefox and Mullvad via GPG, uBlock Origin's Chromium build via a GPG-verified release tag plus an asset-timeline tamper check, Bitwarden additionally via Authenticode signer pinning. A package with no verifiable integrity material is refused. A failed verification aborts before extraction and leaves the existing install untouched.
-- **Casual inspection of the host after use.** The post-exit scrub removes browser temp files, Recent shortcuts pointing at the portable drive, Jump List entries, WER crash dumps, and browser runtime directories from `%LOCALAPPDATA%`/`%PROGRAMDATA%`.
+- **Casual inspection of the host after use.** Post-exit cleanup removes only individually attributed Recent shortcuts and WER reports after validating portable-folder ownership and the browser image path. Shared browser state, temp files, raw dumps, and compound Jump Lists are preserved because they cannot be attributed by name alone. Optional thumbnail/icon-cache and Prefetch clearing remains explicit opt-in. Host traces can remain; see the cleanup limits in README.md.
 - **Malicious archives.** Extraction rejects path traversal and drive-absolute entries and enforces decompressed-size budgets against zip bombs. Downloads are size-capped.
 
 ### What Nomad does not defend against
