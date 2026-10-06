@@ -74,6 +74,30 @@ signature proves that a package matches what upstream published. The
 compatibility gate proves that this launcher understands that package's layout
 and required overlays. Both must pass.
 
+Every browser adapter declares a required `StagedInstallLayout`. The shared
+GUI/headless finalizer validates it before hardening or browser-specific hooks,
+and checks it again after preparation/overlays before recording a version or
+swapping. A hook returning success cannot bypass this mandatory layout gate.
+
+| Layout | Required nonempty regular files |
+|---|---|
+| Chromium (Helium, Ungoogled Chromium) | Declared root executable, `chrome.dll`, `resources.pak`, `icudtl.dat`, `chrome_100_percent.pak`, `chrome_200_percent.pak` |
+| Gecko (Firefox stable/ESR, Floorp, LibreWolf, Mullvad, Waterfox) | Declared root executable, `xul.dll`, `application.ini`, `omni.ja`, `browser/omni.ja` |
+| Self-contained portable app (Bitwarden) | Declared root executable `Bitwarden-Portable.exe` |
+
+Missing, empty, unreadable or wrong-type required entries fail closed. The stage
+root and required path components must be ordinary entries, not symlinks or
+Windows reparse points. Checks only inspect metadata; they never launch a browser
+or installer, create a profile, or replace authentication. They cover critical
+layout files rather than proving the complete package can run on every host.
+
+The Gecko contract follows Mozilla's [package manifest](https://github.com/mozilla-firefox/firefox/blob/main/browser/installer/package-manifest.in)
+and [omnijar packager](https://github.com/mozilla-firefox/firefox/blob/main/python/mozbuild/mozpack/packager/formats.py).
+These layouts are explicit compatibility contracts. An upstream layout change
+must be reviewed before changing the required files; do not skip the gate to
+install an incompatible release. Bitwarden remains a single-file portable app
+and does not require the unpacked runtime files of an ordinary Electron install.
+
 Ungoogled Chromium compatibility is checked against the authenticated staged
 artifact instead of a maximum major version. Both GUI and headless updates must
 find the required executable, DLL, resource bundle, ICU data, and both logo PAKs.

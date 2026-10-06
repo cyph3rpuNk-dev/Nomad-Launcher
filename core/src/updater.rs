@@ -273,6 +273,8 @@ fn finalize_install<B: BrowserFamily>(
     lock: &crate::install::InstanceLock,
 ) -> Result<()> {
     lock.check_install_dir(install_dir)?;
+    let layout = browser.staged_install_layout();
+    layout.validate(stage_dir)?;
     browser.validate_staged_install(stage_dir)?;
     if hardening_enabled {
         if let crate::browsers::Hardening::GeckoProfile {
@@ -300,6 +302,8 @@ fn finalize_install<B: BrowserFamily>(
         }
     }
 
+    // Preparation and overlays must leave the required layout intact too.
+    layout.validate(stage_dir)?;
     write_version_marker(
         stage_dir,
         &InstalledVersion {
@@ -395,6 +399,279 @@ mod tests {
                 .expect("version marker must be written into the stage")
                 .browser_version,
             "2026.6.0"
+        );
+    }
+
+    fn incomplete_stages_preserve_install<B: BrowserFamily>(
+        browser: &B,
+        executable: &str,
+        runtime: &[&str],
+    ) {
+        let files: Vec<_> = std::iter::once(executable)
+            .chain(runtime.iter().copied())
+            .collect();
+        for bad_file in &files {
+            for fault in ["missing", "empty", "directory"] {
+                for hardening_enabled in [false, true] {
+                    let temp = tempfile::tempdir().unwrap();
+                    let install = temp.path().join("Browser");
+                    let stage = crate::install::stage_dir(&install);
+                    let backup = crate::install::backup_dir(&install);
+                    std::fs::create_dir_all(install.join("Data")).unwrap();
+                    std::fs::create_dir_all(temp.path().join("Data")).unwrap();
+                    std::fs::create_dir_all(&stage).unwrap();
+                    std::fs::write(install.join(executable), b"working browser").unwrap();
+                    std::fs::write(install.join(".nomad-version"), b"old marker").unwrap();
+                    std::fs::write(install.join("Data/vault"), b"vault").unwrap();
+                    std::fs::write(temp.path().join("Data/profile"), b"profile").unwrap();
+                    for name in &files {
+                        let path = stage.join(name);
+                        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                        if name == bad_file {
+                            match fault {
+                                "missing" => {}
+                                "empty" => std::fs::write(path, b"").unwrap(),
+                                "directory" => std::fs::create_dir_all(path).unwrap(),
+                                _ => unreachable!(),
+                            }
+                        } else {
+                            std::fs::write(path, b"staged file").unwrap();
+                        }
+                    }
+                    let lock = crate::install::InstanceLock::acquire(&install).unwrap();
+                    let outcome = finalize_install(
+                        browser,
+                        &install,
+                        &stage,
+                        &backup,
+                        &version_info("2.0", None),
+                        hardening_enabled,
+                        None,
+                        &lock,
+                    );
+                    assert!(
+                        matches!(outcome, Err(BrowserError::Compatibility(_))),
+                        "{}: {fault} {bad_file}, hardening={hardening_enabled}: {outcome:?}",
+                        browser.id()
+                    );
+                    assert_eq!(
+                        std::fs::read(install.join(executable)).unwrap(),
+                        b"working browser"
+                    );
+                    assert_eq!(
+                        std::fs::read(install.join(".nomad-version")).unwrap(),
+                        b"old marker"
+                    );
+                    assert_eq!(std::fs::read(install.join("Data/vault")).unwrap(), b"vault");
+                    assert_eq!(
+                        std::fs::read(temp.path().join("Data/profile")).unwrap(),
+                        b"profile"
+                    );
+                    assert!(!backup.exists(), "invalid stage must fail before swap");
+                    for generated in [
+                        ".nomad-version",
+                        ".branding-patched",
+                        "distribution",
+                        "nomad.cfg",
+                        "Data",
+                    ] {
+                        assert!(
+                            !stage.join(generated).exists(),
+                            "validation must precede {generated}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn incomplete_helium_stage_preserves_install_and_profile() {
+        incomplete_stages_preserve_install(
+            &crate::browsers::helium::Helium::new(Arch::X64),
+            "chrome.exe",
+            &[
+                "chrome.dll",
+                "resources.pak",
+                "icudtl.dat",
+                "chrome_100_percent.pak",
+                "chrome_200_percent.pak",
+            ],
+        );
+    }
+
+    #[test]
+    fn incomplete_gecko_stages_preserve_install_and_profile() {
+        use crate::browsers::{
+            firefox::Firefox, floorp::Floorp, librewolf::Librewolf, mullvad::Mullvad,
+            waterfox::Waterfox,
+        };
+        let runtime = &["xul.dll", "application.ini", "omni.ja", "browser/omni.ja"];
+        incomplete_stages_preserve_install(&Firefox::new(Arch::X64), "firefox.exe", runtime);
+        incomplete_stages_preserve_install(&Firefox::new_esr(Arch::X64), "firefox.exe", runtime);
+        incomplete_stages_preserve_install(&Floorp::new(Arch::X64), "floorp.exe", runtime);
+        incomplete_stages_preserve_install(&Librewolf::new(Arch::X64), "librewolf.exe", runtime);
+        incomplete_stages_preserve_install(&Mullvad::new(Arch::X64), "mullvadbrowser.exe", runtime);
+        incomplete_stages_preserve_install(&Waterfox::new(Arch::X64), "Waterfox.exe", runtime);
+    }
+
+    #[test]
+    fn incomplete_bitwarden_stage_preserves_vault() {
+        incomplete_stages_preserve_install(
+            &crate::browsers::bitwarden::Bitwarden::new(Arch::X64),
+            "Bitwarden-Portable.exe",
+            &[],
+        );
+    }
+
+    struct RemovesExecutable(std::sync::atomic::AtomicBool);
+
+    impl BrowserFamily for RemovesExecutable {
+        fn id(&self) -> &'static str {
+            "fixture"
+        }
+        fn display_name(&self) -> &'static str {
+            "Fixture"
+        }
+        fn engine(&self) -> crate::browsers::Engine {
+            crate::browsers::Engine::Electron
+        }
+        fn staged_install_layout(&self) -> crate::browsers::StagedInstallLayout {
+            crate::browsers::StagedInstallLayout::PortableExecutable("app.exe")
+        }
+        fn public_key(&self) -> Option<&'static [u8]> {
+            None
+        }
+        fn installed_version(&self, path: &Path) -> Option<InstalledVersion> {
+            crate::browsers::read_version_marker(path)
+        }
+        fn fetch_latest_version(
+            &self,
+        ) -> impl std::future::Future<Output = Result<VersionInfo>> + Send {
+            std::future::ready(Err(BrowserError::Network("no network in fixture".into())))
+        }
+        fn download(
+            &self,
+            _: &VersionInfo,
+            _: &Path,
+            _: watch::Sender<f32>,
+        ) -> impl std::future::Future<Output = Result<()>> + Send {
+            std::future::ready(Err(BrowserError::Network("no downloads in fixture".into())))
+        }
+        fn verify_signature(&self, _: &Path, _: &Path) -> Result<()> {
+            panic!("no signatures in fixture")
+        }
+        fn extract(&self, _: &Path, _: &Path) -> Result<()> {
+            panic!("no extraction in fixture")
+        }
+        fn hardening(&self) -> crate::browsers::Hardening {
+            crate::browsers::Hardening::LaunchFlags {
+                flags: &[],
+                local_state: None,
+                preferences: None,
+            }
+        }
+        fn launch_command(&self, _: &Path, _: &[String]) -> std::process::Command {
+            panic!("no browser launch in fixture")
+        }
+        fn upstream_url(&self) -> &'static str {
+            "https://example.invalid"
+        }
+        fn validate_staged_install(&self, stage: &Path) -> Result<()> {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+            std::fs::remove_file(stage.join("app.exe"))?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn custom_validation_hook_cannot_bypass_layout_gate_or_remove_required_files() {
+        for initially_complete in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let install = temp.path().join("Browser");
+            let stage = crate::install::stage_dir(&install);
+            let backup = crate::install::backup_dir(&install);
+            std::fs::create_dir_all(&install).unwrap();
+            std::fs::create_dir_all(&stage).unwrap();
+            std::fs::write(install.join("app.exe"), b"working copy").unwrap();
+            if initially_complete {
+                std::fs::write(stage.join("app.exe"), b"new copy").unwrap();
+            }
+            let browser = RemovesExecutable(std::sync::atomic::AtomicBool::new(false));
+            let lock = crate::install::InstanceLock::acquire(&install).unwrap();
+            let result = finalize_install(
+                &browser,
+                &install,
+                &stage,
+                &backup,
+                &version_info("2.0", None),
+                false,
+                None,
+                &lock,
+            );
+            assert!(
+                matches!(result, Err(BrowserError::Compatibility(_))),
+                "got {result:?}"
+            );
+            assert_eq!(
+                browser.0.load(std::sync::atomic::Ordering::Relaxed),
+                initially_complete
+            );
+            assert_eq!(
+                std::fs::read(install.join("app.exe")).unwrap(),
+                b"working copy"
+            );
+            assert!(!backup.exists());
+            assert!(!stage.join(".nomad-version").exists());
+        }
+    }
+
+    #[test]
+    fn complete_gecko_stage_is_prepared_and_swapped_without_launching() {
+        use crate::browsers::firefox::Firefox;
+        let temp = tempfile::tempdir().unwrap();
+        let install = temp.path().join("Browser");
+        let stage = crate::install::stage_dir(&install);
+        let backup = crate::install::backup_dir(&install);
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::write(install.join("firefox.exe"), b"old browser").unwrap();
+        for name in [
+            "firefox.exe",
+            "xul.dll",
+            "application.ini",
+            "omni.ja",
+            "browser/omni.ja",
+        ] {
+            let path = stage.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"new file").unwrap();
+        }
+        let browser = Firefox::new(Arch::X64);
+        let lock = crate::install::InstanceLock::acquire(&install).unwrap();
+        finalize_install(
+            &browser,
+            &install,
+            &stage,
+            &backup,
+            &version_info("2.0", None),
+            true,
+            None,
+            &lock,
+        )
+        .unwrap();
+        assert_eq!(
+            browser.installed_version(&install).unwrap().browser_version,
+            "2.0"
+        );
+        assert_eq!(
+            std::fs::read(install.join("firefox.exe")).unwrap(),
+            b"new file"
+        );
+        assert!(install.join("distribution/policies.json").is_file());
+        assert!(!stage.exists() && !backup.exists());
+        assert!(
+            !temp.path().join("Data").exists(),
+            "validation/preparation must not create a profile"
         );
     }
 

@@ -225,6 +225,10 @@ impl BrowserFamily for Bitwarden {
         Engine::Electron
     }
 
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::PortableExecutable(EXECUTABLE)
+    }
+
     fn public_key(&self) -> Option<&'static [u8]> {
         // Bitwarden publishes no GPG signing key. Integrity is the GitHub
         // SHA-256 asset digest (+ Authenticode, layered into extract()).

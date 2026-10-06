@@ -17,6 +17,8 @@ pub mod bitwarden;
 pub mod firefox;
 pub mod floorp;
 mod github;
+mod staged;
+pub use staged::StagedInstallLayout;
 pub mod helium;
 pub mod librewolf;
 pub mod mullvad;
@@ -371,6 +373,11 @@ pub trait BrowserFamily: Send + Sync {
     /// The rendering engine this browser is built on.
     fn engine(&self) -> Engine;
 
+    /// Mandatory layout of the authenticated, extracted browser bundle.
+    /// The shared updater validates this before preparation, and again before
+    /// writing a version marker. Additional validation hooks cannot bypass it.
+    fn staged_install_layout(&self) -> StagedInstallLayout;
+
     /// Embedded ASCII-armored GPG public key, or `None` when the upstream
     /// publishes no detached signature (verification is then SHA-256 only).
     fn public_key(&self) -> Option<&'static [u8]>;
@@ -401,8 +408,9 @@ pub trait BrowserFamily: Send + Sync {
         Ok(())
     }
 
-    /// Validates required layout and overlays in the authenticated staging tree.
-    /// Called by every update path before writing a version marker or swapping.
+    /// Performs additional browser-specific compatibility/overlay checks.
+    /// The shared updater always checks `staged_install_layout` first, including
+    /// for adapters using this default. Called before markers or swapping.
     ///
     /// # Errors
     /// Returns an error if the staged browser is incompatible with this launcher.
