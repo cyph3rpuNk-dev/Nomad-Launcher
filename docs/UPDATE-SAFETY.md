@@ -379,6 +379,23 @@ A direct launcher invocation remains the only path that may install or update
 software. This keeps ordinary link clicks from becoming hidden provisioning
 events and makes unexpected installs attributable and reproducible.
 
+## Fallback process creation
+
+"Launch anyway" still performs mandatory browser preparation before attempting
+to create the process. If process creation fails, the launcher shows the error
+and waits for Retry or Close. It does not automatically mark the attempt done,
+offer another fallback bypass, or start cleanup for a process that never existed.
+Retry hands control back to the existing pipeline loop; Close ends the attempt.
+
+Only a successful native spawn invokes the post-spawn callback, starts the
+cleanup watcher and signals the window to close. Success here means process
+creation, not a completed browser startup or a visible browser window. Existing
+preparation, branding and ownership rules still apply.
+
+Tests use an absent absolute executable in an owned temporary folder and
+controlled error/success results with in-memory UI choices. The success result
+is inert; no browser, registry repair, cleanup watcher or hardware probe runs.
+
 ## Success markers
 
 Markers are assertions, not hints. Code may write a success marker only after

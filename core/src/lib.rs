@@ -1299,24 +1299,57 @@ fn handle_error<B: BrowserFamily>(
             }
             let mut cmd = browser.launch_command(install_dir, extra_args);
             let browser_exe = browser_exe_path(&cmd);
-            if let Ok(child) = cmd.spawn() {
-                tracing::info!(
-                    browser = browser.id(),
-                    pid = child.id(),
-                    exe = %browser_exe,
-                    "browser launched (fallback)"
-                );
-                spawn_cleanup_watcher(
-                    child.id(),
-                    &browser_exe,
-                    hardening.scrub_thumbnail_cache,
-                    hardening.scrub_prefetch,
-                );
-            }
+            finish_fallback_spawn(
+                cmd.spawn(),
+                |child| {
+                    tracing::info!(
+                        browser = browser.id(),
+                        pid = child.id(),
+                        exe = %browser_exe,
+                        "browser launched (fallback)"
+                    );
+                    spawn_cleanup_watcher(
+                        child.id(),
+                        &browser_exe,
+                        hardening.scrub_thumbnail_cache,
+                        hardening.scrub_prefetch,
+                    );
+                },
+                state,
+                ctx,
+            )
+        }
+        PipelineAction::Close => PostErrorAction::Done,
+    }
+}
+
+/// Complete a native spawn attempt. The callback owns the child and starts
+/// post-spawn work; tests supply inert results so no browser/watcher runs.
+fn finish_fallback_spawn<T>(
+    result: std::io::Result<T>,
+    on_started: impl FnOnce(T),
+    state: &StateHandle,
+    ctx: &egui::Context,
+) -> PostErrorAction {
+    match result {
+        Ok(child) => {
+            on_started(child);
             signal_done(state, ctx);
             PostErrorAction::Done
         }
-        PipelineAction::Close => PostErrorAction::Done,
+        Err(error) => {
+            tracing::error!(error = %error, "browser process creation failed (fallback)");
+            let message = format!("Could not start the browser: {error}");
+            loop {
+                show_error(state, ctx, &message, false);
+                match wait_for_pipeline_action(state) {
+                    PipelineAction::Retry => return PostErrorAction::Retry,
+                    PipelineAction::Close => return PostErrorAction::Done,
+                    // A click from an older UI frame cannot retry this spawn.
+                    PipelineAction::LaunchAnyway => {}
+                }
+            }
+        }
     }
 }
 
@@ -2816,6 +2849,161 @@ mod tests {
             user.join().unwrap(),
             "fallback must show the preparation error without offering another bypass"
         );
+    }
+
+    fn fallback_failure_choice(state: &StateHandle, retry: bool) -> std::thread::JoinHandle<bool> {
+        let controller = Arc::clone(state);
+        std::thread::spawn(move || {
+            let (lock, cvar) = &*controller;
+            let guard = lock.lock().unwrap();
+            let (mut guard, timeout) = cvar
+                .wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| {
+                    !matches!(s.phase, WindowPhase::Error { .. } | WindowPhase::Done)
+                })
+                .unwrap();
+            let saw_failure = !timeout.timed_out()
+                && matches!(&guard.phase,
+                WindowPhase::Error { message, has_fallback:false } if message.contains("Could not start the browser"));
+            guard.phase = if retry {
+                WindowPhase::RetryRequested
+            } else {
+                WindowPhase::Done
+            };
+            cvar.notify_all();
+            saw_failure
+        })
+    }
+
+    #[test]
+    fn fallback_spawn_failure_waits_for_retry_without_starting_cleanup() {
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().join("profile-sentinel");
+        std::fs::write(&profile, b"user data").unwrap();
+        let browser = browsers::helium::Helium::new(config::Arch::X64);
+        let state = release_check_test_state(&browser);
+        let controller = fallback_failure_choice(&state, true);
+        // CreateProcess cannot execute this nonexistent absolute fixture path.
+        let result = std::process::Command::new(temp.path().join("missing-browser.exe")).spawn();
+        assert!(result.is_err());
+        let mut started = false;
+        let action = finish_fallback_spawn(
+            result,
+            |_| started = true,
+            &state,
+            &egui::Context::default(),
+        );
+        let saw_failure = controller.join().unwrap();
+        assert!(
+            saw_failure,
+            "spawn failure must remain visible until user action"
+        );
+        assert!(matches!(action, PostErrorAction::Retry));
+        assert!(
+            !started,
+            "failed spawn must not start cleanup or other post-spawn work"
+        );
+        assert_eq!(std::fs::read(profile).unwrap(), b"user data");
+    }
+
+    #[test]
+    fn fallback_spawn_denied_waits_for_close_without_signaling_success() {
+        let browser = browsers::helium::Helium::new(config::Arch::X64);
+        let state = release_check_test_state(&browser);
+        let controller = fallback_failure_choice(&state, false);
+        let result: std::io::Result<()> = Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied fixture",
+        ));
+        let mut started = false;
+        let action = finish_fallback_spawn(
+            result,
+            |()| started = true,
+            &state,
+            &egui::Context::default(),
+        );
+        let saw_failure = controller.join().unwrap();
+        assert!(
+            saw_failure,
+            "only the user closing the error may end a failed attempt"
+        );
+        assert!(matches!(action, PostErrorAction::Done));
+        assert!(!started);
+    }
+
+    #[test]
+    fn stale_launch_anyway_click_cannot_bypass_fallback_spawn_failure() {
+        let browser = browsers::helium::Helium::new(config::Arch::X64);
+        let state = release_check_test_state(&browser);
+        let controller = Arc::clone(&state);
+        let user = std::thread::spawn(move || {
+            let (lock, cvar) = &*controller;
+            let guard = lock.lock().unwrap();
+            let (mut guard, timeout) = cvar
+                .wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| {
+                    !matches!(s.phase, WindowPhase::Error { .. } | WindowPhase::Done)
+                })
+                .unwrap();
+            let first_error = !timeout.timed_out()
+                && matches!(
+                    guard.phase,
+                    WindowPhase::Error {
+                        has_fallback: false,
+                        ..
+                    }
+                );
+            guard.phase = WindowPhase::LaunchAnyway;
+            cvar.notify_all();
+            let (mut guard, timeout) = cvar
+                .wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| {
+                    !matches!(s.phase, WindowPhase::Error { .. } | WindowPhase::Done)
+                })
+                .unwrap();
+            let rejected = first_error
+                && !timeout.timed_out()
+                && matches!(
+                    guard.phase,
+                    WindowPhase::Error {
+                        has_fallback: false,
+                        ..
+                    }
+                );
+            guard.phase = WindowPhase::Done;
+            cvar.notify_all();
+            rejected
+        });
+        let result: std::io::Result<()> = Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing fixture",
+        ));
+        let mut started = false;
+        let action = finish_fallback_spawn(
+            result,
+            |()| started = true,
+            &state,
+            &egui::Context::default(),
+        );
+        assert!(user.join().unwrap());
+        assert!(matches!(action, PostErrorAction::Done));
+        assert!(!started);
+    }
+
+    #[test]
+    fn fallback_spawn_success_runs_post_spawn_work_once_and_marks_done() {
+        let browser = browsers::helium::Helium::new(config::Arch::X64);
+        let state = release_check_test_state(&browser);
+        let mut started = 0;
+        let action = finish_fallback_spawn(
+            Ok(123_u32),
+            |pid| {
+                assert_eq!(pid, 123);
+                started += 1;
+            },
+            &state,
+            &egui::Context::default(),
+        );
+        assert!(matches!(action, PostErrorAction::Done));
+        assert_eq!(started, 1);
+        assert!(matches!(state.0.lock().unwrap().phase, WindowPhase::Done));
     }
 
     #[test]
