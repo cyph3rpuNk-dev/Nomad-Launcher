@@ -8,22 +8,7 @@ use serde::Deserialize;
 
 use super::{BrowserError, Result};
 
-/// Maps a `reqwest::Error` to the appropriate [`BrowserError`] variant.
-///
-/// Connection-level failures (`is_connect`, `is_timeout`) and HTTP 403
-/// (GitHub rate limit) become [`BrowserError::Offline`] so the pipeline can
-/// auto-launch an existing install. All other errors become
-/// [`BrowserError::Network`].
-#[allow(clippy::needless_pass_by_value)] // designed for .map_err() which requires FnOnce(E)
-pub(super) fn map_network_err(e: reqwest::Error) -> BrowserError {
-    if e.is_connect() || e.is_timeout() {
-        BrowserError::Offline(e.to_string())
-    } else if e.status() == Some(reqwest::StatusCode::FORBIDDEN) {
-        BrowserError::Offline(format!("GitHub API rate limit exceeded: {e}"))
-    } else {
-        BrowserError::Network(e.to_string())
-    }
-}
+pub(super) use crate::network::map_network_err;
 
 // ── API types ─────────────────────────────────────────────────────────────────
 
@@ -64,40 +49,42 @@ pub(super) struct ReleaseAsset {
 /// Builds a `reqwest` client with the Nomad user-agent and the shared
 /// no-downgrade redirect policy.
 pub(super) fn build_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .user_agent("nomad-portable")
-        .redirect(crate::downloader::redirect_policy())
-        .build()
-        .map_err(|e| BrowserError::Network(e.to_string()))
+    build_client_with_timeout(crate::network::METADATA_TIMEOUT)
 }
 
-/// Fetches raw bytes from `url`.
+fn build_client_with_timeout(timeout: std::time::Duration) -> Result<reqwest::Client> {
+    crate::network::build_client(timeout)
+}
+
+/// Fetches bounded metadata/signature bytes from `url`.
 pub(super) async fn fetch_raw(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
-    client
+    crate::network::fetch_bytes(client, url, crate::network::MAX_METADATA_BYTES).await
+}
+
+/// Raw extension archives get a larger body budget and total transfer deadline.
+pub(super) async fn fetch_archive(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+    fetch_raw_with_limit(client, url, crate::network::MAX_EXTENSION_ARCHIVE_BYTES).await
+}
+
+async fn fetch_raw_with_limit(
+    client: &reqwest::Client,
+    url: &str,
+    limit: usize,
+) -> Result<Vec<u8>> {
+    let response = client
         .get(url)
+        .timeout(crate::network::DOWNLOAD_TIMEOUT)
         .send()
         .await
         .map_err(map_network_err)?
         .error_for_status()
-        .map_err(map_network_err)?
-        .bytes()
-        .await
-        .map(|b| b.to_vec())
-        .map_err(map_network_err)
+        .map_err(map_network_err)?;
+    crate::network::read_body(response, limit).await
 }
 
 /// Fetches and deserialises a GitHub release from `url`.
 pub(super) async fn fetch_release(client: &reqwest::Client, url: &str) -> Result<Release> {
-    let body = client
-        .get(url)
-        .send()
-        .await
-        .map_err(map_network_err)?
-        .error_for_status()
-        .map_err(map_network_err)?
-        .text()
-        .await
-        .map_err(map_network_err)?;
+    let body = crate::network::fetch_text(client, url).await?;
     serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))
 }
 
@@ -108,16 +95,7 @@ pub(super) async fn fetch_release(client: &reqwest::Client, url: &str) -> Result
 /// (e.g. `bitwarden/clients`), where `releases/latest` may point at an
 /// unrelated product and the caller must filter by tag.
 pub(super) async fn fetch_releases(client: &reqwest::Client, url: &str) -> Result<Vec<Release>> {
-    let body = client
-        .get(url)
-        .send()
-        .await
-        .map_err(map_network_err)?
-        .error_for_status()
-        .map_err(map_network_err)?
-        .text()
-        .await
-        .map_err(map_network_err)?;
+    let body = crate::network::fetch_text(client, url).await?;
     serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))
 }
 
@@ -233,6 +211,42 @@ pub(super) fn zip_asset<'r>(release: &'r Release, arch_token: &str) -> Result<&'
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn metadata_client_deadline_rejects_delayed_response() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/delayed");
+                then.status(200)
+                    .body("{}")
+                    .delay(std::time::Duration::from_millis(250));
+            })
+            .await;
+        let client = build_client_with_timeout(std::time::Duration::from_millis(40)).unwrap();
+        let result = fetch_release(&client, &server.url("/delayed")).await;
+        assert!(
+            matches!(result, Err(BrowserError::Offline(_))),
+            "delayed metadata must time out"
+        );
+    }
+
+    #[tokio::test]
+    async fn raw_extension_response_is_rejected_before_unbounded_buffering() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/large");
+                then.status(200).body(vec![b'x'; 128]);
+            })
+            .await;
+        let client = build_client().unwrap();
+        assert!(fetch_raw_with_limit(&client, &server.url("/large"), 32)
+            .await
+            .is_err());
+    }
 
     fn release(published_at: Option<&str>) -> Release {
         Release {
