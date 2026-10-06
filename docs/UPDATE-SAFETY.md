@@ -189,6 +189,35 @@ between checks and operations, or a compromised host/portable drive. The existin
 still applies. The bundled extractor remains responsible for its own archive
 format handling; the checks do not execute downloaded installers or browsers.
 
+## Package targets and legacy records
+
+`BrowserFamily::package_target()` identifies the adapter's package selector:
+`x64`, `x86`, or `arm64` for browsers; `portable` for Bitwarden's single
+artifact. Cache records and successful `.nomad-version` markers carry this
+target. Cached metadata must have a matching known target as well as pass the
+existing freshness, URL and integrity-material checks. Cross-target and legacy
+records cause a fresh release lookup; uBlock version state is preserved.
+
+GUI and headless update decisions compare both version and target. A same-version
+architecture change requires verified replacement. The new marker is written
+only after authentication, mandatory layout checks, preparation and state
+preservation succeed, and is promoted with the staged bundle. Failed updates
+keep the prior marker, install and profile. The target describes package
+selection, not an independent PE-machine or runtime-compatibility check.
+
+Legacy markers remain readable with an unknown target; no architecture is
+guessed and no marker is rewritten just to label an existing binary. With
+updates enabled, one verified replacement is needed to establish its target;
+`auto_download = false` still prompts. Offline fallback and protocol/disabled
+update launches retain existing behavior and may use the current installation.
+Unknown-target extension-only caches remain usable for uBlock version state,
+but never for browser-package selection. Version ordering and downgrade
+protection are separate from this target-identity change.
+
+Tests cover the target matrix, legacy records, GUI cache hits/misses, marker
+promotion, and same-version target replacement using local HTTP and inert
+owned fixtures. They do not download or execute a real browser.
+
 ## Required package signatures
 
 `BrowserFamily::public_key()` is a requirement for detached package-signature

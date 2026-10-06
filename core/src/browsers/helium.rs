@@ -151,6 +151,10 @@ fn arch_token(arch: Arch) -> &'static str {
 }
 
 impl BrowserFamily for Helium {
+    fn package_target(&self) -> super::PackageTarget {
+        self.arch.into()
+    }
+
     fn id(&self) -> &'static str {
         "helium"
     }
@@ -439,6 +443,7 @@ mod tests {
         write_version_marker(
             &install,
             &InstalledVersion {
+                target: Some(crate::browsers::PackageTarget::X64),
                 browser_version: "1.0".into(),
                 engine_version: "1.0".into(),
             },
@@ -803,6 +808,7 @@ mod tests {
         let browser = Helium::new(Arch::X64);
         assert!(browser.installed_version(dir.path()).is_none());
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "0.12.3.1".to_owned(),
             engine_version: "0.12.3.1".to_owned(),
         };

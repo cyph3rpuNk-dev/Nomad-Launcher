@@ -99,6 +99,10 @@ async fn fetch_sha512(client: &reqwest::Client, url: &str) -> Option<String> {
 // ── BrowserFamily impl ────────────────────────────────────────────────────────
 
 impl BrowserFamily for Waterfox {
+    fn package_target(&self) -> super::PackageTarget {
+        self.arch.into()
+    }
+
     fn id(&self) -> &'static str {
         "waterfox"
     }
@@ -367,6 +371,7 @@ mod tests {
         let browser = Waterfox::new(Arch::X64);
         assert!(browser.installed_version(dir.path()).is_none());
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "G6.0.20".to_owned(),
             engine_version: "G6.0.20".to_owned(),
         };

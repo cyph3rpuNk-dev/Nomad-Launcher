@@ -208,6 +208,10 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 }
 
 impl BrowserFamily for Bitwarden {
+    fn package_target(&self) -> super::PackageTarget {
+        super::PackageTarget::Portable
+    }
+
     fn id(&self) -> &'static str {
         "bitwarden"
     }
@@ -682,6 +686,7 @@ mod tests {
         let bw = Bitwarden::new(Arch::X64);
         assert!(bw.installed_version(dir.path()).is_none());
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "2026.5.0".to_owned(),
             engine_version: "2026.5.0".to_owned(),
         };
