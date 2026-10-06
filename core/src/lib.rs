@@ -27,6 +27,7 @@ pub mod taskbar;
 pub mod ui;
 pub mod updater;
 mod version_cache;
+mod version_order;
 
 pub use branding::{Branding, BrandingGroup, BrandingIcon, PakPatch};
 pub use browsers::bitwarden::Bitwarden;
@@ -801,23 +802,21 @@ async fn update_check_phase<B: BrowserFamily>(
     let cache_path = config::nomad_subdir(launcher_dir).join("nomad-version-cache.toml");
     // Retain freshness, host and integrity checks, then require the adapter's
     // exact target. Unknown legacy records must never be assumed to be x64.
+    let installed = browser.installed_version(install_dir);
     let cached_latest = version_cache::VersionCache::load(&cache_path)
         .filter(|cached| {
             cached.is_fresh() && cached.is_url_plausible() && cached.has_integrity_material()
         })
-        .and_then(|cached| cached.into_version_info(browser.package_target()));
+        .and_then(|cached| cached.into_version_info(browser.package_target()))
+        // Older/unorderable cached metadata must not suppress a fresh lookup.
+        .filter(|latest| {
+            updater::needs_update(installed.as_ref(), latest, browser.package_target()).is_ok()
+        });
     if let Some(latest) = cached_latest {
         browser.validate_update(&latest)?;
         tracing::debug!(browser = browser.id(), version = %latest.browser_version,
             "version cache hit; skipping network check");
-        return Ok(resolve_check_action(
-            browser,
-            install_dir,
-            latest,
-            opts,
-            state,
-            ctx,
-        ));
+        return resolve_check_action(browser, install_dir, latest, opts, state, ctx);
     }
 
     // ── Network check ────────────────────────────────────────────────────────
@@ -831,6 +830,7 @@ async fn update_check_phase<B: BrowserFamily>(
     let latest = match browser.fetch_latest_version().await {
         Ok(info) => {
             browser.validate_update(&info)?;
+            updater::needs_update(installed.as_ref(), &info, browser.package_target())?;
             version_cache::VersionCache::from_version_info(&info, browser.package_target())
                 .with_preserved_ubo_version(&cache_path)
                 .save(&cache_path);
@@ -851,14 +851,7 @@ async fn update_check_phase<B: BrowserFamily>(
         Err(e) => return Err(e),
     };
 
-    Ok(resolve_check_action(
-        browser,
-        install_dir,
-        latest,
-        opts,
-        state,
-        ctx,
-    ))
+    resolve_check_action(browser, install_dir, latest, opts, state, ctx)
 }
 
 /// Compares `latest` against the installed version and returns the appropriate
@@ -871,7 +864,10 @@ fn resolve_check_action<B: BrowserFamily>(
     opts: UpdateOptions,
     state: &StateHandle,
     ctx: &egui::Context,
-) -> CheckPhaseResult {
+) -> Result<CheckPhaseResult, BrowserError> {
+    let installed = browser.installed_version(install_dir);
+    let update_needed =
+        updater::needs_update(installed.as_ref(), &latest, browser.package_target())?;
     {
         let (lock, _) = &**state;
         let mut guard = lock
@@ -882,17 +878,16 @@ fn resolve_check_action<B: BrowserFamily>(
     }
     ctx.request_repaint();
 
-    let installed = browser.installed_version(install_dir);
-    if !updater::needs_update(installed.as_ref(), &latest, browser.package_target()) {
+    if !update_needed {
         tracing::info!(
             browser = browser.id(),
             version = latest.browser_version,
             "already up to date"
         );
-        return CheckPhaseResult::Launch;
+        return Ok(CheckPhaseResult::Launch);
     }
 
-    if opts.auto_download {
+    Ok(if opts.auto_download {
         tracing::info!(
             browser = browser.id(),
             version = latest.browser_version,
@@ -906,7 +901,7 @@ fn resolve_check_action<B: BrowserFamily>(
             "update available; auto_download disabled — prompting"
         );
         CheckPhaseResult::Prompt(latest)
-    }
+    })
 }
 
 /// Downloads, verifies, extracts, and prepares a new browser version, then
@@ -2463,6 +2458,117 @@ mod tests {
             assert_eq!(std::fs::read(&profile).unwrap(), b"user data");
             assert_eq!(browsers::read_version_marker(&install).unwrap(), marker);
             assert!(!install::stage_dir(&install).exists());
+        }
+    }
+
+    fn release_check_test_state<B: BrowserFamily>(browser: &B) -> StateHandle {
+        Arc::new((
+            std::sync::Mutex::new(ui::NomadState {
+                view: build_initial_view(browser, config::Arch::X64, &[]),
+                phase: WindowPhase::Running,
+            }),
+            std::sync::Condvar::new(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn obsolete_cache_refreshes_and_rejected_release_preserves_existing_state() {
+        use browsers::{InstalledVersion, PackageTarget, VersionInfo};
+        use httpmock::prelude::*;
+        for (cached_version, expired, offered, rejected) in [
+            ("200.0.0.0", false, "202.0.0.0", false),
+            ("201.0.0.0", true, "200.0.0.0", true),
+            ("201.0.0.0", true, "202.0.0.0-beta", true),
+        ] {
+            let server = MockServer::start_async().await;
+            let response = serde_json::json!({"tag_name":offered, "assets":[{
+                "name":"ungoogled-chromium_windows_x64.zip",
+                "browser_download_url":"https://github.com/fixture/offered.zip",
+                "digest":format!("sha256:{}", "a".repeat(64))}]});
+            let request = server
+                .mock_async(|when, then| {
+                    when.method(GET).path("/latest");
+                    then.status(200).body(response.to_string());
+                })
+                .await;
+            let temp = tempfile::tempdir().unwrap();
+            let install_dir = temp.path().join("Browser");
+            let profile = temp.path().join("Data/sentinel");
+            std::fs::create_dir(&install_dir).unwrap();
+            std::fs::create_dir(profile.parent().unwrap()).unwrap();
+            std::fs::write(&profile, b"user data").unwrap();
+            std::fs::write(install_dir.join("chrome.exe"), b"newer working fixture").unwrap();
+            let installed = InstalledVersion {
+                target: Some(PackageTarget::X64),
+                browser_version: "201.0.0.0".into(),
+                engine_version: "201.0.0.0".into(),
+            };
+            browsers::write_version_marker(&install_dir, &installed).unwrap();
+            let info = VersionInfo {
+                browser_version: cached_version.into(),
+                engine_version: cached_version.into(),
+                download_url: "https://github.com/fixture/cached.zip".into(),
+                signature_url: None,
+                sha256: Some("a".repeat(64)),
+                sha512: None,
+            };
+            let cache_path = config::nomad_subdir(temp.path()).join("nomad-version-cache.toml");
+            let mut cache =
+                version_cache::VersionCache::from_version_info(&info, PackageTarget::X64);
+            if expired {
+                cache.fetched_at = 0;
+            }
+            cache.ubo_version = Some("1.70.0".into());
+            cache.save(&cache_path);
+            let original_cache = std::fs::read(&cache_path).unwrap();
+            let browser = browsers::ungoogled::UngoogledChromium::with_releases_url(
+                config::Arch::X64,
+                server.url("/latest"),
+            );
+            let state = release_check_test_state(&browser);
+            let lock = install::InstanceLock::acquire(&install_dir).unwrap();
+            let outcome = update_check_phase(
+                &browser,
+                &install_dir,
+                UpdateOptions {
+                    check_on_launch: true,
+                    auto_download: false,
+                },
+                &state,
+                &egui::Context::default(),
+                &lock,
+            )
+            .await;
+            request.assert_calls_async(1).await;
+            if rejected {
+                assert!(matches!(outcome, Err(BrowserError::Compatibility(_))));
+                assert_eq!(std::fs::read(&cache_path).unwrap(), original_cache);
+            } else {
+                assert!(matches!(outcome, Ok(CheckPhaseResult::Prompt(_))));
+                assert_eq!(
+                    version_cache::VersionCache::load(&cache_path)
+                        .unwrap()
+                        .browser_version,
+                    offered
+                );
+                assert_eq!(
+                    version_cache::VersionCache::load(&cache_path)
+                        .unwrap()
+                        .ubo_version
+                        .as_deref(),
+                    Some("1.70.0")
+                );
+            }
+            assert_eq!(
+                browsers::read_version_marker(&install_dir).unwrap(),
+                installed
+            );
+            assert_eq!(
+                std::fs::read(install_dir.join("chrome.exe")).unwrap(),
+                b"newer working fixture"
+            );
+            assert_eq!(std::fs::read(&profile).unwrap(), b"user data");
+            assert!(!install::stage_dir(&install_dir).exists());
         }
     }
 

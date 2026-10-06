@@ -37,18 +37,21 @@ pub enum UpdateOutcome {
 
 /// Returns whether the version or selected package target needs replacement.
 /// Legacy markers with an unknown target cannot establish that a build is current.
-#[must_use]
+///
+/// # Errors
+/// Returns a compatibility error for an older release or an unorderable version.
 pub fn needs_update(
     installed: Option<&InstalledVersion>,
     latest: &VersionInfo,
     target: crate::browsers::PackageTarget,
-) -> bool {
-    match installed {
+) -> Result<bool> {
+    crate::version_order::ensure_not_older(installed, latest)?;
+    Ok(match installed {
         Some(installed) => {
             installed.browser_version != latest.browser_version || installed.target != Some(target)
         }
         None => true,
-    }
+    })
 }
 
 /// Verifies a downloaded package before it is extracted.
@@ -144,7 +147,7 @@ pub async fn update<B: BrowserFamily>(
     let latest = browser.fetch_latest_version().await?;
     browser.validate_update(&latest)?;
     let installed = browser.installed_version(install_dir);
-    if !needs_update(installed.as_ref(), &latest, browser.package_target()) {
+    if !needs_update(installed.as_ref(), &latest, browser.package_target())? {
         tracing::info!(
             browser = browser.id(),
             version = latest.browser_version,
@@ -213,6 +216,10 @@ pub(crate) async fn download_and_install<B: BrowserFamily>(
 ) -> Result<()> {
     lock.check_install_dir(install_dir)?;
     browser.validate_update(latest)?;
+    crate::version_order::ensure_not_older(
+        browser.installed_version(install_dir).as_ref(),
+        latest,
+    )?;
     // The shared UI/headless path must reject incomplete signature metadata
     // before downloading or creating a stage, including cached releases.
     if browser.public_key().is_some() && latest.signature_url.is_none() {
@@ -726,7 +733,7 @@ mod tests {
                     engine_version: "2.0".into(),
                 };
                 assert_eq!(
-                    needs_update(Some(&installed), &version_info("2.0", None), requested),
+                    needs_update(Some(&installed), &version_info("2.0", None), requested).unwrap(),
                     recorded != Some(requested)
                 );
             }
@@ -826,12 +833,142 @@ mod tests {
     }
 
     #[test]
+    fn older_or_unorderable_release_is_not_an_update() {
+        use crate::browsers::PackageTarget;
+        for (installed_version, offered) in [
+            ("150.0.10", "150.0.9"),
+            ("148.0.7778.96-1.10", "148.0.7778.96-1.9"),
+            ("151.0-2", "151.0-1"),
+            ("128.10.0esr", "128.9.0esr"),
+            ("v6.0.20", "G6.0.19"),
+            ("2026.10.0", "2026.9.0"),
+            ("2.0", "2.1-beta"),
+            ("custom", "2.1"),
+            ("2.0", "999999999999999999999999.0"),
+        ] {
+            for target in [Some(PackageTarget::X64), Some(PackageTarget::X86), None] {
+                let installed = InstalledVersion {
+                    target,
+                    browser_version: installed_version.into(),
+                    engine_version: installed_version.into(),
+                };
+                assert!(
+                    matches!(
+                        needs_update(
+                            Some(&installed),
+                            &version_info(offered, None),
+                            PackageTarget::X64
+                        ),
+                        Err(BrowserError::Compatibility(_))
+                    ),
+                    "must reject {installed_version} -> {offered}"
+                );
+            }
+        }
+        assert!(needs_update(None, &version_info("invalid", None), PackageTarget::X64).is_err());
+    }
+
+    #[test]
+    fn numeric_upgrades_and_equal_version_target_changes_remain_supported() {
+        use crate::browsers::PackageTarget;
+        for (old, new) in [
+            ("150.0.9", "150.0.10"),
+            ("148.0.0-1.9", "148.0.0-1.10"),
+            ("151.0-1", "151.0-2"),
+            ("128.9.0esr", "128.10.0esr"),
+            ("1.9", "1.10"),
+            ("G6.0.9", "v6.0.10"),
+            ("0.12.3.1", "0.12.3.2"),
+            ("2026.6.0", "2026.10.0"),
+            ("151.0-10", "152.0-1"),
+        ] {
+            let installed = InstalledVersion {
+                target: Some(PackageTarget::X64),
+                browser_version: old.into(),
+                engine_version: old.into(),
+            };
+            assert!(needs_update(
+                Some(&installed),
+                &version_info(new, None),
+                PackageTarget::X64
+            )
+            .unwrap());
+        }
+        let installed = InstalledVersion {
+            target: Some(PackageTarget::X64),
+            browser_version: "2.0".into(),
+            engine_version: "2.0".into(),
+        };
+        assert!(needs_update(
+            Some(&installed),
+            &version_info("2.0", None),
+            PackageTarget::X86
+        )
+        .unwrap());
+    }
+
+    #[tokio::test]
+    async fn shared_install_rejects_downgrade_before_download_or_stage() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        let request = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/older.zip");
+                then.status(500);
+            })
+            .await;
+        let temp = tempfile::tempdir().unwrap();
+        let install = temp.path().join("Browser");
+        let profile = temp.path().join("Data/sentinel");
+        std::fs::create_dir(&install).unwrap();
+        std::fs::create_dir(profile.parent().unwrap()).unwrap();
+        std::fs::write(install.join("chrome.exe"), b"newer working fixture").unwrap();
+        std::fs::write(&profile, b"user data").unwrap();
+        let installed = InstalledVersion {
+            target: None,
+            browser_version: "201.0.0.0".into(),
+            engine_version: "201.0.0.0".into(),
+        };
+        write_version_marker(&install, &installed).unwrap();
+        let marker = std::fs::read(install.join(".nomad-version")).unwrap();
+        let browser = UngoogledChromium::new(Arch::X86);
+        let mut latest = version_info("200.0.0.0", Some(&"0".repeat(64)));
+        latest.download_url = server.url("/older.zip");
+        let lock = crate::install::InstanceLock::acquire(&install).unwrap();
+        let (progress, _rx) = watch::channel(0.0);
+        let result = download_and_install(
+            &browser,
+            &install,
+            &latest,
+            false,
+            None,
+            progress,
+            |_| {},
+            &lock,
+        )
+        .await;
+        assert!(matches!(result, Err(BrowserError::Compatibility(_))));
+        request.assert_calls_async(0).await;
+        assert!(!crate::install::stage_dir(&install).exists());
+        assert_eq!(
+            std::fs::read(install.join(".nomad-version")).unwrap(),
+            marker
+        );
+        assert_eq!(
+            std::fs::read(install.join("chrome.exe")).unwrap(),
+            b"newer working fixture"
+        );
+        assert_eq!(std::fs::read(profile).unwrap(), b"user data");
+    }
+
+    #[test]
     fn needs_update_when_nothing_installed() {
         assert!(needs_update(
             None,
             &version_info("1.0", None),
             crate::browsers::PackageTarget::X64
-        ));
+        )
+        .unwrap());
     }
 
     #[test]
@@ -845,7 +982,8 @@ mod tests {
             Some(&installed),
             &version_info("2.0", None),
             crate::browsers::PackageTarget::X64
-        ));
+        )
+        .unwrap());
     }
 
     #[test]
@@ -859,7 +997,8 @@ mod tests {
             Some(&installed),
             &version_info("2.0", None),
             crate::browsers::PackageTarget::X64
-        ));
+        )
+        .unwrap());
     }
 
     #[test]
