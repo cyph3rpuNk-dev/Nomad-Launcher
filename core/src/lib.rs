@@ -347,24 +347,9 @@ where
     instance::ensure(base, browser.id(), !protocol_invocation)?;
     let config = Config::load_or_init(base, browser.default_config())?;
     let browser = Arc::new(browser);
-    // Reject absolute paths and '..' components: `base.join(abs)` silently
-    // discards `base` in Rust, so an absolute or escaping install_dir would
-    // redirect all extraction and atomic-swap operations outside the portable
-    // tree.  Fail loudly here rather than silently writing to arbitrary paths.
-    if config.browser.install_dir.is_absolute()
-        || config
-            .browser
-            .install_dir
-            .components()
-            .any(|c| c == std::path::Component::ParentDir)
-    {
-        return Err(browsers::BrowserError::Parse(format!(
-            "install_dir `{}` must be a relative path with no '..' — \
-             absolute paths and parent-directory traversal are not allowed",
-            config.browser.install_dir.display()
-        ))
-        .into());
-    }
+    // Config deserialization requires one safe, non-reserved folder name.
+    // It cannot escape base, replace Data/Nomad, or move sibling state into a
+    // nested directory that the browser-family layout does not support.
     let install_dir = base.join(&config.browser.install_dir);
     if protocol_invocation && browser.installed_version(&install_dir).is_none() {
         return Err(BrowserError::ProtocolInvocation(format!(
