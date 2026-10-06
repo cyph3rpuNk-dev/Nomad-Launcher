@@ -113,8 +113,15 @@ Existing files are not moved or deleted to repair a bad setting automatically.
 
 ## Direct launch versus protocol launch
 
-The registry command uses `"Nomad-<browser>.exe" -- "%1"`. Arguments after
-`--` identify an OS URL/file-protocol invocation. That path is launch-only:
+The registry command uses `"Nomad-<browser>.exe" -- "%1"`. A `--` separator
+requires exactly one non-empty URL/file target. Reject missing targets, extra
+arguments, and targets whose first non-whitespace character is `-` or `/`
+before internal flag dispatch or configuration/ownership work. A separator without a target must not become
+a direct launch that may provision software. Accepted target contents stay
+unchanged as one positional browser argument; error messages do not echo them.
+Use a drive-qualified path or `file://` URL for Windows file targets.
+
+That OS protocol path is launch-only:
 
 - it requires an existing version marker and browser installation;
 - it disables browser update checks and automatic downloads;

@@ -113,10 +113,17 @@ where
         }
     }
 
-    init_tracing();
-
     let args: Vec<String> = std::env::args().collect();
-    let (own_args, forwarded_args) = split_forwarded_args(&args);
+    // Reject malformed protocol arguments before logging creates state or
+    // internal registration/cleanup handlers can run.
+    let (own_args, forwarded_args) = match split_forwarded_args(&args) {
+        Ok(parts) => parts,
+        Err(error) => {
+            show_msgbox(&format!("Launch failed: {error}"), true);
+            return ExitCode::FAILURE;
+        }
+    };
+    init_tracing();
     if own_args.iter().any(|a| a == "--register-default") {
         return handle_register_flag(make);
     }
@@ -329,6 +336,11 @@ where
     B: BrowserFamily + 'static,
     F: FnOnce(Arch) -> B,
 {
+    // Defense in depth for callers of the launch pipeline: validate before
+    // resolving config, recording ownership, or constructing the browser.
+    if !forwarded_args.is_empty() {
+        validate_forwarded_args(&forwarded_args)?;
+    }
     let exe = std::env::current_exe()?;
     let base = exe.parent().ok_or(RunError::NoLauncherDir)?;
 
@@ -370,9 +382,8 @@ where
         protocol_invocation,
     );
     let mut launch_args = build_launch_args(&*browser, &config);
-    // The forwarded tail (everything after `--` on our own command line)
-    // goes last, after every switch: it carries positional arguments such as
-    // the URL a default-browser registration passes via `"%1"`.
+    // The validated single URL/file target goes last as a positional
+    // argument, unchanged from the registered "%1" invocation.
     launch_args.extend(forwarded_args);
     let hardening = config.hardening;
 
@@ -1465,18 +1476,40 @@ fn wait_for_pipeline_action(state: &StateHandle) -> PipelineAction {
 
 // ── Post-exit cleanup ─────────────────────────────────────────────────────────
 
-/// Splits argv at the first literal `--`: Nomad's own flags come before it,
-/// everything after is forwarded verbatim to the browser invocation.
+/// Splits argv at the first literal `--` and validates the untrusted target.
 ///
-/// This is the open-command contract registered by `--register-default`
-/// (`"<exe>" -- "%1"`): the forwarded tail carries the clicked URL or
-/// document as positional arguments, which must reach the browser or every
-/// link click through the default-browser registration is silently dropped.
-fn split_forwarded_args(args: &[String]) -> (&[String], &[String]) {
+/// The registered command (`"<exe>" -- "%1"`) carries exactly one non-empty
+/// URL/file argument. A missing target, extra arguments, or a browser switch
+/// must fail before either internal flags or the launch pipeline are reached.
+fn split_forwarded_args(args: &[String]) -> Result<(&[String], &[String]), BrowserError> {
     match args.iter().position(|a| a == "--") {
-        Some(i) => (&args[..i], &args[i + 1..]),
-        None => (args, &[]),
+        Some(i) => {
+            let forwarded = &args[i + 1..];
+            validate_forwarded_args(forwarded)?;
+            Ok((&args[..i], forwarded))
+        }
+        None => Ok((args, &[])),
     }
+}
+
+/// Keep the protocol target as one positional argument, never as a switch.
+fn validate_forwarded_args(forwarded: &[String]) -> Result<(), BrowserError> {
+    if let [target] = forwarded {
+        // Windows Gecko command-line parsing treats '/' as a switch prefix,
+        // too. Drive-qualified Windows paths and file:// URLs remain valid.
+        // Chromium trims Unicode whitespace before recognizing switches.
+        // Inspect the trimmed view, but forward the original target unchanged.
+        let checked = target.trim();
+        if !checked.is_empty() && !checked.starts_with('-') && !checked.starts_with('/') {
+            return Ok(());
+        }
+    }
+    // Targets can contain authentication data; do not echo their contents.
+    Err(BrowserError::ProtocolInvocation(
+        "arguments after -- must contain exactly one non-empty URL or file path; \
+         targets beginning with '-' or '/' after whitespace and additional arguments are not allowed"
+            .to_owned(),
+    ))
 }
 
 /// Parses cleanup-watcher arguments: `--nomad-cleanup-pid <pid>` (required),
@@ -3882,7 +3915,7 @@ mod tests {
             "--".to_owned(),
             "https://example.com/page".to_owned(),
         ];
-        let (own, forwarded) = split_forwarded_args(&args);
+        let (own, forwarded) = split_forwarded_args(&args).unwrap();
         assert_eq!(own, &args[..1]);
         assert_eq!(forwarded, &["https://example.com/page".to_owned()][..]);
 
@@ -3891,21 +3924,159 @@ mod tests {
             "nomad-firefox.exe".to_owned(),
             "--register-default".to_owned(),
         ];
-        let (own, forwarded) = split_forwarded_args(&plain);
+        let (own, forwarded) = split_forwarded_args(&plain).unwrap();
         assert_eq!(own, &plain[..]);
         assert!(forwarded.is_empty());
 
-        // Nomad flags are only honoured before the separator; after it they
-        // are browser arguments, not ours.
+        // A Nomad flag in the untrusted target position must be rejected,
+        // rather than dispatched internally or forwarded as a browser switch.
         let tricky = vec![
             "nomad-firefox.exe".to_owned(),
             "--".to_owned(),
             "--register-default".to_owned(),
         ];
-        let (own, forwarded) = split_forwarded_args(&tricky);
-        assert!(!own.iter().any(|a| a == "--register-default"));
+        assert!(matches!(
+            split_forwarded_args(&tricky),
+            Err(BrowserError::ProtocolInvocation(_))
+        ));
+    }
 
-        assert_eq!(forwarded, &["--register-default".to_owned()][..]);
+    fn protocol_args(tail: &[&str]) -> Vec<String> {
+        ["nomad-firefox.exe", "--"]
+            .into_iter()
+            .chain(tail.iter().copied())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn assert_invalid_forwarded_args(args: &[String]) {
+        let result = split_forwarded_args(args);
+        assert!(
+            matches!(result, Err(BrowserError::ProtocolInvocation(_))),
+            "malformed protocol arguments must fail at argument parsing"
+        );
+    }
+
+    #[test]
+    fn forwarded_args_reject_missing_target() {
+        assert_invalid_forwarded_args(&protocol_args(&[]));
+    }
+
+    #[test]
+    fn forwarded_args_reject_empty_or_blank_target() {
+        for target in ["", " ", "\t\n"] {
+            assert_invalid_forwarded_args(&protocol_args(&[target]));
+        }
+    }
+
+    #[test]
+    fn forwarded_args_reject_browser_switches_without_echoing_target() {
+        for target in [
+            "-",
+            "--",
+            "--register-default",
+            "--nomad-scrub-prefetch",
+            "--user-data-dir=private-test-value",
+            "-profile",
+            "/profile",
+            "/prefetch:1",
+        ] {
+            let args = protocol_args(&[target]);
+            assert_invalid_forwarded_args(&args);
+            let error = split_forwarded_args(&args).unwrap_err().to_string();
+            assert!(
+                !error.contains("private-test-value"),
+                "errors must not echo the untrusted target"
+            );
+        }
+    }
+
+    #[test]
+    fn forwarded_args_reject_whitespace_prefixed_switches() {
+        for target in [
+            "  --user-data-dir=other",
+            "\t--no-sandbox",
+            "\r\n/profile",
+            "\u{a0}--no-sandbox",
+            "\u{2003}/profile",
+            "\u{3000}--no-sandbox",
+        ] {
+            assert_invalid_forwarded_args(&protocol_args(&[target]));
+        }
+    }
+
+    #[test]
+    fn forwarded_args_reject_additional_arguments() {
+        for tail in [
+            vec!["https://example.invalid/", "--user-data-dir=other"],
+            vec!["https://example.invalid/", "https://example.invalid/second"],
+            vec!["https://example.invalid/", "--", "--no-sandbox"],
+            vec!["https://example.invalid/", ""],
+        ] {
+            assert_invalid_forwarded_args(&protocol_args(&tail));
+        }
+    }
+
+    #[test]
+    fn forwarded_args_reject_malformed_tail_before_internal_flags() {
+        for own_flag in [
+            "--register-default",
+            "--unregister-default",
+            "--nomad-cleanup-pid",
+            "--nomad-scrub-prefetch",
+        ] {
+            let args = ["nomad-firefox.exe", own_flag, "--", "--no-sandbox"].map(str::to_owned);
+            assert_invalid_forwarded_args(&args);
+        }
+    }
+
+    #[test]
+    fn forwarded_args_preserve_single_url_or_windows_file_target() {
+        for target in [
+            "https://example.invalid/page?flag=--no-sandbox#section",
+            r#"https://example.invalid/?text=\"quoted\"&name=with spaces"#,
+            "file:///C:/My%20Files/page.html",
+            r"C:\My Files\page.html",
+            r"\\server\share\My Files\page.html",
+            "relative page.html",
+            "  https://example.invalid/page  ",
+            "about:blank",
+        ] {
+            let args = protocol_args(&[target]);
+            let (own, forwarded) = split_forwarded_args(&args).unwrap();
+            assert_eq!(own, &args[..1]);
+            assert_eq!(forwarded, &args[2..]);
+            assert_eq!(forwarded, &[target.to_owned()]);
+        }
+    }
+
+    #[test]
+    fn forwarded_args_fail_before_browser_construction_or_configuration() {
+        let called = std::cell::Cell::new(false);
+        for tail in [
+            vec!["--user-data-dir=other"],
+            vec!["/profile"],
+            vec!["https://example.invalid/", "--no-sandbox"],
+            vec![""],
+        ] {
+            let result = run_with_ui(
+                |arch| {
+                    called.set(true);
+                    browsers::helium::Helium::new(arch)
+                },
+                &[],
+                None,
+                tail.into_iter().map(str::to_owned).collect(),
+            );
+            assert!(matches!(
+                result,
+                Err(RunError::Browser(BrowserError::ProtocolInvocation(_)))
+            ));
+            assert!(
+                !called.get(),
+                "invalid arguments must not reach browser construction"
+            );
+        }
     }
 
     #[test]
