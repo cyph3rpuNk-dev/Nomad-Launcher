@@ -69,7 +69,7 @@ Each launcher reads the `nomad.toml` in its own `Nomad/` subfolder. Unknown keys
 
 ```toml
 [browser]
-install_dir = "Browser"      # relative to the .exe
+install_dir = "Browser"      # one folder name beside the .exe
 arch = "x64"                 # "x64" | "x86" | "arm64"
 
 [update]
@@ -90,6 +90,20 @@ scrub_prefetch = false       # opt-in: needs elevation, prompts for UAC on every
 clear_data_on_exit = false   # Chromium only: wipe cookies/history/sessions on exit
 reduce_system_info = true    # Chromium only: ReducedSystemInfo fingerprint hardening
 ```
+
+`install_dir` must be one Windows-safe folder name beside the launcher, such
+as `Browser`, `App`, or `Custom Browser`. Empty names, `.`/`..`, absolute or
+drive-relative paths, nested paths such as `Apps/Browser`, and `Data` or
+`Nomad` (in any letter case) are rejected. Windows device names, invalid
+characters, and names ending in a space or dot are also rejected. This keeps
+updates from replacing the profile or launcher state and keeps `Data/` and
+`Nomad/` beside the launcher.
+
+If an existing config uses one of these values, Nomad reports a configuration
+error instead of updating or launching. Close the browser and back up the
+portable folder before correcting the setting. Changing the setting does not
+move an existing installation or profile; keep the old files until the folder
+layout has been reviewed.
 
 ## Privacy hardening
 

@@ -96,6 +96,21 @@ Move any other Nomad launcher executables into their own empty directories.
 Never edit `instance.toml` to convert a folder between browser families; move or
 back up the profile and create a fresh instance instead.
 
+## Installation folder boundary
+
+The configured `browser.install_dir` must be one Windows-safe folder name
+directly beside the launcher, such as `Browser` or Bitwarden's `App`.
+Configuration deserialization rejects paths and the reserved sibling names
+`Data` and `Nomad` in any letter case, including ambiguous trailing-dot/space
+spellings. Windows device names and invalid name characters are rejected too.
+
+The update replaces this folder wholesale. Keeping the installation separate
+from `Data` and `Nomad` prevents a bad setting from swapping out the profile or
+launcher configuration. Requiring a direct child also preserves the layout
+assumption used to locate sibling profiles, extension caches, and update state.
+Invalid settings stop processing before staging recovery, downloads, or swaps.
+Existing files are not moved or deleted to repair a bad setting automatically.
+
 ## Direct launch versus protocol launch
 
 The registry command uses `"Nomad-<browser>.exe" -- "%1"`. Arguments after

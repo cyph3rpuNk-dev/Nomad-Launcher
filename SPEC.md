@@ -179,7 +179,7 @@ File: `nomad.toml`, sitting beside its launcher `.exe`. Each launcher has its ow
 
 ```toml
 [browser]
-install_dir = "browser"      # relative to the .exe directory
+install_dir = "browser"      # one folder name beside the .exe directory
 arch = "x64"                 # "x64" | "x86" | "arm64"
 
 [update]
@@ -197,7 +197,15 @@ scrub_prefetch = false       # true = delete Windows Prefetch entries on exit (r
 ```
 
 Rules:
-- All paths are relative to the `.exe`'s directory (portability guarantee).
+- `browser.install_dir` is exactly one normal Windows-safe folder name beside
+  the launcher. Reject empty/current/parent, absolute, root-relative,
+  drive-relative, UNC, and nested paths; reject `Data`/`Nomad` case-insensitively,
+  Windows device names (including extensions), reserved characters, controls,
+  and trailing dots/spaces. Validate during deserialization before update or
+  launch work; validate first-run defaults before creating configuration files.
+  Staging and backup remain siblings of that folder, and the portable profile
+  and Nomad state remain beside the launcher. Invalid existing configurations
+  fail visibly without automatic migration or deletion.
 - There is no `channel` key — the Firefox ESR launcher hardcodes its channel internally; all other browsers have a single channel.
 - Unknown keys are rejected at startup with a descriptive error (no silent ignoring).
 - On first run with no `nomad.toml`, a default config is written beside the `.exe` and launch proceeds with defaults.
@@ -506,7 +514,7 @@ Two properties of the sweep are load-bearing:
 ## 12. Testing Strategy
 
 ### Unit tests (`#[cfg(test)]` in each module of `nomad-core`)
-- `config.rs` — valid `nomad.toml` parses correctly; unknown keys return error; missing required fields return error; relative paths are preserved as-is.
+- `config.rs` — valid `nomad.toml` parses correctly; unknown keys return error; missing required fields return error; valid single folder names are preserved as-is; unsafe installation-folder settings fail before file changes.
 - `gpg.rs` — verify against known-good test fixture (real small signed file); known-bad signature returns `Err`; tampered payload returns `Err`; SHA-256 match/mismatch.
 - `hardening.rs` — the Gecko `user.js` is written marker-fenced with the curated safe profile and `policies.json` into `distribution/`; user prefs outside the fence are preserved; re-running is idempotent. Chromium `hardening()` yields the expected safe flag set.
 - Each `BrowserFamily` impl — `installed_version()` parses version from mock directory layout; `fetch_latest_version()` parses from a fixture JSON/HTML response.
