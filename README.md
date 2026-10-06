@@ -184,6 +184,7 @@ C:\Portables\Firefox\
 ├── Data\                 # browser profile
 ├── Nomad\
 │   ├── instance.toml             # permanent browser-family ownership
+│   ├── install.lock              # persistent file; OS lock protects update/launch
 │   ├── nomad.toml                # user configuration
 │   ├── nomad.log
 │   ├── nomad-version-cache.toml

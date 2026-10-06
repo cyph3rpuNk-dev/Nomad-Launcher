@@ -127,13 +127,13 @@ pub async fn update<B: BrowserFamily>(
     install_dir: &Path,
     options: UpdateOptions,
 ) -> Result<UpdateOutcome> {
-    crate::install::recover_staging(install_dir);
-
     if !options.check_on_launch {
         tracing::info!(browser = browser.id(), "update check skipped by config");
         return Ok(UpdateOutcome::CheckSkipped);
     }
 
+    let lock = crate::install::InstanceLock::acquire(install_dir)?;
+    crate::install::recover_staging_locked(install_dir, &lock)?;
     let latest = browser.fetch_latest_version().await?;
     browser.validate_update(&latest)?;
     let installed = browser.installed_version(install_dir);
@@ -158,7 +158,17 @@ pub async fn update<B: BrowserFamily>(
     // Headless callers carry no hardening config; payloads are written
     // unconditionally, matching the config default (`enabled = true`).
     let (progress, _receiver) = watch::channel(0.0_f32);
-    download_and_install(browser, install_dir, &latest, true, None, progress, |_| {}).await?;
+    download_and_install(
+        browser,
+        install_dir,
+        &latest,
+        true,
+        None,
+        progress,
+        |_| {},
+        &lock,
+    )
+    .await?;
     Ok(UpdateOutcome::Updated(latest.browser_version))
 }
 
@@ -177,10 +187,13 @@ pub(crate) enum InstallStep {
 /// The single download → verify → extract → finalize → swap sequence, shared
 /// by the headless [`update`] flow and the UI pipeline in `lib.rs`.
 ///
+/// The caller must retain the same instance lock from recovery through swap.
+///
 /// Keep this the only implementation: the two callers previously carried
 /// hand-maintained copies that drifted in both directions (the UI copy
 /// dropped the preserve-state hook — wiping the Bitwarden vault on update —
 /// and the headless copy dropped the Gecko policies write).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn download_and_install<B: BrowserFamily>(
     browser: &B,
     install_dir: &Path,
@@ -189,7 +202,9 @@ pub(crate) async fn download_and_install<B: BrowserFamily>(
     branding: Option<&crate::Branding>,
     progress: watch::Sender<f32>,
     mut on_step: impl FnMut(InstallStep),
+    lock: &crate::install::InstanceLock,
 ) -> Result<()> {
+    lock.check_install_dir(install_dir)?;
     browser.validate_update(latest)?;
     let stage_dir = crate::install::stage_dir(install_dir);
     let backup_dir = crate::install::backup_dir(install_dir);
@@ -226,6 +241,7 @@ pub(crate) async fn download_and_install<B: BrowserFamily>(
         latest,
         hardening_enabled,
         branding,
+        lock,
     )?;
 
     tracing::info!(
@@ -245,6 +261,7 @@ pub(crate) async fn download_and_install<B: BrowserFamily>(
 /// [`crate::install::atomic_swap`]: the swap replaces `install_dir` wholesale
 /// and deletes the backup, so skipping the hook destroys any state kept
 /// inside the install dir.
+#[allow(clippy::too_many_arguments)]
 fn finalize_install<B: BrowserFamily>(
     browser: &B,
     install_dir: &Path,
@@ -253,7 +270,9 @@ fn finalize_install<B: BrowserFamily>(
     latest: &VersionInfo,
     hardening_enabled: bool,
     branding: Option<&crate::Branding>,
+    lock: &crate::install::InstanceLock,
 ) -> Result<()> {
+    lock.check_install_dir(install_dir)?;
     browser.validate_staged_install(stage_dir)?;
     if hardening_enabled {
         if let crate::browsers::Hardening::GeckoProfile {
@@ -290,7 +309,7 @@ fn finalize_install<B: BrowserFamily>(
     )?;
 
     browser.preserve_state_across_update(install_dir, stage_dir)?;
-    crate::install::atomic_swap(install_dir, stage_dir, backup_dir)?;
+    crate::install::atomic_swap_locked(install_dir, stage_dir, backup_dir, lock)?;
     Ok(())
 }
 
@@ -356,6 +375,7 @@ mod tests {
             &latest,
             false,
             None,
+            &crate::install::InstanceLock::acquire(&install_dir).unwrap(),
         )
         .unwrap();
 
@@ -476,6 +496,7 @@ mod tests {
             &latest,
             false,
             Some(&incompatible),
+            &crate::install::InstanceLock::acquire(&install_dir).unwrap(),
         )
         .expect_err("missing required overlay target must abort before swap");
 
