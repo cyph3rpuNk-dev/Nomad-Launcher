@@ -208,7 +208,10 @@ pub(crate) async fn download_and_install<B: BrowserFamily>(
     browser.validate_update(latest)?;
     let stage_dir = crate::install::stage_dir(install_dir);
     let backup_dir = crate::install::backup_dir(install_dir);
-    std::fs::create_dir_all(&stage_dir)?;
+    // Recovery must have removed any stale stage under this same lock.
+    // Do not adopt an existing directory supplied by another writer.
+    crate::fs_safety::ensure_directory(&stage_dir)?;
+    std::fs::create_dir(&stage_dir)?;
     let package = stage_dir.join(package_name(&latest.download_url));
 
     on_step(InstallStep::Downloading);
@@ -302,6 +305,7 @@ fn finalize_install<B: BrowserFamily>(
         }
     }
 
+    browser.preserve_state_across_update(install_dir, stage_dir)?;
     // Preparation and overlays must leave the required layout intact too.
     layout.validate(stage_dir)?;
     write_version_marker(
@@ -312,16 +316,25 @@ fn finalize_install<B: BrowserFamily>(
         },
     )?;
 
-    browser.preserve_state_across_update(install_dir, stage_dir)?;
     crate::install::atomic_swap_locked(install_dir, stage_dir, backup_dir, lock)?;
     Ok(())
 }
 
-/// Derives a package file name from a download URL's last path segment.
-pub(crate) fn package_name(url: &str) -> &str {
-    url.rsplit('/')
-        .find(|segment| !segment.is_empty())
-        .unwrap_or("nomad-package")
+/// URLs select only a recognized format suffix, never a local basename.
+/// Fixed names cannot escape staging or alias a staged browser executable.
+pub(crate) fn package_name(url: &str) -> &'static str {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return "nomad-package.bin";
+    };
+    let path = parsed.path();
+    let suffix = path.get(path.len().saturating_sub(4)..).unwrap_or("");
+    if suffix.eq_ignore_ascii_case(".zip") {
+        "nomad-package.zip"
+    } else if suffix.eq_ignore_ascii_case(".exe") {
+        "nomad-package.exe"
+    } else {
+        "nomad-package.bin"
+    }
 }
 
 #[cfg(test)]
@@ -739,10 +752,87 @@ mod tests {
         assert!(matches!(err, BrowserError::Verification(_)));
     }
 
+    #[tokio::test]
+    async fn download_pipeline_does_not_adopt_a_preexisting_stage() {
+        let temp = tempfile::tempdir().unwrap();
+        let install = temp.path().join("Browser");
+        let stage = crate::install::stage_dir(&install);
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("sentinel"), b"other writer").unwrap();
+        let lock = crate::install::InstanceLock::acquire(&install).unwrap();
+        let browser = RemovesExecutable(std::sync::atomic::AtomicBool::new(false));
+        let (progress, _rx) = watch::channel(0.0);
+        let mut started = false;
+        let result = download_and_install(
+            &browser,
+            &install,
+            &version_info("2.0", None),
+            false,
+            None,
+            progress,
+            |_| started = true,
+            &lock,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(BrowserError::Io(ref e)) if e.kind() == std::io::ErrorKind::AlreadyExists)
+        );
+        assert!(!started, "existing stages must fail before download");
+        assert_eq!(
+            std::fs::read(stage.join("sentinel")).unwrap(),
+            b"other writer"
+        );
+    }
+
     #[test]
-    fn package_name_uses_the_last_url_segment() {
-        assert_eq!(package_name("https://host/path/uc-x64.zip"), "uc-x64.zip");
-        assert_eq!(package_name("https://host/trailing/"), "trailing");
+    fn package_names_cannot_escape_staging_or_alias_browser_files() {
+        for url in [
+            "https://host/path/../..",
+            "https://host/C:\\outside\\escape.zip",
+            "https://host/..\\..\\escape.exe",
+            "https://host/chrome.exe",
+            "https://host/Bitwarden-Portable.exe",
+            "https://host/pkg.zip?token=secret",
+            "https://host/nomad-package.zip#fragment",
+        ] {
+            let name = package_name(url);
+            assert!(
+                matches!(
+                    name,
+                    "nomad-package.zip" | "nomad-package.exe" | "nomad-package.bin"
+                ),
+                "upstream filename must never become a local path"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_qualified_upstream_name_cannot_redirect_the_package_path() {
+        let fixture = tempfile::tempdir().unwrap();
+        let stage = fixture.path().join("Browser.stage");
+        let foreign = fixture.path().join("outside.zip");
+        let url = format!(
+            "https://host/{}",
+            foreign.to_string_lossy().replace('/', "\\")
+        );
+        let destination = stage.join(package_name(&url));
+        assert!(destination.starts_with(&stage));
+        assert_ne!(destination, foreign);
+    }
+
+    #[test]
+    fn package_name_keeps_only_recognized_format_extensions() {
+        assert_eq!(
+            package_name("https://host/path/uc-x64.zip"),
+            "nomad-package.zip"
+        );
+        assert_eq!(
+            package_name("https://host/setup.EXE?token=private#fragment"),
+            "nomad-package.exe"
+        );
+        assert_eq!(package_name("https://host/trailing/"), "nomad-package.bin");
+        assert_eq!(package_name("not a URL"), "nomad-package.bin");
     }
 
     #[cfg(windows)]

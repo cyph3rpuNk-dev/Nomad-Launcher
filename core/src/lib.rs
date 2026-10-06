@@ -15,6 +15,7 @@ pub mod config;
 pub mod downloader;
 mod extensions;
 pub mod extract;
+mod fs_safety;
 pub mod gpg;
 pub mod hardening;
 pub mod install;
@@ -364,6 +365,8 @@ where
     // It cannot escape base, replace Data/Nomad, or move sibling state into a
     // nested directory that the browser-family layout does not support.
     let install_dir = base.join(&config.browser.install_dir);
+    fs_safety::ensure_directory(&install_dir)?;
+    fs_safety::ensure_directory(base.join("Data"))?;
     if protocol_invocation && browser.installed_version(&install_dir).is_none() {
         return Err(BrowserError::ProtocolInvocation(format!(
             "{} is not installed in this portable folder; run the launcher directly once before opening links through it",
@@ -2229,6 +2232,9 @@ fn elevate_for_prefetch_scrub() {
 /// Rotates `path` to `path.1` when it reaches 512 KB, keeping one backup.
 fn rotate_log(path: &std::path::Path) {
     const MAX_BYTES: u64 = 512 * 1024;
+    if fs_safety::ensure_file(path).is_err() {
+        return;
+    }
     if std::fs::metadata(path).map_or(0, |m| m.len()) >= MAX_BYTES {
         let backup = {
             let mut p = path.to_owned();
@@ -2237,6 +2243,9 @@ fn rotate_log(path: &std::path::Path) {
             p.set_file_name(name);
             p
         };
+        if fs_safety::ensure_file(&backup).is_err() {
+            return;
+        }
         let _ = std::fs::remove_file(&backup);
         let _ = std::fs::rename(path, backup);
     }
@@ -2255,10 +2264,11 @@ fn init_tracing() {
         .and_then(|nomad_dir| {
             // init_tracing runs before Config::load_or_init, so the nomad/
             // directory may not exist yet on first run — create it here.
-            std::fs::create_dir_all(&nomad_dir).ok()?;
+            crate::fs_safety::create_dir_all(&nomad_dir).ok()?;
             Some(nomad_dir.join("nomad.log"))
         })
         .and_then(|path| {
+            fs_safety::ensure_file(&path).ok()?;
             rotate_log(&path);
             std::fs::OpenOptions::new()
                 .create(true)
@@ -2283,6 +2293,66 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(crate) fn owned_directory_link(temp: &tempfile::TempDir, link: &Path, target: &Path) {
+        let root = temp.path().canonicalize().unwrap();
+        assert!(link
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .starts_with(&root));
+        assert!(target.canonicalize().unwrap().starts_with(&root));
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            for path in [link, target] {
+                assert!(path
+                    .to_str()
+                    .unwrap()
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || r"\/:. _-".contains(c)));
+            }
+            let cmd = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+                .join("System32")
+                .join("cmd.exe");
+            let arguments = format!(
+                r#"/d /s /c "mklink /J "{}" "{}"""#,
+                link.to_string_lossy().replace('/', "\\"),
+                target.to_string_lossy().replace('/', "\\")
+            );
+            let result = std::process::Command::new(cmd)
+                .raw_arg(arguments)
+                .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "fixture junction failed: {} {}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            std::os::unix::fs::symlink(target, link).unwrap();
+        }
+    }
+
+    #[test]
+    fn log_rotation_does_not_follow_linked_state_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("instance");
+        let foreign = temp.path().join("foreign");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        let original = vec![b'x'; 512 * 1024];
+        std::fs::write(foreign.join("nomad.log"), &original).unwrap();
+        owned_directory_link(&temp, &base.join("Nomad"), &foreign);
+        rotate_log(&base.join("Nomad/nomad.log"));
+        assert_eq!(std::fs::read(foreign.join("nomad.log")).unwrap(), original);
+        assert!(!foreign.join("nomad.log.1").exists());
+    }
 
     fn helium_failure_fixture() -> (tempfile::TempDir, browsers::helium::Helium, StateHandle) {
         let dir = tempfile::tempdir().unwrap();

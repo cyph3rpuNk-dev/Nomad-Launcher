@@ -183,6 +183,15 @@ Missing files, directory placeholders, symlinks and Windows reparse-point paths
 fail closed, independently of optional browser-specific hooks or hardening.
 See [the required file contracts](docs/UPDATE-SAFETY.md#update-transaction).
 
+### Filesystem boundaries
+
+Use fixed package basenames within exclusively created staging. Check original
+paths and ancestors for symlinks/reparse points before portable-state operations;
+validate copied/promoted trees and remove only owned temporary files on failure.
+The headless updater shares the configured folder-name constraints. See
+[Filesystem paths before mutation](docs/UPDATE-SAFETY.md#filesystem-paths-before-mutation)
+for scope and the concurrent-drive-writer limitation.
+
 ### Update concurrency and recovery
 
 `Nomad/install.lock` serializes each portable folder across launcher processes.

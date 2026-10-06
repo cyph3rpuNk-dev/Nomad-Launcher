@@ -134,23 +134,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let name = String::deserialize(deserializer)?;
-    let path = Path::new(&name);
-    let mut components = path.components();
-    let single_folder = matches!(components.next(), Some(std::path::Component::Normal(_)))
-        && components.next().is_none();
-    let invalid_character = name.chars().any(|c| {
-        c <= '\u{1f}' || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
-    });
-    // Win32 can normalize a trailing dot/space to Data or Nomad. Reject those
-    // spellings rather than changing the name the user supplied.
-    let ambiguous_ending = name.ends_with('.') || name.ends_with(' ');
-    let reserved = name.eq_ignore_ascii_case("Data") || name.eq_ignore_ascii_case(NOMAD_SUBDIR);
-    if !single_folder
-        || invalid_character
-        || ambiguous_ending
-        || reserved
-        || windows_device_name(&name)
-    {
+    if !valid_install_dir_name(&name) {
         return Err(serde::de::Error::custom(format!(
             "install_dir {name:?} must be one Windows-safe folder name beside the launcher \
              (for example Browser or App); paths, Data/Nomad, device names, invalid \
@@ -158,6 +142,23 @@ where
         )));
     }
     Ok(PathBuf::from(name))
+}
+
+// Reject Win32 trailing-dot/space aliases rather than rewriting a supplied
+// name: normalization can otherwise turn an install into Data or Nomad.
+pub(crate) fn valid_install_dir_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    let single_folder = matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none();
+    let invalid_character = name.chars().any(|c| {
+        c <= '\u{1f}' || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+    });
+    single_folder
+        && !invalid_character
+        && !name.ends_with(['.', ' '])
+        && !name.eq_ignore_ascii_case("Data")
+        && !name.eq_ignore_ascii_case(NOMAD_SUBDIR)
+        && !windows_device_name(name)
 }
 
 fn windows_device_name(name: &str) -> bool {
@@ -362,18 +363,24 @@ impl Config {
     pub fn load_or_init(launcher_dir: &Path, default_config: &str) -> Result<Self, ConfigError> {
         let dir = nomad_subdir(launcher_dir);
         let path = dir.join(CONFIG_FILE_NAME);
+        crate::fs_safety::ensure_file(&path).map_err(|source| ConfigError::Read {
+            path: path.clone(),
+            source,
+        })?;
         let contents = match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Refuse an invalid first-run default before writing any state.
                 Self::parse(default_config)?;
-                std::fs::create_dir_all(&dir).map_err(|source| ConfigError::Write {
+                crate::fs_safety::create_dir_all(&dir).map_err(|source| ConfigError::Write {
                     path: dir.clone(),
                     source,
                 })?;
-                std::fs::write(&path, default_config).map_err(|source| ConfigError::Write {
-                    path: path.clone(),
-                    source,
+                crate::fs_safety::write(&path, default_config).map_err(|source| {
+                    ConfigError::Write {
+                        path: path.clone(),
+                        source,
+                    }
                 })?;
                 default_config.to_owned()
             }
@@ -390,6 +397,18 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_init_rejects_linked_state_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("instance");
+        let foreign = temp.path().join("foreign");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        crate::tests::owned_directory_link(&temp, &base.join("Nomad"), &foreign);
+        assert!(Config::load_or_init(&base, DEFAULT_NOMAD_TOML).is_err());
+        assert_eq!(std::fs::read_dir(&foreign).unwrap().count(), 0);
+    }
 
     fn config_with_install_dir(name: &str) -> String {
         format!(

@@ -231,48 +231,7 @@ mod tests {
     }
 
     fn link_directory(temp: &tempfile::TempDir, link: &Path, target: &Path) {
-        let root = temp.path().canonicalize().unwrap();
-        assert!(link
-            .parent()
-            .unwrap()
-            .canonicalize()
-            .unwrap()
-            .starts_with(&root));
-        assert!(target.canonicalize().unwrap().starts_with(&root));
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            for path in [link, target] {
-                assert!(path
-                    .to_str()
-                    .unwrap()
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || r"\/:. _-".contains(c)));
-            }
-            let cmd = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
-                .join("System32")
-                .join("cmd.exe");
-            let arguments = format!(
-                r#"/d /s /c "mklink /J "{}" "{}"""#,
-                link.to_string_lossy().replace('/', "\\"),
-                target.to_string_lossy().replace('/', "\\")
-            );
-            let result = std::process::Command::new(cmd)
-                .raw_arg(arguments)
-                .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
-                .output()
-                .unwrap();
-            assert!(
-                result.status.success(),
-                "fixture junction failed: {} {}",
-                String::from_utf8_lossy(&result.stdout),
-                String::from_utf8_lossy(&result.stderr)
-            );
-        }
-        #[cfg(not(windows))]
-        {
-            std::os::unix::fs::symlink(target, link).unwrap();
-        }
+        crate::tests::owned_directory_link(temp, link, target);
     }
 
     #[cfg(unix)]

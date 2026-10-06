@@ -14,9 +14,12 @@ use crate::browsers::{BrowserError, Result};
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
 fn sibling(install_dir: &Path, suffix: &str) -> PathBuf {
-    let mut s: OsString = install_dir.as_os_str().to_owned();
-    s.push(suffix);
-    PathBuf::from(s)
+    let mut name: OsString = install_dir
+        .file_name()
+        .unwrap_or(install_dir.as_os_str())
+        .to_owned();
+    name.push(suffix);
+    install_dir.with_file_name(name)
 }
 
 /// Returns the staging directory path (`<install_dir>.stage`).
@@ -49,6 +52,8 @@ impl InstanceLock {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
+        validate_update_paths(install_dir)?;
+        crate::fs_safety::ensure_directory(parent)?;
         let launcher_dir = parent.canonicalize()?;
         let state_dir = crate::config::nomad_subdir(&launcher_dir);
         std::fs::create_dir_all(&state_dir)?;
@@ -64,7 +69,9 @@ impl InstanceLock {
                     | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
             );
         }
-        let file = options.open(state_dir.join("install.lock"))?;
+        let lock_path = state_dir.join("install.lock");
+        crate::fs_safety::ensure_file(&lock_path)?;
+        let file = options.open(&lock_path)?;
         match file.try_lock() {
             Ok(()) => Ok(Self { _file: file, launcher_dir }),
             Err(std::fs::TryLockError::WouldBlock) => Err(std::io::Error::new(
@@ -80,6 +87,8 @@ impl InstanceLock {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
+        validate_update_paths(install_dir)?;
+        crate::fs_safety::ensure_directory(parent)?;
         if parent.canonicalize()? != self.launcher_dir {
             return Err(BrowserError::Ownership(
                 "install transaction belongs to another portable folder".into(),
@@ -87,6 +96,32 @@ impl InstanceLock {
         }
         Ok(())
     }
+}
+
+fn validate_update_paths(install_dir: &Path) -> Result<()> {
+    let valid_name = install_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(crate::config::valid_install_dir_name);
+    if !valid_name {
+        return Err(BrowserError::Ownership(
+            "installation must use one non-reserved Windows-safe folder name".into(),
+        ));
+    }
+    for path in [
+        install_dir.to_path_buf(),
+        stage_dir(install_dir),
+        backup_dir(install_dir),
+    ] {
+        crate::fs_safety::ensure_directory(&path)?;
+    }
+    let parent = install_dir
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    crate::fs_safety::ensure_directory(crate::config::nomad_subdir(parent))?;
+    crate::fs_safety::ensure_directory(parent.join("Data"))?;
+    Ok(())
 }
 
 // ── Startup recovery ──────────────────────────────────────────────────────────
@@ -222,6 +257,51 @@ pub(crate) fn atomic_swap_locked(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_roots_reject_junctions_before_mutating_other_folders() {
+        for name in ["Nomad", "Browser", "Browser.stage", "Browser.backup"] {
+            let temp = tempfile::tempdir().unwrap();
+            let base = temp.path().join("instance");
+            let foreign = temp.path().join("foreign");
+            std::fs::create_dir_all(&base).unwrap();
+            std::fs::create_dir_all(&foreign).unwrap();
+            std::fs::write(foreign.join("sentinel"), b"keep").unwrap();
+            let link = base.join(name);
+            crate::tests::owned_directory_link(&temp, &link, &foreign);
+            let result = recover_staging(&base.join("Browser"));
+            assert!(result.is_err(), "{name} link must fail before recovery");
+            assert_eq!(std::fs::read(foreign.join("sentinel")).unwrap(), b"keep");
+            assert_eq!(std::fs::read_dir(&foreign).unwrap().count(), 1);
+            assert!(
+                link.exists(),
+                "invalid links must not be automatically removed or moved"
+            );
+        }
+    }
+
+    #[test]
+    fn linked_launcher_parent_is_rejected_before_canonicalization_and_state_creation() {
+        let fixture = tempfile::tempdir().unwrap();
+        let foreign = fixture.path().join("foreign");
+        std::fs::create_dir_all(&foreign).unwrap();
+        let base = fixture.path().join("instance");
+        crate::tests::owned_directory_link(&fixture, &base, &foreign);
+        assert!(InstanceLock::acquire(&base.join("Browser")).is_err());
+        assert_eq!(std::fs::read_dir(&foreign).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn headless_install_names_cannot_replace_reserved_state_or_use_parent_components() {
+        let fixture = tempfile::tempdir().unwrap();
+        for name in ["Data", "Nomad", "NUL", "Browser."] {
+            assert!(InstanceLock::acquire(&fixture.path().join(name)).is_err());
+        }
+        assert!(InstanceLock::acquire(&fixture.path().join("../Browser")).is_err());
+        assert_eq!(std::fs::read_dir(fixture.path()).unwrap().count(), 0);
+        let trailing = fixture.path().join("Browser").join("");
+        assert_eq!(stage_dir(&trailing), fixture.path().join("Browser.stage"));
+    }
 
     fn assert_busy(result: &Result<InstanceLock>) {
         assert!(matches!(result, Err(BrowserError::Io(ref e))
