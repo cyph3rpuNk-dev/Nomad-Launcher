@@ -482,7 +482,15 @@ Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are 
 - Writes to `HKCU\Software\Classes\...` and `HKCU\Software\RegisteredApplications` only (no UAC, no `HKLM`).
 - On register: records written keys to a sidecar `nomad.reg-state.json` beside the `.exe`.
 - On unregister: reads the sidecar and removes exactly those keys (no guessing, no collateral damage).
-- The registered handler launches `nomad-<browser-id>.exe -- %1` so the launcher mediates URL opens.
+- The registered handler launches `"nomad-<browser-id>.exe" -- "%1"` so the
+  launcher mediates URL/file opens. Require exactly one non-empty target after
+  the separator; reject missing targets, additional arguments, and targets
+  whose first non-whitespace character is `-` or `/` (Windows Gecko also
+  treats `/` as a switch prefix; Chromium trims whitespace before parsing).
+  Validate before internal flag dispatch, configuration, ownership, update, or
+  browser work. Preserve an accepted target verbatim as one positional argument.
+  A separator without a target fails rather than falling back to direct-launch
+  provisioning. Error messages do not echo target contents.
 
 ### Self-registration repair (automatic, narrowly scoped)
 

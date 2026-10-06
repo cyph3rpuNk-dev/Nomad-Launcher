@@ -260,6 +260,15 @@ requires an existing browser installation and skips all browser and extension
 update work. It forwards the URL to the same executable and portable profile,
 allowing the browser's normal single-instance handoff to open a tab in the existing
 window. This applies to every Nomad browser, Chromium- and Firefox-based alike. Run the launcher directly when you want to install or update software.
+
+The registered command accepts exactly one non-empty URL or file target after
+`--`. Missing or additional arguments and targets whose first non-whitespace
+character is `-` or `/` are rejected before configuration or browser work. This prevents link
+invocations from overriding browser launch switches. Windows file targets
+should use a drive-qualified path (for example `C:\My Files\page.html`) or a
+`file://` URL; spaces within one target are preserved. Configure intentional
+browser switches through `[launch] extra_args`.
+
 If the portable folder moves, register it again from its new path.
 
 Browsers can also register themselves. If you use the browser's own "make this my default" button, Windows records the browser executable rather than the launcher, and a clicked link then starts a second copy of the browser on its default profile under `%LOCALAPPDATA%` or `%APPDATA%` instead of opening a tab in the portable one. That second copy has none of your extensions or sign-ins, and older versions then deleted its profile when the browser closed.
