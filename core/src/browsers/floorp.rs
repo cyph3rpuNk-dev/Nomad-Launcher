@@ -119,6 +119,10 @@ impl Floorp {
 // ── BrowserFamily impl ────────────────────────────────────────────────────────
 
 impl BrowserFamily for Floorp {
+    fn package_target(&self) -> super::PackageTarget {
+        self.arch.into()
+    }
+
     fn id(&self) -> &'static str {
         "floorp"
     }
@@ -400,6 +404,7 @@ mod tests {
         let browser = Floorp::new(Arch::X64);
         assert!(browser.installed_version(dir.path()).is_none());
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "11.5.0".to_owned(),
             engine_version: "11.5.0".to_owned(),
         };

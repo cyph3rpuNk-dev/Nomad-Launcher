@@ -98,6 +98,10 @@ fn arch_asset_name(arch: Arch, version: &str) -> Result<String> {
 }
 
 impl BrowserFamily for Mullvad {
+    fn package_target(&self) -> super::PackageTarget {
+        self.arch.into()
+    }
+
     fn id(&self) -> &'static str {
         "mullvad"
     }
@@ -371,6 +375,7 @@ mod tests {
         let browser = Mullvad::new(Arch::X64);
         assert!(browser.installed_version(dir.path()).is_none());
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "15.0.14".to_owned(),
             engine_version: "15.0.14".to_owned(),
         };

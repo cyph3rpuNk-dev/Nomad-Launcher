@@ -64,7 +64,7 @@ nomad-launcher/
       lib.rs                  # pub fn run(browser: impl BrowserFamily); orchestration + scrub_*
       config.rs               # nomad.toml load/save/validate
       updater.rs              # launch-time update check + atomic-swap driver
-      version_cache.rs        # nomad-version-cache.toml (4 h TTL release/uBO cache)
+      version_cache.rs        # nomad-version-cache.toml (6 h TTL target-scoped release/uBO cache)
       downloader.rs           # HTTP download with progress
       gpg.rs                  # pure-Rust GPG verification + SHA-256 / SHA-512
       authenticode.rs         # WinVerifyTrust signer pinning (Bitwarden)
@@ -138,6 +138,7 @@ pub trait BrowserFamily: Send + Sync {
     fn staged_install_layout(&self) -> StagedInstallLayout; // mandatory executable/runtime layout
     fn public_key(&self) -> Option<&'static [u8]>; // ASCII-armored PGP key, if upstream signs
 
+    fn package_target(&self) -> PackageTarget; // x64/x86/arm64, or portable for one artifact
     fn installed_version(&self, install_dir: &Path) -> Option<InstalledVersion>;
 
     // Async methods use RPITIT (`impl Future + Send`), not `async fn` — the
@@ -167,7 +168,7 @@ pub trait BrowserFamily: Send + Sync {
 - `Engine` is `Chromium`, `Gecko`, or `Electron`. `Electron` (Bitwarden's desktop app) exists so the Chromium/Gecko launch-flag injection in `build_launch_args` never fires for a non-browser app.
 - `public_key()` exposes a detached package-signing key: `Some` requires the package signature, and a missing signature cannot fall back to a hash. `None` uses the adapter's hash/other verification path, plus Authenticode signer pinning for Bitwarden. Firefox returns `None` here because it authenticates its checksum manifest during release resolution.
 - `VersionInfo` carries: browser version, underlying engine version, download URL, optional signature URL, optional SHA-256 hash, optional SHA-512 hash.
-- `InstalledVersion` carries the browser version and engine version parsed from the local install.
+- `InstalledVersion` carries the browser version, engine version and optional package-selection target (`x64`, `x86`, `arm64` or `portable`). Legacy markers omit the target and require a verified replacement before being treated as current. `BrowserFamily::package_target()` identifies the adapter selector; cache reuse and up-to-date decisions require a matching known target. Bitwarden uses `portable` for its single artifact. Targets identify package selection; Nomad does not independently validate executable machine types.
 - `hardening()` returns the browser's privacy-hardening payload (see §5): `Hardening::LaunchFlags { flags, local_state, preferences }` for Chromium-family browsers (flags appended at launch, JSON state seeded), `Hardening::GeckoProfile { user_js, policies, autoconfig, cfg, ublock_xpi_releases_url }` for Gecko-family browsers (files written into the install).
 - `ProgressSink` is a `tokio::sync::watch::Sender<f32>` (0.0–1.0).
 - The seven defaulted methods keep the common case to zero boilerplate; only the member named in each trailing comment overrides it.

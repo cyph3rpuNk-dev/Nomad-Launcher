@@ -35,11 +35,18 @@ pub enum UpdateOutcome {
     Updated(String),
 }
 
-/// Returns whether `latest` differs from the currently installed build.
+/// Returns whether the version or selected package target needs replacement.
+/// Legacy markers with an unknown target cannot establish that a build is current.
 #[must_use]
-pub fn needs_update(installed: Option<&InstalledVersion>, latest: &VersionInfo) -> bool {
+pub fn needs_update(
+    installed: Option<&InstalledVersion>,
+    latest: &VersionInfo,
+    target: crate::browsers::PackageTarget,
+) -> bool {
     match installed {
-        Some(installed) => installed.browser_version != latest.browser_version,
+        Some(installed) => {
+            installed.browser_version != latest.browser_version || installed.target != Some(target)
+        }
         None => true,
     }
 }
@@ -137,7 +144,7 @@ pub async fn update<B: BrowserFamily>(
     let latest = browser.fetch_latest_version().await?;
     browser.validate_update(&latest)?;
     let installed = browser.installed_version(install_dir);
-    if !needs_update(installed.as_ref(), &latest) {
+    if !needs_update(installed.as_ref(), &latest, browser.package_target()) {
         tracing::info!(
             browser = browser.id(),
             version = latest.browser_version,
@@ -316,6 +323,7 @@ fn finalize_install<B: BrowserFamily>(
     write_version_marker(
         stage_dir,
         &InstalledVersion {
+            target: Some(browser.package_target()),
             browser_version: latest.browser_version.clone(),
             engine_version: latest.engine_version.clone(),
         },
@@ -545,6 +553,9 @@ mod tests {
     struct RemovesExecutable(std::sync::atomic::AtomicBool);
 
     impl BrowserFamily for RemovesExecutable {
+        fn package_target(&self) -> crate::browsers::PackageTarget {
+            crate::browsers::PackageTarget::X64
+        }
         fn id(&self) -> &'static str {
             "fixture"
         }
@@ -694,26 +705,161 @@ mod tests {
     }
 
     #[test]
+    fn same_version_requires_update_for_different_or_unknown_target() {
+        use crate::browsers::PackageTarget;
+        for requested in [
+            PackageTarget::X64,
+            PackageTarget::X86,
+            PackageTarget::Arm64,
+            PackageTarget::Portable,
+        ] {
+            for recorded in [
+                None,
+                Some(PackageTarget::X64),
+                Some(PackageTarget::X86),
+                Some(PackageTarget::Arm64),
+                Some(PackageTarget::Portable),
+            ] {
+                let installed = InstalledVersion {
+                    target: recorded,
+                    browser_version: "2.0".into(),
+                    engine_version: "2.0".into(),
+                };
+                assert_eq!(
+                    needs_update(Some(&installed), &version_info("2.0", None), requested),
+                    recorded != Some(requested)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn verified_finalization_records_selected_target() {
+        for arch in [Arch::X64, Arch::X86, Arch::Arm64] {
+            let temp = tempfile::tempdir().unwrap();
+            let install = temp.path().join("Browser");
+            let stage = crate::install::stage_dir(&install);
+            let backup = crate::install::backup_dir(&install);
+            for name in [
+                "firefox.exe",
+                "xul.dll",
+                "application.ini",
+                "omni.ja",
+                "browser/omni.ja",
+            ] {
+                let path = stage.join(name);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, b"inert verified-layout fixture").unwrap();
+            }
+            let browser = crate::browsers::firefox::Firefox::new(arch);
+            let lock = crate::install::InstanceLock::acquire(&install).unwrap();
+            finalize_install(
+                &browser,
+                &install,
+                &stage,
+                &backup,
+                &version_info("2.0", None),
+                false,
+                None,
+                &lock,
+            )
+            .unwrap();
+            assert_eq!(
+                browser.installed_version(&install).unwrap().target,
+                Some(arch.into())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_target_switch_keeps_previous_marker_install_and_profile() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/x86.zip");
+                then.status(200).body("inert mismatched package");
+            })
+            .await;
+        let temp = tempfile::tempdir().unwrap();
+        let install = temp.path().join("Browser");
+        let profile = temp.path().join("Data/sentinel");
+        std::fs::create_dir(&install).unwrap();
+        std::fs::create_dir(profile.parent().unwrap()).unwrap();
+        std::fs::write(install.join("chrome.exe"), b"working x64 fixture").unwrap();
+        std::fs::write(&profile, b"user data").unwrap();
+        let previous = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
+            browser_version: "200.0.0.0".into(),
+            engine_version: "200.0.0.0".into(),
+        };
+        write_version_marker(&install, &previous).unwrap();
+        let marker_bytes = std::fs::read(install.join(".nomad-version")).unwrap();
+        let browser = UngoogledChromium::new(Arch::X86);
+        let mut latest = version_info("200.0.0.0", Some(&"0".repeat(64)));
+        latest.download_url = server.url("/x86.zip");
+        let lock = crate::install::InstanceLock::acquire(&install).unwrap();
+        let (progress, _rx) = watch::channel(0.0);
+        let result = download_and_install(
+            &browser,
+            &install,
+            &latest,
+            false,
+            None,
+            progress,
+            |_| {},
+            &lock,
+        )
+        .await;
+        assert!(matches!(result, Err(BrowserError::Verification(_))));
+        assert_eq!(
+            std::fs::read(install.join(".nomad-version")).unwrap(),
+            marker_bytes
+        );
+        assert_eq!(browser.installed_version(&install).unwrap(), previous);
+        assert_eq!(
+            std::fs::read(install.join("chrome.exe")).unwrap(),
+            b"working x64 fixture"
+        );
+        assert_eq!(std::fs::read(profile).unwrap(), b"user data");
+        assert!(!crate::install::backup_dir(&install).exists());
+    }
+
+    #[test]
     fn needs_update_when_nothing_installed() {
-        assert!(needs_update(None, &version_info("1.0", None)));
+        assert!(needs_update(
+            None,
+            &version_info("1.0", None),
+            crate::browsers::PackageTarget::X64
+        ));
     }
 
     #[test]
     fn needs_update_when_versions_differ() {
         let installed = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "1.0".to_owned(),
             engine_version: "1.0".to_owned(),
         };
-        assert!(needs_update(Some(&installed), &version_info("2.0", None)));
+        assert!(needs_update(
+            Some(&installed),
+            &version_info("2.0", None),
+            crate::browsers::PackageTarget::X64
+        ));
     }
 
     #[test]
     fn no_update_when_versions_match() {
         let installed = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "2.0".to_owned(),
             engine_version: "2.0".to_owned(),
         };
-        assert!(!needs_update(Some(&installed), &version_info("2.0", None)));
+        assert!(!needs_update(
+            Some(&installed),
+            &version_info("2.0", None),
+            crate::browsers::PackageTarget::X64
+        ));
     }
 
     #[test]
@@ -805,6 +951,7 @@ mod tests {
         std::fs::write(install.join("firefox.exe"), b"working browser").unwrap();
         std::fs::write(profile.join("sentinel"), b"user data").unwrap();
         let previous = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "1.0".into(),
             engine_version: "1.0".into(),
         };
@@ -870,6 +1017,7 @@ mod tests {
         std::fs::write(install.join("firefox.exe"), b"working browser").unwrap();
         std::fs::write(profile.join("sentinel"), b"user data").unwrap();
         let previous = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "1.0".into(),
             engine_version: "1.0".into(),
         };

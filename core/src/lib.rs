@@ -799,29 +799,25 @@ async fn update_check_phase<B: BrowserFamily>(
     // ── Version cache ────────────────────────────────────────────────────────
     let launcher_dir = install_dir.parent().unwrap_or(install_dir);
     let cache_path = config::nomad_subdir(launcher_dir).join("nomad-version-cache.toml");
-    if let Some(cached) = version_cache::VersionCache::load(&cache_path) {
-        // Never reuse a cache entry that was created when an upstream hash
-        // endpoint was temporarily missing or used an unrecognised format.
-        // Such an entry would otherwise suppress the corrected parser until
-        // the six-hour TTL expires and make a verified update appear
-        // permanently unverifiable after a launcher upgrade.
-        if cached.is_fresh() && cached.is_url_plausible() && cached.has_integrity_material() {
-            let latest = cached.into_version_info();
-            browser.validate_update(&latest)?;
-            tracing::debug!(
-                browser = browser.id(),
-                version = %latest.browser_version,
-                "version cache hit; skipping network check"
-            );
-            return Ok(resolve_check_action(
-                browser,
-                install_dir,
-                latest,
-                opts,
-                state,
-                ctx,
-            ));
-        }
+    // Retain freshness, host and integrity checks, then require the adapter's
+    // exact target. Unknown legacy records must never be assumed to be x64.
+    let cached_latest = version_cache::VersionCache::load(&cache_path)
+        .filter(|cached| {
+            cached.is_fresh() && cached.is_url_plausible() && cached.has_integrity_material()
+        })
+        .and_then(|cached| cached.into_version_info(browser.package_target()));
+    if let Some(latest) = cached_latest {
+        browser.validate_update(&latest)?;
+        tracing::debug!(browser = browser.id(), version = %latest.browser_version,
+            "version cache hit; skipping network check");
+        return Ok(resolve_check_action(
+            browser,
+            install_dir,
+            latest,
+            opts,
+            state,
+            ctx,
+        ));
     }
 
     // ── Network check ────────────────────────────────────────────────────────
@@ -835,7 +831,7 @@ async fn update_check_phase<B: BrowserFamily>(
     let latest = match browser.fetch_latest_version().await {
         Ok(info) => {
             browser.validate_update(&info)?;
-            version_cache::VersionCache::from_version_info(&info)
+            version_cache::VersionCache::from_version_info(&info, browser.package_target())
                 .with_preserved_ubo_version(&cache_path)
                 .save(&cache_path);
             info
@@ -887,7 +883,7 @@ fn resolve_check_action<B: BrowserFamily>(
     ctx.request_repaint();
 
     let installed = browser.installed_version(install_dir);
-    if !updater::needs_update(installed.as_ref(), &latest) {
+    if !updater::needs_update(installed.as_ref(), &latest, browser.package_target()) {
         tracing::info!(
             browser = browser.id(),
             version = latest.browser_version,
@@ -2372,6 +2368,156 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gui_check_uses_only_target_matching_cache_and_install_marker() {
+        use browsers::{InstalledVersion, PackageTarget, VersionInfo};
+        use httpmock::prelude::*;
+        for (cached_target, installed_target, network_calls, update_expected) in [
+            (Some(PackageTarget::X64), Some(PackageTarget::X64), 1, true),
+            (None, None, 1, true),
+            (Some(PackageTarget::X86), Some(PackageTarget::X64), 0, true),
+            (Some(PackageTarget::X86), Some(PackageTarget::X86), 0, false),
+        ] {
+            let server = MockServer::start_async().await;
+            let response = serde_json::json!({"tag_name":"200.0.0.0-1.1", "assets":[{
+                "name":"ungoogled-chromium_windows_x86.zip",
+                "browser_download_url":"https://github.com/fixture/windows_x86.zip",
+                "digest":format!("sha256:{}", "a".repeat(64))}]});
+            let request = server
+                .mock_async(|when, then| {
+                    when.method(GET).path("/latest");
+                    then.status(200).body(response.to_string());
+                })
+                .await;
+            let temp = tempfile::tempdir().unwrap();
+            let install = temp.path().join("Browser");
+            let profile = temp.path().join("Data/sentinel");
+            std::fs::create_dir(&install).unwrap();
+            std::fs::create_dir(profile.parent().unwrap()).unwrap();
+            std::fs::write(&profile, b"user data").unwrap();
+            let marker = InstalledVersion {
+                target: installed_target,
+                browser_version: "200.0.0.0-1.1".into(),
+                engine_version: "200.0.0.0".into(),
+            };
+            browsers::write_version_marker(&install, &marker).unwrap();
+            let info = VersionInfo {
+                browser_version: marker.browser_version.clone(),
+                engine_version: marker.engine_version.clone(),
+                download_url: "https://github.com/fixture/windows_x64.zip".into(),
+                signature_url: None,
+                sha256: Some("a".repeat(64)),
+                sha512: None,
+            };
+            let cache_path = config::nomad_subdir(temp.path()).join("nomad-version-cache.toml");
+            let mut cache =
+                version_cache::VersionCache::from_version_info(&info, PackageTarget::X64);
+            cache.target = cached_target;
+            if cached_target == Some(PackageTarget::X86) {
+                cache.download_url = "https://github.com/fixture/windows_x86.zip".into();
+            }
+            cache.ubo_version = Some("1.70.0".into());
+            cache.save(&cache_path);
+            let browser = browsers::ungoogled::UngoogledChromium::with_releases_url(
+                config::Arch::X86,
+                server.url("/latest"),
+            );
+            let state = Arc::new((
+                std::sync::Mutex::new(ui::NomadState {
+                    view: build_initial_view(&browser, config::Arch::X86, &[]),
+                    phase: WindowPhase::Running,
+                }),
+                std::sync::Condvar::new(),
+            ));
+            let lock = install::InstanceLock::acquire(&install).unwrap();
+            let outcome = update_check_phase(
+                &browser,
+                &install,
+                UpdateOptions {
+                    check_on_launch: true,
+                    auto_download: false,
+                },
+                &state,
+                &egui::Context::default(),
+                &lock,
+            )
+            .await
+            .unwrap();
+            request.assert_calls_async(network_calls).await;
+            assert_eq!(
+                matches!(outcome, CheckPhaseResult::Prompt(_)),
+                update_expected
+            );
+            assert_eq!(
+                version_cache::VersionCache::load(&cache_path)
+                    .unwrap()
+                    .target,
+                Some(PackageTarget::X86)
+            );
+            assert_eq!(
+                version_cache::VersionCache::load(&cache_path)
+                    .unwrap()
+                    .ubo_version
+                    .as_deref(),
+                Some("1.70.0")
+            );
+            assert_eq!(std::fs::read(&profile).unwrap(), b"user data");
+            assert_eq!(browsers::read_version_marker(&install).unwrap(), marker);
+            assert!(!install::stage_dir(&install).exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_target_cache_miss_can_use_legacy_install_without_relabeling() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        let request = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/latest");
+                then.status(403);
+            })
+            .await;
+        let temp = tempfile::tempdir().unwrap();
+        let install_dir = temp.path().join("Browser");
+        std::fs::create_dir(&install_dir).unwrap();
+        let marker = install_dir.join(".nomad-version");
+        let original = "browser_version = \"200.0.0.0\"\nengine_version = \"200.0.0.0\"\n";
+        std::fs::write(&marker, original).unwrap();
+        let browser = browsers::ungoogled::UngoogledChromium::with_releases_url(
+            config::Arch::X86,
+            server.url("/latest"),
+        );
+        let state = Arc::new((
+            std::sync::Mutex::new(ui::NomadState {
+                view: build_initial_view(&browser, config::Arch::X86, &[]),
+                phase: WindowPhase::Running,
+            }),
+            std::sync::Condvar::new(),
+        ));
+        let lock = install::InstanceLock::acquire(&install_dir).unwrap();
+        let outcome = update_check_phase(
+            &browser,
+            &install_dir,
+            UpdateOptions {
+                check_on_launch: true,
+                auto_download: true,
+            },
+            &state,
+            &egui::Context::default(),
+            &lock,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, CheckPhaseResult::Launch));
+        request.assert_calls_async(1).await;
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), original);
+        assert_eq!(
+            browser.installed_version(&install_dir).unwrap().target,
+            None
+        );
+        assert!(!install::stage_dir(&install_dir).exists());
+    }
+
+    #[tokio::test]
     async fn launch_only_check_phase_preserves_stage_and_backup() {
         let (dir, browser, state) = helium_failure_fixture();
         let install = dir.path().join("Browser");
@@ -2420,6 +2566,7 @@ mod tests {
         browsers::write_version_marker(
             &install_dir,
             &browsers::InstalledVersion {
+                target: Some(crate::browsers::PackageTarget::X64),
                 browser_version: "1.0".into(),
                 engine_version: "1.0".into(),
             },
@@ -2497,6 +2644,7 @@ mod tests {
         browsers::write_version_marker(
             &install,
             &browsers::InstalledVersion {
+                target: Some(crate::browsers::PackageTarget::X64),
                 browser_version: "0.18.3.1".to_owned(),
                 engine_version: "0.18.3.1".to_owned(),
             },
