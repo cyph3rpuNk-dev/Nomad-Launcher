@@ -211,12 +211,42 @@ updates enabled, one verified replacement is needed to establish its target;
 `auto_download = false` still prompts. Offline fallback and protocol/disabled
 update launches retain existing behavior and may use the current installation.
 Unknown-target extension-only caches remain usable for uBlock version state,
-but never for browser-package selection. Version ordering and downgrade
-protection are separate from this target-identity change.
+but never for browser-package selection. Target changes and legacy migration
+also obey the downgrade protection below.
 
 Tests cover the target matrix, legacy records, GUI cache hits/misses, marker
 promotion, and same-version target replacement using local HTTP and inert
 owned fixtures. They do not download or execute a real browser.
+
+## Downgrade protection
+
+Update decisions order stable browser release versions numerically. Supported
+formats are dotted decimal components, an optional numeric packaging revision
+after a hyphen (including dotted revisions), Firefox's `esr` suffix, and legacy
+`v`/`G` prefixes. Revisions are package-build numbers, not SemVer prereleases.
+Trailing zero components compare equally for ordering; revision components are
+compared only after the main release components. Inputs are limited to 128 bytes,
+16 components per part and unsigned 64-bit numbers. Unknown labels, prerelease
+syntax, malformed components and overflow fail closed instead of lexical ordering.
+
+The shared GUI/headless checks reject any offered release below the installed
+browser version, regardless of target or a legacy marker's missing target.
+Same-version target changes and verified legacy-target migration remain allowed.
+The install path repeats the check under its instance lock before stage creation
+or package download. There is no automatic downgrade override.
+
+An older/unorderable cached release is treated as a miss so it cannot suppress
+a fresh lookup. Fresh older/unorderable metadata is rejected before cache writes,
+update prompts, download or swap. The existing browser, marker, cache and profile
+remain available; the usual error UI may launch the current installation.
+Disabled/protocol update checks and offline fallback retain existing behavior.
+
+This orders the adapter's browser release metadata. It does not independently
+inspect the executable's version or engine, authenticate unsigned metadata,
+or defend against a compromised host/drive writer. Unknown upstream release
+formats or nonstandard installed markers need review rather than guessing.
+Regression tests use local HTTP and inert owned temporary files; live upstream
+version formats and real browser behavior have not been checked here.
 
 ## Required package signatures
 
