@@ -141,3 +141,26 @@ the corresponding postcondition has been verified. Missing targets, skipped
 resources, partial writes, or incompatible layouts leave the marker absent so
 the operation is retried after the launcher is updated. Tests must cover both
 the success path and every fail-closed condition.
+
+## Cleanup ownership boundary
+
+Neither ordinary nor fallback launch deletes host browser state. Post-exit
+automatic cleanup requires the launcher's matching instance marker and a
+browser executable that resolves inside the owned portable folder. A missing
+marker, mismatched family, relative/foreign image path, or reparse-point path
+fails closed and leaves host traces intact.
+
+Recent cleanup removes only individual links whose safely parsed local target
+resolves inside this folder; it does not use a drive letter as an ownership
+boundary. Links with competing IDList, relative, network, or environment
+targets, opaque records, or unresolved targets are preserved. WER cleanup
+requires one absolute `AppPath` in bounded, valid UTF-8 or UTF-16 `Report.wer`
+metadata that resolves to this exact browser image. Directory links and
+junctions are not followed. File metadata reads are capped at 64 KiB.
+
+Host browser/profile directories, Gecko install maps, shared temporary files,
+raw crash dumps, and whole compound Jump Lists are never automatic deletion
+targets. A matching brand name, filename, or missing executable is not proof
+that a file belongs to the portable instance. Unknown ownership means leaving
+a trace. Explicit thumbnail/icon-cache and Prefetch options keep their
+documented opt-in behavior; no real host cleanup runs in regression tests.
