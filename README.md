@@ -133,29 +133,48 @@ What each browser family gets:
 
 ## Post-exit cleanup
 
-When the browser closes, a detached watcher process scrubs the traces Windows writes on its own:
+When the browser closes, a detached watcher performs best-effort cleanup of
+host traces that can be attributed to this portable instance. It requires a
+valid `Nomad/instance.toml` matching the launcher family and an existing browser
+executable resolved inside the owned folder. Missing or ambiguous ownership
+causes automatic host cleanup to be skipped.
 
-| Location | What gets removed |
+| Location | What gets removed automatically |
 |---|---|
-| `%TEMP%\` | Chromium and Mozilla temp files |
-| `%APPDATA%\...\Recent\` | `.lnk` shortcuts targeting the portable drive |
-| `%APPDATA%\...\AutomaticDestinations\` | Jump List entries mentioning the portable path |
-| `%LOCALAPPDATA%\CrashDumps\` | Crash dumps for the launched browser |
-| `%LOCALAPPDATA%\{Mozilla, Firefox, Floorp, …}\` | Gecko runtime working dirs |
-| `%LOCALAPPDATA%\Chromium\`, `%LOCALAPPDATA%\imput\Helium\` | Chromium runtime working dirs |
-| `%LOCALAPPDATA%\Mullvad\MullvadBrowser\` | Mullvad Browser runtime working dir |
-| `%APPDATA%\{Mozilla\Firefox, Floorp, Waterfox}\installs.ini` | The profile-to-install mapping Gecko writes |
-| `C:\Windows\Prefetch\` | Prefetch entries (requires UAC; decline the prompt to skip) |
+| `%APPDATA%\Microsoft\Windows\Recent\` | Individual `.lnk` files with an unambiguous local target resolved inside this portable folder |
+| `%ProgramData%\Microsoft\Windows\WER\{ReportQueue,ReportArchive}\` | Individual reports whose `Report.wer` identifies this exact browser executable with one absolute `AppPath` |
 
-Thumbnail cache scrubbing is opt-in (`scrub_thumbnail_cache = true`) because it briefly restarts Explorer. The Recent-shortcut and Jump List scrubs only run when the launcher is on a removable drive, so they can never wipe your system-wide history when run from `C:`.
+Shortcut cleanup is scoped to the portable folder, on fixed or removable
+drives. Other shortcuts on the same drive are preserved. Shortcuts with
+competing target records, unreadable or oversized metadata, and cleanup source
+paths through symlinks or junctions are left alone. Place the launcher in a dedicated folder;
+automatic cleanup is skipped at a drive root.
 
-Those runtime directories are also where a normally installed copy of the same browser keeps its program files and profile. If Nomad finds an installation in one of them it leaves the whole directory alone, profile included, and notes that in `nomad.log`. The profile there is your real one and there is no way to tell it apart from a stray, so leaving an unscrubbed trace is the better outcome. Versions before v1.0.6 deleted these directories outright, which removed browsers people had installed themselves.
+Shared browser directories under `%LOCALAPPDATA%` and `%ProgramData%`, Gecko
+`installs.ini` files, shared `%TEMP%` files, raw `CrashDumps`, and compound Jump
+List files are preserved. Browser names and missing executables do not prove
+that those files belong to Nomad: a system-wide browser keeps its profile in a
+different folder from its executable, and a Jump List can contain unrelated
+entries alongside a portable one. No shared profiles, cookies, registrations,
+or empty vendor parents are deleted before launch or after exit.
+
+This conservative cleanup can leave host traces, including profiles created
+when a browser was launched outside Nomad. Use `--register-default` so links
+reach the portable profile; review any old stray profiles separately.
+
+Thumbnail/icon cache clearing remains an explicit opt-in
+(`scrub_thumbnail_cache = true`) that briefly restarts Explorer. Prefetch
+clearing remains an explicit opt-in (`scrub_prefetch = true`) and may request
+UAC elevation. Both settings affect shared Windows trace caches as described
+in the configuration; they are separate from automatic attributed cleanup.
 
 ### What Nomad cannot scrub
 
 Windows keeps execution records that Nomad does not remove, either because deleting them requires administrator rights or because removing them would harm the system: Amcache and ShimCache (program execution history), SRUM (per-application network usage), the NTFS USN journal's record of deleted files, Windows event logs, and the pagefile. Prefetch is the one Nomad can reach, and only with elevation (`scrub_prefetch`, opt-in).
 
-In practical terms: the scrub removes what a casual look at the machine would find, not what a forensic examination would. If your threat model includes forensics on the host, a portable browser on that host is the wrong tool. The full threat model is in [SECURITY.md](SECURITY.md).
+Cleanup reduces some directly attributed traces. Shared and unattributed
+traces can remain visible during a casual inspection, and Windows keeps
+execution records. Review the full threat model in [SECURITY.md](SECURITY.md).
 
 ## On-disk layout
 
