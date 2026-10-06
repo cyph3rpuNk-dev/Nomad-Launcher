@@ -47,7 +47,7 @@ pub fn write_user_js(profile_dir: &Path, user_js_content: &str) -> Result<()> {
     } else {
         format!("{existing}\n\n{managed}")
     };
-    crate::fs_safety::write(&path, new_content)?;
+    crate::fs_safety::atomic_write(&path, new_content.as_bytes())?;
     Ok(())
 }
 
@@ -76,7 +76,7 @@ pub fn remove_managed_user_js(profile_dir: &Path) -> Result<()> {
     if stripped.trim().is_empty() {
         std::fs::remove_file(&path)?;
     } else {
-        crate::fs_safety::write(&path, stripped)?;
+        crate::fs_safety::atomic_write(&path, stripped.as_bytes())?;
     }
     Ok(())
 }
@@ -91,7 +91,7 @@ pub fn remove_managed_user_js(profile_dir: &Path) -> Result<()> {
 pub fn write_policies_json(install_dir: &Path, policies_content: &str) -> Result<()> {
     let dist = install_dir.join("distribution");
     crate::fs_safety::create_dir_all(&dist)?;
-    crate::fs_safety::write(dist.join("policies.json"), policies_content)?;
+    crate::fs_safety::atomic_write(&dist.join("policies.json"), policies_content.as_bytes())?;
     Ok(())
 }
 
@@ -115,8 +115,11 @@ pub fn write_autoconfig(
 ) -> Result<()> {
     let pref_dir = install_dir.join("defaults").join("pref");
     crate::fs_safety::create_dir_all(&pref_dir)?;
-    crate::fs_safety::write(pref_dir.join("autoconfig.js"), autoconfig_content)?;
-    crate::fs_safety::write(install_dir.join("nomad.cfg"), cfg_content)?;
+    crate::fs_safety::atomic_write(
+        &pref_dir.join("autoconfig.js"),
+        autoconfig_content.as_bytes(),
+    )?;
+    crate::fs_safety::atomic_write(&install_dir.join("nomad.cfg"), cfg_content.as_bytes())?;
     Ok(())
 }
 
@@ -211,7 +214,7 @@ pub fn write_chromium_state(
 pub fn write_chromium_initial_preferences(install_dir: &Path, payload: &str) -> Result<()> {
     let path = install_dir.join("initial_preferences");
     crate::fs_safety::create_dir_all(install_dir)?;
-    crate::fs_safety::write(&path, payload)?;
+    crate::fs_safety::atomic_write(&path, payload.as_bytes())?;
     Ok(())
 }
 
@@ -303,7 +306,9 @@ fn merge_json_file(path: &Path, defaults_json: &str) -> Result<()> {
                 path.display()
             ))
         })?,
-        _ => Value::Object(Map::new()),
+        Ok(_) => Value::Object(Map::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
+        Err(e) => return Err(e.into()),
     };
     let mut merged = merge_value(existing, defaults.clone());
     for &locked in LOCKED_SCALAR_PATHS {
@@ -316,7 +321,7 @@ fn merge_json_file(path: &Path, defaults_json: &str) -> Result<()> {
     }
     let bytes = serde_json::to_vec(&merged)
         .map_err(|e| BrowserError::Parse(format!("could not serialize merged JSON: {e}")))?;
-    crate::fs_safety::write(path, bytes)?;
+    crate::fs_safety::atomic_write(path, &bytes)?;
     Ok(())
 }
 
@@ -455,6 +460,43 @@ fn strip_fenced(existing: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_chromium_preferences_are_preserved_without_resetting_to_defaults() {
+        let fixture = tempfile::tempdir().unwrap();
+        let profile = fixture.path().join("Default");
+        std::fs::create_dir_all(&profile).unwrap();
+        let path = profile.join("Preferences");
+        let original = b"private preferences \xff\xfe";
+        std::fs::write(&path, original).unwrap();
+        assert!(write_chromium_state(fixture.path(), None, Some(r#"{"x":true}"#)).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_preferences_replacement_preserves_existing_bytes() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let fixture = tempfile::tempdir().unwrap();
+        let path = fixture.path().join("Local State");
+        let original = br#"{"custom":"keep"}"#;
+        std::fs::write(&path, original).unwrap();
+        // Reads and writes are allowed, but replacement is denied. A truncate
+        // writer changes the file; a staged replacement must fail safely.
+        let handle = std::fs::File::options()
+            .read(true)
+            .share_mode(
+                windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
+                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
+            )
+            .open(&path)
+            .unwrap();
+        let result = write_chromium_state(fixture.path(), Some(r#"{"new":true}"#), None);
+        assert!(result.is_err(), "a locked replacement must fail");
+        drop(handle);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(fixture.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn profile_writers_and_removal_reject_linked_profile_directories() {
