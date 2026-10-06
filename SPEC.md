@@ -278,6 +278,18 @@ Flags upstream marks as **potentially breaking** are excluded from the default s
 
 **Helium exception.** Helium ships its own anti-fingerprinting framework ("Helium Noise") that already noises canvas pixels and AudioContext and **randomizes** `hardwareConcurrency` (2–16) by default — a more complete and less detectable approach than the ungoogled flags. So for Helium, Nomad defers those vectors to Helium Noise: it omits `--fingerprinting-canvas-image-data-noise` from Helium's flag set and never applies `ReducedSystemInfo` (gated by `BrowserFamily::has_builtin_fingerprint_noise()`), since `ReducedSystemInfo`'s clamp-to-`2` would override Helium's randomized value. Nomad still supplies the vectors Helium Noise does not cover (`measuretext`/`client-rects` noise, `SpoofWebGLInfo`, `RemoveClientHints`). Ungoogled Chromium has no Helium Noise and keeps the full set.
 
+**Helium updater portability rule.** `prepare_launch` forces
+`helium.services.browser_updates = false` into both the merged
+`Browser/initial_preferences` template and an existing
+`Data/Default/Preferences`, regardless of `[hardening] enabled`. This overrides
+an existing `true` on every launch while preserving unrelated preferences.
+Fresh profile creation stays with Chromium. An unreadable, malformed, or
+unwritable profile is not replaced with defaults: preparation fails and both
+normal launch and "Launch anyway" refuse to spawn Helium. Existing preferences
+are replaced through a sibling temporary file so a failed write leaves the
+original intact. The upstream updater DLL and helper are retained; the profile
+preference disables update access without removing a binary dependency.
+
 ### Gecko-family (Firefox, LibreWolf, Floorp, Waterfox) — layered profile
 
 Two layers, both written into `install_dir`:
