@@ -1129,7 +1129,7 @@ fn do_launch<B: BrowserFamily>(
     } else {
         remove_gecko_hardening(browser, install_dir);
     }
-    prepare_browser_for_launch(browser, install_dir, hardening);
+    prepare_browser_for_launch(browser, install_dir, hardening)?;
     // Remove host-system traces from a previous (possibly crashed) session
     // before the browser process starts. Post-exit cleanup is handled by the
     // watcher in `handle_cleanup_flag()`.
@@ -1276,7 +1276,14 @@ fn handle_error<B: BrowserFamily>(
                 StatusLines::new("Launching\u{2026}"),
                 ProgressState::Hidden,
             );
-            prepare_browser_for_launch(browser, install_dir, hardening);
+            if let Err(e) = prepare_browser_for_launch(browser, install_dir, hardening) {
+                tracing::error!(browser = browser.id(), error = %e, "launch preparation refused fallback");
+                show_error(state, ctx, &e.to_string(), false);
+                return match wait_for_pipeline_action(state) {
+                    PipelineAction::Retry => PostErrorAction::Retry,
+                    PipelineAction::Close | PipelineAction::LaunchAnyway => PostErrorAction::Done,
+                };
+            }
             scrub_mozilla_installs_ini();
             scrub_mozilla_runtime_dirs();
             scrub_mullvad_runtime_dir();
@@ -1304,15 +1311,15 @@ fn handle_error<B: BrowserFamily>(
     }
 }
 
-/// Runs best-effort launch preparation: browser-specific staging (bundled
-/// extensions) plus the self-registration repair. Preparation failures should
-/// not prevent the browser from launching; the browser itself remains the
-/// product boundary.
+/// Enforces browser-specific launch preparation before best-effort
+/// self-registration repair. Required portability preparation must succeed
+/// before either normal or fallback launch can spawn the browser.
 fn prepare_browser_for_launch<B: BrowserFamily>(
     browser: &B,
     install_dir: &Path,
     hardening: HardeningConfig,
-) {
+) -> Result<(), BrowserError> {
+    browser.prepare_launch(install_dir, hardening)?;
     // If the browser registered *itself* as a URL/HTML handler (its own
     // "Make default" button), that registration launches the browser exe
     // directly — host profile, no hardening, no portable Data dir — and a
@@ -1335,13 +1342,7 @@ fn prepare_browser_for_launch<B: BrowserFamily>(
             tracing::warn!(error = %e, "could not resolve launcher path; skipping registration repair");
         }
     }
-    if let Err(e) = browser.prepare_launch(install_dir, hardening) {
-        tracing::warn!(
-            browser = browser.id(),
-            error = %e,
-            "browser-specific launch preparation failed; continuing"
-        );
-    }
+    Ok(())
 }
 
 // ── State mutation helpers ────────────────────────────────────────────────────
@@ -2883,6 +2884,117 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn helium_failure_fixture() -> (tempfile::TempDir, browsers::helium::Helium, StateHandle) {
+        let dir = tempfile::tempdir().unwrap();
+        let browser = browsers::helium::Helium::new(config::Arch::X64);
+        let prefs = dir.path().join("Data/Default/Preferences");
+        std::fs::create_dir_all(prefs.parent().unwrap()).unwrap();
+        std::fs::write(&prefs, "{broken").unwrap();
+        let state = std::sync::Arc::new((
+            std::sync::Mutex::new(ui::NomadState {
+                view: build_initial_view(&browser, config::Arch::X64, &[]),
+                phase: WindowPhase::Running,
+            }),
+            std::sync::Condvar::new(),
+        ));
+        (dir, browser, state)
+    }
+
+    #[test]
+    fn helium_preparation_failure_stops_normal_launch() {
+        let (dir, browser, state) = helium_failure_fixture();
+        let config = HardeningConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let result = do_launch(
+            &browser,
+            &dir.path().join("Browser"),
+            &[],
+            None,
+            config,
+            &state,
+            &egui::Context::default(),
+        );
+        assert!(matches!(result, Err(BrowserError::Parse(_))));
+        assert!(!matches!(state.0.lock().unwrap().phase, WindowPhase::Done));
+    }
+
+    #[test]
+    fn helium_preparation_failure_cannot_be_bypassed_by_launch_anyway() {
+        let (dir, browser, state) = helium_failure_fixture();
+        let install = dir.path().join("Browser");
+        std::fs::create_dir_all(&install).unwrap();
+        browsers::write_version_marker(
+            &install,
+            &browsers::InstalledVersion {
+                browser_version: "0.18.3.1".to_owned(),
+                engine_version: "0.18.3.1".to_owned(),
+            },
+        )
+        .unwrap();
+        let controller = std::sync::Arc::clone(&state);
+        let user = std::thread::spawn(move || {
+            let (lock, cvar) = &*controller;
+            let guard = lock.lock().unwrap();
+            let (mut guard, timeout) = cvar
+                .wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| {
+                    !matches!(s.phase, WindowPhase::Error { .. })
+                })
+                .unwrap();
+            assert!(!timeout.timed_out());
+            assert!(matches!(
+                guard.phase,
+                WindowPhase::Error {
+                    has_fallback: true,
+                    ..
+                }
+            ));
+            guard.phase = WindowPhase::LaunchAnyway;
+            cvar.notify_all();
+            let (mut guard, timeout) = cvar
+                .wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| {
+                    !matches!(
+                        s.phase,
+                        WindowPhase::Error {
+                            has_fallback: false,
+                            ..
+                        } | WindowPhase::Done
+                    )
+                })
+                .unwrap();
+            let blocked = !timeout.timed_out()
+                && matches!(
+                    guard.phase,
+                    WindowPhase::Error {
+                        has_fallback: false,
+                        ..
+                    }
+                );
+            guard.phase = WindowPhase::Done;
+            cvar.notify_all();
+            blocked
+        });
+        let action = handle_error(
+            &browser,
+            &install,
+            &[],
+            None,
+            HardeningConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            &state,
+            &egui::Context::default(),
+            "mock update failure",
+        );
+        assert!(matches!(action, PostErrorAction::Done));
+        assert!(
+            user.join().unwrap(),
+            "fallback must show the preparation error without offering another bypass"
+        );
+    }
 
     #[test]
     fn system_explorer_path_is_absolute_not_a_bare_name() {

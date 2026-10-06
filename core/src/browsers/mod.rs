@@ -515,8 +515,9 @@ pub trait BrowserFamily: Send + Sync {
     /// settings.
     ///
     /// # Errors
-    /// Returns a [`BrowserError`] if preparation could not complete. The core
-    /// launcher logs this and continues launching the browser.
+    /// Returns a [`BrowserError`] if required preparation could not complete.
+    /// The core launcher refuses to spawn the browser, including on "Launch
+    /// anyway". Optional staging should log its own failures and return `Ok`.
     fn prepare_launch(
         &self,
         install_dir: &Path,
