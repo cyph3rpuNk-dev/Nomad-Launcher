@@ -275,3 +275,144 @@ async fn authenticated_future_release_with_incompatible_logos_preserves_install_
     assert!(!stage.join(".nomad-version").exists());
     assert!(!stage.join(".branding-patched").exists());
 }
+
+#[tokio::test]
+async fn disabled_update_preserves_interrupted_transaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let install = dir.path().join("Browser");
+    let stage = nomad_core::install::stage_dir(&install);
+    let backup = nomad_core::install::backup_dir(&install);
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::create_dir_all(&backup).unwrap();
+    std::fs::write(stage.join("partial"), b"in progress").unwrap();
+    std::fs::write(backup.join("chrome.exe"), b"working copy").unwrap();
+    let browser = UngoogledChromium::new(Arch::X64);
+    let outcome = updater::update(
+        &browser,
+        &install,
+        UpdateOptions {
+            check_on_launch: false,
+            auto_download: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, UpdateOutcome::CheckSkipped);
+    assert!(
+        !install.exists(),
+        "a skipped update must not restore a bundle"
+    );
+    assert_eq!(
+        std::fs::read(stage.join("partial")).unwrap(),
+        b"in progress"
+    );
+    assert_eq!(
+        std::fs::read(backup.join("chrome.exe")).unwrap(),
+        b"working copy"
+    );
+    assert!(
+        !dir.path().join("Nomad").exists(),
+        "skipped headless checks must not create state"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_update_preserves_stage_and_skips_network() {
+    let server = MockServer::start_async().await;
+    let metadata = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/releases/latest");
+            then.status(200).body(release_json(
+                "https://downloads.invalid/x.zip",
+                &"0".repeat(64),
+            ));
+        })
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let install = dir.path().join("Browser");
+    let stage = nomad_core::install::stage_dir(&install);
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::write(stage.join("partial"), b"active download").unwrap();
+    let state_dir = dir.path().join("Nomad");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(state_dir.join("install.lock"))
+        .unwrap();
+    lock.try_lock().unwrap();
+    let browser = UngoogledChromium::with_releases_url(Arch::X64, server.url("/releases/latest"));
+    let result = updater::update(
+        &browser,
+        &install,
+        UpdateOptions {
+            check_on_launch: true,
+            auto_download: false,
+        },
+    )
+    .await;
+    assert!(
+        matches!(result, Err(nomad_core::browsers::BrowserError::Io(ref e))
+        if e.kind() == std::io::ErrorKind::WouldBlock),
+        "got {result:?}"
+    );
+    assert_eq!(
+        std::fs::read(stage.join("partial")).unwrap(),
+        b"active download"
+    );
+    metadata.assert_calls_async(0).await;
+}
+
+#[tokio::test]
+async fn recovery_cleanup_failure_stops_update_before_network() {
+    let server = MockServer::start_async().await;
+    let metadata = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/releases/latest");
+            then.status(200).body(release_json(
+                "https://downloads.invalid/x.zip",
+                &"0".repeat(64),
+            ));
+        })
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let install = dir.path().join("Browser");
+    let stage = nomad_core::install::stage_dir(&install);
+    let backup = nomad_core::install::backup_dir(&install);
+    std::fs::create_dir_all(&install).unwrap();
+    std::fs::create_dir_all(&backup).unwrap();
+    std::fs::write(install.join("chrome.exe"), b"working install").unwrap();
+    std::fs::write(backup.join("chrome.exe"), b"previous copy").unwrap();
+    // A file at the directory path forces remove_dir_all to fail on every OS.
+    std::fs::write(&stage, b"unexpected file").unwrap();
+    let browser = UngoogledChromium::with_releases_url(Arch::X64, server.url("/releases/latest"));
+    let result = updater::update(
+        &browser,
+        &install,
+        UpdateOptions {
+            check_on_launch: true,
+            auto_download: false,
+        },
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(nomad_core::browsers::BrowserError::Io(_))
+    ));
+    assert_eq!(std::fs::read(&stage).unwrap(), b"unexpected file");
+    assert_eq!(
+        std::fs::read(install.join("chrome.exe")).unwrap(),
+        b"working install"
+    );
+    assert_eq!(
+        std::fs::read(backup.join("chrome.exe")).unwrap(),
+        b"previous copy"
+    );
+    metadata.assert_calls_async(0).await;
+    // The failed attempt must release its lock so recovery can be retried.
+    std::fs::remove_file(&stage).unwrap();
+    nomad_core::install::recover_staging(&install).unwrap();
+    assert!(!backup.exists());
+}

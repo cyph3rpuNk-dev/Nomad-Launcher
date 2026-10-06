@@ -27,6 +27,28 @@ aborted and the currently working browser remains in place.
 
 ## Update transaction
 
+Each portable folder uses `Nomad/install.lock` to serialize launcher attempts.
+The GUI retains an exclusive OS file lock from recovery through update prompts,
+download, verification, extraction, swap, launch preparation and browser spawn,
+including fallback launch. Headless updates hold it across recovery and the
+entire update. Different configured installation names in the same folder share
+this lock. Other portable folders remain independent.
+
+A competing GUI launch offers Retry or Close and cannot launch a fallback while
+another launcher owns the lock. The OS releases the lock when the process exits,
+including on a crash. The empty lock file remains on disk; its presence does not
+mean an update is running. Never delete it to unblock a launcher.
+
+Recovery runs only when update checks are enabled, under that same lock. A
+missing active install is restored from backup before any stage is deleted. If
+restoration or stale-directory cleanup fails, the update stops and reports the
+error. A failed restore preserves both backup and stage. Swap refuses an existing
+backup rather than discarding a potentially unique working copy. If promotion
+and rollback both fail, the backup remains for recovery on the next direct run.
+Protocol launches and disabled headless checks do not restore, delete or swap
+staging/backup directories. Protocol launches still acquire the GUI lock before
+launch preparation so they cannot race an active update.
+
 ```text
 resolve release
       |

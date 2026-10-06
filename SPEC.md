@@ -173,6 +173,20 @@ pub trait BrowserFamily: Send + Sync {
 
 ---
 
+### Update concurrency and recovery
+
+`Nomad/install.lock` serializes each portable folder across launcher processes.
+The GUI keeps the OS lock through recovery, update prompts, staging, swap, launch
+preparation and spawn, including fallback launch. Headless updates retain it for
+the update transaction. A competing GUI invocation offers Retry or Close, with
+no fallback writes; separate portable folders can operate independently. The OS
+releases the lock when the owning process exits. Its empty file remains on disk.
+
+Recovery failures abort dependent update work. Failed backup restoration leaves
+stage and backup intact; swap refuses an unrecovered backup. Protocol launches
+and disabled headless checks skip staging recovery. See
+[Update and instance safety](docs/UPDATE-SAFETY.md) for the full contract.
+
 ## 4. Configuration
 
 File: `nomad.toml`, sitting beside its launcher `.exe`. Each launcher has its own config, scoped to that one browser — there is no browser array.

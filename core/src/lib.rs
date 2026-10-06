@@ -569,6 +569,21 @@ fn pipeline_thread<B: BrowserFamily + 'static>(
         // Reset to the initial Running phase so the window shows status lines.
         restart_pipeline(state, ctx);
 
+        // Serialize the whole attempt, including prompts, fallback writes,
+        // launch preparation and spawn. A lock failure cannot offer fallback:
+        // that would let the losing process mutate an active transaction.
+        let instance_lock = match install::InstanceLock::acquire(install_dir) {
+            Ok(lock) => lock,
+            Err(e) => {
+                tracing::error!(error = %e, "portable folder is unavailable for launch");
+                show_error(state, ctx, &e.to_string(), false);
+                match wait_for_pipeline_action(state) {
+                    PipelineAction::Retry => continue 'retry,
+                    PipelineAction::Close | PipelineAction::LaunchAnyway => break 'retry,
+                }
+            }
+        };
+
         // Build a fresh async runtime for each attempt so that a cancelled or
         // timed-out future from the previous attempt cannot pollute the new one.
         let rt = match tokio::runtime::Builder::new_multi_thread()
@@ -595,7 +610,14 @@ fn pipeline_thread<B: BrowserFamily + 'static>(
         };
 
         // ── Update-check phase ────────────────────────────────────────────
-        let check = rt.block_on(update_check_phase(b, install_dir, opts, state, ctx));
+        let check = rt.block_on(update_check_phase(
+            b,
+            install_dir,
+            opts,
+            state,
+            ctx,
+            &instance_lock,
+        ));
 
         let version_info: VersionInfo = match check {
             Err(e) => match handle_error(
@@ -722,6 +744,7 @@ fn pipeline_thread<B: BrowserFamily + 'static>(
             opts,
             state,
             ctx,
+            &instance_lock,
         ));
 
         match install {
@@ -760,13 +783,14 @@ async fn update_check_phase<B: BrowserFamily>(
     opts: UpdateOptions,
     state: &StateHandle,
     ctx: &egui::Context,
+    instance_lock: &install::InstanceLock,
 ) -> Result<CheckPhaseResult, BrowserError> {
-    install::recover_staging(install_dir);
-
     if !opts.check_on_launch {
         tracing::info!(browser = browser.id(), "update check skipped by config");
         return Ok(CheckPhaseResult::Launch);
     }
+
+    install::recover_staging_locked(install_dir, instance_lock)?;
 
     // ── Version cache ────────────────────────────────────────────────────────
     let launcher_dir = install_dir.parent().unwrap_or(install_dir);
@@ -902,6 +926,7 @@ async fn download_and_install_phase<B: BrowserFamily>(
     update_opts: UpdateOptions,
     state: &StateHandle,
     ctx: &egui::Context,
+    instance_lock: &install::InstanceLock,
 ) -> Result<(), BrowserError> {
     let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(0.0_f32);
 
@@ -944,6 +969,7 @@ async fn download_and_install_phase<B: BrowserFamily>(
             };
             set_status(state, ctx, lines, progress);
         },
+        instance_lock,
     )
     .await?;
     // Wait for the forwarder to drain the final progress value (the sender
@@ -2272,6 +2298,104 @@ mod tests {
             std::sync::Condvar::new(),
         ));
         (dir, browser, state)
+    }
+
+    #[tokio::test]
+    async fn launch_only_check_phase_preserves_stage_and_backup() {
+        let (dir, browser, state) = helium_failure_fixture();
+        let install = dir.path().join("Browser");
+        let staging_dir = install::stage_dir(&install);
+        let backup = install::backup_dir(&install);
+        std::fs::create_dir_all(&staging_dir).unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(staging_dir.join("partial"), b"partial").unwrap();
+        std::fs::write(backup.join("chrome.exe"), b"working copy").unwrap();
+        let lock = install::InstanceLock::acquire(&install).unwrap();
+        let outcome = update_check_phase(
+            &browser,
+            &install,
+            UpdateOptions {
+                check_on_launch: false,
+                auto_download: false,
+            },
+            &state,
+            &egui::Context::default(),
+            &lock,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, CheckPhaseResult::Launch));
+        assert!(!install.exists());
+        assert_eq!(
+            std::fs::read(staging_dir.join("partial")).unwrap(),
+            b"partial"
+        );
+        assert_eq!(
+            std::fs::read(backup.join("chrome.exe")).unwrap(),
+            b"working copy"
+        );
+    }
+
+    #[test]
+    fn locked_gui_pipeline_offers_no_fallback_and_preserves_stage() {
+        // Malformed portable Preferences make even a regressed launch fail
+        // before registry repair or process spawn. All paths belong to TempDir.
+        let (dir, browser, state) = helium_failure_fixture();
+        let install_dir = dir.path().join("Browser");
+        let staging_dir = install::stage_dir(&install_dir);
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::create_dir_all(&staging_dir).unwrap();
+        std::fs::write(staging_dir.join("partial"), b"active download").unwrap();
+        browsers::write_version_marker(
+            &install_dir,
+            &browsers::InstalledVersion {
+                browser_version: "1.0".into(),
+                engine_version: "1.0".into(),
+            },
+        )
+        .unwrap();
+        let _lock = install::InstanceLock::acquire(&install_dir).unwrap();
+        let controller = Arc::clone(&state);
+        let user = std::thread::spawn(move || {
+            let (mutex, cvar) = &*controller;
+            let (mut state, timeout) = cvar
+                .wait_timeout_while(
+                    mutex.lock().unwrap(),
+                    std::time::Duration::from_secs(10),
+                    |s| !matches!(s.phase, WindowPhase::Error { .. }),
+                )
+                .unwrap();
+            let blocked = !timeout.timed_out()
+                && matches!(&state.phase,
+                WindowPhase::Error { message, has_fallback: false } if message.contains("Another Nomad launcher"));
+            state.phase = WindowPhase::Done;
+            cvar.notify_all();
+            blocked
+        });
+        pipeline_thread(
+            &Arc::new(browser),
+            &install_dir,
+            UpdateOptions {
+                check_on_launch: false,
+                auto_download: false,
+            },
+            &[],
+            None,
+            HardeningConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            &state,
+            &egui::Context::default(),
+        );
+        assert!(
+            user.join().unwrap(),
+            "lock contention must offer Retry/Close without fallback"
+        );
+        assert_eq!(
+            std::fs::read(staging_dir.join("partial")).unwrap(),
+            b"active download"
+        );
     }
 
     #[test]
