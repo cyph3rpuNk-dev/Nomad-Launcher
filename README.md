@@ -114,7 +114,7 @@ What each browser family gets:
 - Safe Browsing is off. As a partial substitute, DoH points at Quad9's malware-blocking resolver by default.
 - WebRTC is off, so video and audio calls (Meet, Teams, Discord) won't work out of the box. Set `disable_webrtc = false` to get restricted WebRTC back.
 - Chromium profile encryption (DPAPI) is off so the profile stays usable on any machine. This applies whether or not hardening is enabled. Keep the drive on an encrypted volume if that matters to you.
-- The browsers' own auto-updaters are disabled. Nomad is the only updater, which means you only pick up security patches when you run the launcher.
+- Nomad handles browser updates when you run the launcher. Gecko update policies disable the built-in updater; Helium's `helium.services.browser_updates` preference is forced off before each launch, including when hardening is disabled, because its updater can run an installer outside the portable folder. If Nomad cannot write that preference, it refuses to launch Helium. Earlier Nomad versions did not disable Helium's updater.
 - Mullvad gets none of the above: no `user.js`, no uBO provisioning. Nomad defers entirely to Mullvad's stack.
 
 ## Post-exit cleanup
