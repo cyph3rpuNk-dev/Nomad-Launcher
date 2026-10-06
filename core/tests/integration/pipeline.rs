@@ -416,3 +416,63 @@ async fn recovery_cleanup_failure_stops_update_before_network() {
     nomad_core::install::recover_staging(&install).unwrap();
     assert!(!backup.exists());
 }
+
+#[tokio::test]
+async fn same_version_architecture_switch_downloads_new_target_and_preserves_profile() {
+    let server = MockServer::start_async().await;
+    let zip = fixture_zip(true); // inert PE/layout fixture; never executed
+    let digest = sha256::hex(&zip);
+    let mut downloads = Vec::new();
+    for arch in ["x64", "x86"] {
+        let package = format!("/{arch}.zip");
+        downloads.push(
+            server
+                .mock_async(|when, then| {
+                    when.method(GET).path(&package);
+                    then.status(200).body(&zip);
+                })
+                .await,
+        );
+        let body = serde_json::json!({"tag_name":"200.0.0.0-1.1", "assets":[{
+            "name":format!("ungoogled-chromium_windows_{arch}.zip"),
+            "browser_download_url":server.url(&package), "digest":format!("sha256:{digest}")}]});
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(format!("/latest-{arch}"));
+                then.status(200).body(body.to_string());
+            })
+            .await;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let install = temp.path().join("Browser");
+    let profile = temp.path().join("Data/sentinel");
+    std::fs::create_dir(profile.parent().unwrap()).unwrap();
+    std::fs::write(&profile, b"user data").unwrap();
+    let options = UpdateOptions {
+        check_on_launch: true,
+        auto_download: true,
+    };
+    for arch in [Arch::X64, Arch::X86] {
+        let browser = UngoogledChromium::with_releases_url(
+            arch,
+            server.url(format!("/latest-{}", arch.as_str())),
+        );
+        assert_eq!(
+            updater::update(&browser, &install, options).await.unwrap(),
+            UpdateOutcome::Updated("200.0.0.0-1.1".into())
+        );
+        assert_eq!(
+            browser.installed_version(&install).unwrap().target,
+            Some(arch.into())
+        );
+        assert_eq!(std::fs::read(&profile).unwrap(), b"user data");
+    }
+    let browser = UngoogledChromium::with_releases_url(Arch::X86, server.url("/latest-x86"));
+    assert_eq!(
+        updater::update(&browser, &install, options).await.unwrap(),
+        UpdateOutcome::UpToDate
+    );
+    for download in downloads {
+        download.assert_calls_async(1).await;
+    }
+}

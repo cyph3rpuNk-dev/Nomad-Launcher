@@ -215,6 +215,10 @@ fn parse_release(release: &Release, arch: Arch) -> Result<VersionInfo> {
 }
 
 impl BrowserFamily for UngoogledChromium {
+    fn package_target(&self) -> super::PackageTarget {
+        self.arch.into()
+    }
+
     fn id(&self) -> &'static str {
         "ungoogled-chromium"
     }
@@ -777,6 +781,7 @@ mod tests {
         assert!(browser.installed_version(dir.path()).is_none());
 
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "148.0.7778.96-1.1".to_owned(),
             engine_version: "148.0.7778.96".to_owned(),
         };

@@ -197,6 +197,10 @@ struct FirefoxVersions {
 // ── BrowserFamily impl ────────────────────────────────────────────────────────
 
 impl BrowserFamily for Firefox {
+    fn package_target(&self) -> super::PackageTarget {
+        self.arch.into()
+    }
+
     fn id(&self) -> &'static str {
         match self.channel {
             Channel::Stable => "firefox",
@@ -645,6 +649,7 @@ mod tests {
         assert!(browser.installed_version(dir.path()).is_none());
 
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "138.0".to_owned(),
             engine_version: "138.0".to_owned(),
         };

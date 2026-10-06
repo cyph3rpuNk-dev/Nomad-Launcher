@@ -93,6 +93,16 @@ clear_data_on_exit = false   # Chromium only: wipe cookies/history/sessions on e
 reduce_system_info = true    # Chromium only: ReducedSystemInfo fingerprint hardening
 ```
 
+Release caches and successful install markers record the selected package
+target. Metadata from another target is refreshed. Changing `arch` requires
+verified package replacement even when the version number is unchanged. Older caches are
+refreshed; older install markers remain readable but their unknown target
+requires one verified replacement before Nomad can report them current.
+Automatic-download settings still apply, and offline/protocol launches can
+continue using the existing installation. Bitwarden selects one portable
+artifact independently of `arch`; its recorded target is `portable`.
+See [Package targets and legacy records](docs/UPDATE-SAFETY.md#package-targets-and-legacy-records).
+
 `install_dir` must be one Windows-safe folder name beside the launcher, such
 as `Browser`, `App`, or `Custom Browser`. Empty names, `.`/`..`, absolute or
 drive-relative paths, nested paths such as `Apps/Browser`, and `Data` or

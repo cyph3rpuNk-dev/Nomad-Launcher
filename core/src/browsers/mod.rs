@@ -229,6 +229,31 @@ impl Engine {
     }
 }
 
+/// Package selection identity. `Portable` denotes Bitwarden's single artifact,
+/// not a claim that its executable is architecture-neutral.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageTarget {
+    /// 64-bit x86 package selection.
+    X64,
+    /// 32-bit x86 package selection.
+    X86,
+    /// 64-bit ARM package selection.
+    Arm64,
+    /// A single portable artifact with no architecture selector.
+    Portable,
+}
+
+impl From<crate::config::Arch> for PackageTarget {
+    fn from(arch: crate::config::Arch) -> Self {
+        match arch {
+            crate::config::Arch::X64 => Self::X64,
+            crate::config::Arch::X86 => Self::X86,
+            crate::config::Arch::Arm64 => Self::Arm64,
+        }
+    }
+}
+
 /// A resolved upstream release: what to download and how to verify it.
 #[derive(Debug, Clone)]
 pub struct VersionInfo {
@@ -251,6 +276,9 @@ pub struct VersionInfo {
 /// Version metadata parsed from a local browser installation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstalledVersion {
+    /// Selected package target. Legacy markers omit this and remain unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<PackageTarget>,
     /// The browser's own version string.
     pub browser_version: String,
     /// The underlying engine version.
@@ -359,6 +387,9 @@ pub type Result<T> = std::result::Result<T, BrowserError>;
 pub trait BrowserFamily: Send + Sync {
     /// Stable identifier, e.g. `"ungoogled-chromium"`.
     fn id(&self) -> &'static str;
+
+    /// Target used by the adapter's package selector, cache and install marker.
+    fn package_target(&self) -> PackageTarget;
 
     /// Human-readable name for the identity card, e.g. `"Ungoogled Chromium"`.
     fn display_name(&self) -> &'static str;
@@ -622,6 +653,48 @@ pub fn read_version_marker(install_dir: &Path) -> Option<InstalledVersion> {
 mod tests {
     use super::*;
     use httpmock::prelude::*;
+
+    #[test]
+    fn package_targets_follow_each_adapter_selector() {
+        for arch in [
+            crate::config::Arch::X64,
+            crate::config::Arch::X86,
+            crate::config::Arch::Arm64,
+        ] {
+            let expected: PackageTarget = arch.into();
+            assert_eq!(firefox::Firefox::new(arch).package_target(), expected);
+            assert_eq!(firefox::Firefox::new_esr(arch).package_target(), expected);
+            assert_eq!(floorp::Floorp::new(arch).package_target(), expected);
+            assert_eq!(helium::Helium::new(arch).package_target(), expected);
+            assert_eq!(librewolf::Librewolf::new(arch).package_target(), expected);
+            assert_eq!(mullvad::Mullvad::new(arch).package_target(), expected);
+            assert_eq!(
+                ungoogled::UngoogledChromium::new(arch).package_target(),
+                expected
+            );
+            assert_eq!(waterfox::Waterfox::new(arch).package_target(), expected);
+            assert_eq!(
+                bitwarden::Bitwarden::new(arch).package_target(),
+                PackageTarget::Portable
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_marker_keeps_unknown_target_and_user_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let install = temp.path().join("Browser");
+        std::fs::create_dir(&install).unwrap();
+        let marker = install.join(".nomad-version");
+        let contents = br#"browser_version = "2.0"
+engine_version = "2.0"
+"#;
+        std::fs::write(&marker, contents).unwrap();
+        let installed = read_version_marker(&install).unwrap();
+        assert_eq!(installed.target, None);
+        assert_eq!(installed.browser_version, "2.0");
+        assert_eq!(std::fs::read(marker).unwrap(), contents);
+    }
 
     #[test]
     fn extracts_version_from_amo_cdn_url() {
