@@ -222,6 +222,18 @@ The same command works for any of the launchers and for the `SHA256SUMS` file it
 
 ## Default browser registration
 
+**Recommended way to make a Nomad browser your default:**
+
+1. Close the browser.
+2. Run the launcher once with `--register-default`, for example
+   `Nomad-Firefox.exe --register-default`.
+3. Open Windows **Settings → Apps → Default apps**, find the entry named
+   "*Browser* (Nomad Launcher)", and set it as the default. Pick that entry,
+   not the browser's own entry.
+
+Clicked links then always go through the launcher and open as a new tab in the
+browser that is already running, on your portable profile.
+
 ```powershell
 Nomad-Firefox.exe --register-default
 Nomad-Firefox.exe --unregister-default
@@ -232,13 +244,13 @@ Writes to `HKCU` only, so there is no UAC prompt. State is tracked in `Nomad/nom
 When Windows invokes a registered Nomad browser for a URL or file, the launcher
 requires an existing browser installation and skips all browser and extension
 update work. It forwards the URL to the same executable and portable profile,
-allowing Chromium's normal single-instance handoff to open a tab in the existing
-window. Run the launcher directly when you want to install or update software.
+allowing the browser's normal single-instance handoff to open a tab in the existing
+window. This applies to every Nomad browser, Chromium- and Firefox-based alike. Run the launcher directly when you want to install or update software.
 If the portable folder moves, register it again from its new path.
 
-Browsers can also register themselves. If you use the browser's own "make this my default" button, Windows records the browser executable rather than the launcher, and a clicked link then starts the browser on its default profile under `%LOCALAPPDATA%` instead of the portable one. That second copy has none of your extensions or sign-ins, and older versions then deleted its profile when the browser closed.
+Browsers can also register themselves. If you use the browser's own "make this my default" button, Windows records the browser executable rather than the launcher, and a clicked link then starts a second copy of the browser on its default profile under `%LOCALAPPDATA%` or `%APPDATA%` instead of opening a tab in the portable one. That second copy has none of your extensions or sign-ins, and older versions then deleted its profile when the browser closed.
 
-To prevent that, each launch inspects the `HKCU` handler entries and rewrites any whose command runs a file inside the launcher's own folder, so those links go through the launcher and land in the portable profile. The check runs again after the browser exits, because the "make default" button can be used while the browser is open. Handlers pointing anywhere else, including other browsers and separately installed copies of the same browser, are left as they are. This is the only registry write Nomad makes without being asked, and it is confined to `HKCU`.
+To prevent that, each launch inspects the `HKCU` handler entries and rewrites any whose command runs a file inside the launcher's own folder, so those links go through the launcher and land in the portable profile. Because the "make default" button is normally used while the browser is open, the launcher's background helper also watches those entries for the whole session and rewrites a new self-registration within about a second, and checks once more after the browser exits. Links clicked in that first second can still open a separate copy; using `--register-default` as described above avoids even that. Handlers pointing anywhere else, including other browsers and separately installed copies of the same browser, are left as they are. This is the only registry write Nomad makes without being asked, and it is confined to `HKCU`.
 
 ## Troubleshooting
 

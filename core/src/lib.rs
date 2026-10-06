@@ -19,6 +19,7 @@ pub mod hardening;
 pub mod install;
 mod instance;
 pub mod registry;
+mod selfreg_watch;
 pub mod taskbar;
 pub mod ui;
 pub mod updater;
@@ -1526,6 +1527,15 @@ fn handle_cleanup_flag(args: CleanupArgs) -> ExitCode {
         exe = args.browser_exe.as_deref().unwrap_or("(unknown)"),
         "cleanup watcher started"
     );
+    // Reroute a "Make default" clicked inside the browser as soon as it
+    // happens, rather than only after exit: until then every clicked link
+    // would start a second browser on the host profile instead of opening a
+    // tab in the portable instance.
+    let live_repair =
+        install_dir_from_browser_exe(args.browser_exe.as_deref()).and_then(|install_dir| {
+            let launcher_exe = std::env::current_exe().ok()?;
+            selfreg_watch::start(install_dir, launcher_exe)
+        });
     wait_for_pid(args.browser_pid);
     if let Some(ref exe) = args.browser_exe {
         // The anchor PID alone is not enough: Chromium hands its initial
@@ -1535,6 +1545,9 @@ fn handle_cleanup_flag(args: CleanupArgs) -> ExitCode {
         // the whole browser tree — matched by image path — to exit before
         // scrubbing.
         wait_for_browser_tree_exit(exe, 30);
+    }
+    if let Some(live) = live_repair {
+        live.stop();
     }
     tracing::info!(
         pid = args.browser_pid,
@@ -1575,19 +1588,14 @@ fn handle_cleanup_flag(args: CleanupArgs) -> ExitCode {
 /// guessed at — `repair_self_registration` would refuse an empty root anyway,
 /// but the intent is clearer stated here.
 fn repair_registration_after_exit(browser_exe: Option<&str>) {
-    let Some(exe) = browser_exe else { return };
-    let exe = std::path::Path::new(exe);
-    if !exe.is_absolute() {
-        return;
-    }
-    let Some(install_dir) = exe.parent().filter(|p| !p.as_os_str().is_empty()) else {
+    let Some(install_dir) = install_dir_from_browser_exe(browser_exe) else {
         return;
     };
     let Ok(launcher_exe) = std::env::current_exe() else {
         tracing::warn!("could not resolve launcher path; skipping post-exit registration repair");
         return;
     };
-    let repaired = registry::repair_self_registration(install_dir, &launcher_exe);
+    let repaired = registry::repair_self_registration(&install_dir, &launcher_exe);
     if repaired > 0 {
         tracing::warn!(
             repaired,
@@ -1595,6 +1603,20 @@ fn repair_registration_after_exit(browser_exe: Option<&str>) {
              rerouted through the launcher so clicked links reach the portable profile"
         );
     }
+}
+
+/// Derives the install dir from the launched browser's executable path: for
+/// every family the executable sits directly in the install dir. A missing,
+/// relative, or bare path yields `None` rather than a guess, because the
+/// registry repair treats this directory as the containment boundary.
+fn install_dir_from_browser_exe(browser_exe: Option<&str>) -> Option<std::path::PathBuf> {
+    let exe = std::path::Path::new(browser_exe?);
+    if !exe.is_absolute() {
+        return None;
+    }
+    exe.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
 }
 
 /// Entry point for the elevated Prefetch scrubber sub-process.
@@ -3805,6 +3827,23 @@ mod tests {
         let protocol = effective_update_options(false, true, true);
         assert!(!protocol.check_on_launch);
         assert!(!protocol.auto_download);
+    }
+
+    /// The live and post-exit repairs both use this directory as the only
+    /// boundary for rewriting handlers, so anything that is not a full path
+    /// must yield nothing rather than a guess.
+    #[test]
+    fn install_dir_from_browser_exe_requires_a_full_path() {
+        assert_eq!(
+            install_dir_from_browser_exe(Some(r"C:\Portables\Helium\Browser\chrome.exe")),
+            Some(std::path::PathBuf::from(r"C:\Portables\Helium\Browser"))
+        );
+        assert_eq!(install_dir_from_browser_exe(Some("chrome.exe")), None);
+        assert_eq!(
+            install_dir_from_browser_exe(Some(r"Browser\chrome.exe")),
+            None
+        );
+        assert_eq!(install_dir_from_browser_exe(None), None);
     }
 
     #[test]
