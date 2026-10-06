@@ -139,6 +139,13 @@ What each browser family gets:
 - Nomad handles browser updates when you run the launcher. Gecko update policies disable the built-in updater; Helium's `helium.services.browser_updates` preference is forced off before each launch, including when hardening is disabled, because its updater can run an installer outside the portable folder. If Nomad cannot write that preference, it refuses to launch Helium. Earlier Nomad versions did not disable Helium's updater.
 - Mullvad gets none of the above: no `user.js`, no uBO provisioning. Nomad defers entirely to Mullvad's stack.
 
+Settings updates use complete staged replacements rather than truncating active
+files. Unreadable or invalid existing preferences stop the write. Managed uBlock
+updates retain the working copy until extraction/verification and replacement
+succeed; Chromium's managed extension also survives a browser-bundle update when
+the next extension check is offline. Interrupted extension swaps retain a backup
+for recovery. See [Settings and extension preservation](docs/UPDATE-SAFETY.md#settings-and-extension-preservation).
+
 ## Post-exit cleanup
 
 When the browser closes, a detached watcher performs best-effort cleanup of

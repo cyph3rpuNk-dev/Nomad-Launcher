@@ -83,7 +83,8 @@ pub(crate) const UBLOCK_RELEASES_URL: &str =
 ///
 /// The downloaded XPI is sanity-checked for Mozilla signature files
 /// (`META-INF/*.rsa`, `*.sf`) before being kept; an unsigned XPI is treated
-/// as a verification failure and the temporary file is deleted.
+/// as a verification failure and only the owned staged file is discarded.
+/// The current XPI and version cache change only after successful promotion.
 ///
 /// # Errors
 /// Returns a [`BrowserError`] on network, I/O, or verification failure.
@@ -134,13 +135,14 @@ pub(crate) async fn provision_gecko_ublock_xpi(
 
     let (progress_tx, _) = tokio::sync::watch::channel(0.0f32);
     crate::fs_safety::create_dir_all(xpi_dir)?;
-    crate::downloader::download(download_url, &xpi_path, &progress_tx).await?;
+    let mut staged = crate::fs_safety::StagedFile::new(&xpi_path)?;
+    let replacement = staged.path();
+    crate::downloader::download(download_url, &replacement, &progress_tx).await?;
 
-    // Refuse to keep an unsigned XPI: it would never install on Firefox
-    // stable / ESR and may indicate a compromised CDN response.
-    verify_signed_xpi(&xpi_path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&xpi_path);
-    })?;
+    // Keep the active XPI until the existing verification gate passes. This
+    // gate remains a signature-file sanity check, not cryptographic validation.
+    verify_signed_xpi(&replacement)?;
+    staged.commit()?;
 
     crate::version_cache::update_ubo_version(cache_path, &version);
     // Also write the legacy marker so older launcher versions can read it.
@@ -668,6 +670,96 @@ mod tests {
         zip.write_all(b"{}").unwrap();
         zip.finish().unwrap();
         buf
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn locked_xpi_promotion_preserves_extension_and_version_cache() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD)
+                    .path("/ublock_origin-2.0.0.xpi");
+                then.status(200);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/ublock_origin-2.0.0.xpi");
+                then.status(200).body(make_signed_xpi());
+            })
+            .await;
+        let fixture = tempfile::tempdir().unwrap();
+        let extensions = fixture.path().join("Gecko-extensions");
+        std::fs::create_dir_all(&extensions).unwrap();
+        let path = extensions.join("uBlock0.xpi");
+        let old = make_signed_xpi();
+        std::fs::write(&path, &old).unwrap();
+        let cache = fixture.path().join("cache.toml");
+        crate::version_cache::update_ubo_version(&cache, "1.0.0");
+        let cache_bytes = std::fs::read(&cache).unwrap();
+        let handle = std::fs::File::options()
+            .read(true)
+            .share_mode(
+                windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
+                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
+            )
+            .open(&path)
+            .unwrap();
+        let result = provision_gecko_ublock_xpi(
+            &server.url("/ublock_origin-2.0.0.xpi"),
+            &extensions,
+            &cache,
+            true,
+        )
+        .await;
+        assert!(result.is_err());
+        drop(handle);
+        assert_eq!(std::fs::read(&path).unwrap(), old);
+        assert_eq!(std::fs::read(&cache).unwrap(), cache_bytes);
+        assert_eq!(std::fs::read_dir(&extensions).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejected_xpi_update_preserves_existing_extension_and_cache() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD)
+                    .path("/ublock_origin-2.0.0.xpi");
+                then.status(200);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/ublock_origin-2.0.0.xpi");
+                then.status(200).body("unverifiable new XPI");
+            })
+            .await;
+        let fixture = tempfile::tempdir().unwrap();
+        let extensions = fixture.path().join("Gecko-extensions");
+        std::fs::create_dir_all(&extensions).unwrap();
+        let old = make_signed_xpi();
+        std::fs::write(extensions.join("uBlock0.xpi"), &old).unwrap();
+        std::fs::write(extensions.join(".ublock-version"), "1.0.0").unwrap();
+        let cache = fixture.path().join("cache.toml");
+        crate::version_cache::update_ubo_version(&cache, "1.0.0");
+        let cache_bytes = std::fs::read(&cache).unwrap();
+        let result = provision_gecko_ublock_xpi(
+            &server.url("/ublock_origin-2.0.0.xpi"),
+            &extensions,
+            &cache,
+            true,
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(extensions.join("uBlock0.xpi")).unwrap(), old);
+        assert_eq!(std::fs::read(&cache).unwrap(), cache_bytes);
+        assert_eq!(
+            std::fs::read_to_string(extensions.join(".ublock-version")).unwrap(),
+            "1.0.0"
+        );
     }
 
     #[tokio::test]

@@ -192,6 +192,15 @@ The headless updater shares the configured folder-name constraints. See
 [Filesystem paths before mutation](docs/UPDATE-SAFETY.md#filesystem-paths-before-mutation)
 for scope and the concurrent-drive-writer limitation.
 
+### Settings and managed-extension failure handling
+
+Preference read failures must not reset existing settings to defaults. Prepare
+and flush file replacements before promotion; preserve the original on failure.
+Managed extension replacements are staged/validated before swap, retain rollback
+state, and update cached versions only after promotion. Carry the working Chromium
+extension into staged browser updates. See
+[Settings and extension preservation](docs/UPDATE-SAFETY.md#settings-and-extension-preservation).
+
 ### Update concurrency and recovery
 
 `Nomad/install.lock` serializes each portable folder across launcher processes.
