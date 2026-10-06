@@ -259,6 +259,17 @@ gh attestation verify Nomad-Firefox.exe --repo cyph3rpuNk-dev/Nomad-Launcher
 
 The same command works for any of the launchers and for the `SHA256SUMS` file itself. Attestation is independent of the GPG key above, so the two checks back each other up.
 
+The release workflow accepts only a new release or an empty draft. It checks
+eligibility before building and rechecks draft status before uploading. Published
+releases and drafts that already contain assets stop the run; assets are never
+automatically deleted or replaced. Runs for the same tag are serialized.
+
+If an upload fails partway through, inspect the draft and explicitly review/reset
+it before rerunning, or use a new release tag. After a successful build, attach and
+verify `SHA256SUMS.asc`, then publish only after the workflow has finished. GitHub
+status checks and upload are separate operations; omitting `--clobber` also protects
+existing assets if publication or another upload races the final check.
+
 ## Default browser registration
 
 **Recommended way to make a Nomad browser your default:**

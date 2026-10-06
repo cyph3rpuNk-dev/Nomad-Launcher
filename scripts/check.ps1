@@ -29,6 +29,9 @@ try {
         Invoke-GateStep 'Audit gate regression fixtures' {
             pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-audit-gate.ps1')
         }
+        Invoke-GateStep 'Release publishing regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-release-publish.ps1')
+        }
         Invoke-GateStep 'Formatting' {
             cargo fmt --all -- --check
         }

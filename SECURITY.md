@@ -20,6 +20,21 @@ The public key is distributed in this repository (`nomad-release-signing-key.asc
 
 The launcher binaries are intentionally not Authenticode-signed; the GPG-signed manifest is the integrity anchor. Key rotation history: access to the pre-v1.0.2 key (`4D92 5DAD 1DB4 405C 99EA 1FD3 9984 5DA3 20CD 1F37`) was lost in July 2026. It is not believed compromised, and releases up to v1.0.1 remain verifiable against it; see the [v1.0.2 release notes](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/releases/tag/v1.0.2).
 
+## Release rerun safety
+
+`scripts/publish-draft-release.ps1` refuses published releases, populated drafts,
+failed lookups, and invalid metadata. Release creation requires a successful
+paginated lookup and uses `--draft --verify-tag`. Required local artifacts are
+checked first; draft status and release identity are rechecked before upload.
+Uploads omit `--clobber` ([GitHub CLI upload documentation](https://cli.github.com/manual/gh_release_upload)),
+preventing deletion/replacement of existing assets even
+if publication races the check. The workflow serializes runs for the same tag.
+Do not publish while a workflow is still uploading; draft checks and uploads are
+separate API operations. Partial drafts require explicit review before a retry.
+
+The canonical gate runs `scripts/test-release-publish.ps1` with a mocked GitHub
+CLI and owned temporary artifacts. It never creates or changes a real release.
+
 ## Threat model
 
 ### What Nomad defends against
