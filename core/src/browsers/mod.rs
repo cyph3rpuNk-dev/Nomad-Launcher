@@ -133,7 +133,7 @@ pub(crate) async fn provision_gecko_ublock_xpi(
     }
 
     let (progress_tx, _) = tokio::sync::watch::channel(0.0f32);
-    std::fs::create_dir_all(xpi_dir)?;
+    crate::fs_safety::create_dir_all(xpi_dir)?;
     crate::downloader::download(download_url, &xpi_path, &progress_tx).await?;
 
     // Refuse to keep an unsigned XPI: it would never install on Firefox
@@ -144,7 +144,7 @@ pub(crate) async fn provision_gecko_ublock_xpi(
 
     crate::version_cache::update_ubo_version(cache_path, &version);
     // Also write the legacy marker so older launcher versions can read it.
-    let _ = std::fs::write(xpi_dir.join(".ublock-version"), &version);
+    let _ = crate::fs_safety::write(xpi_dir.join(".ublock-version"), &version);
 
     tracing::info!(version = %version, ?xpi_path, "uBlock Origin XPI provisioned from AMO");
     Ok(xpi_path)
@@ -599,7 +599,7 @@ pub const VERSION_MARKER: &str = ".nomad-version";
 /// [`BrowserError::Parse`] if `version` cannot be serialized.
 pub fn write_version_marker(install_dir: &Path, version: &InstalledVersion) -> Result<()> {
     let serialized = toml::to_string(version).map_err(|e| BrowserError::Parse(e.to_string()))?;
-    std::fs::write(install_dir.join(VERSION_MARKER), serialized)?;
+    crate::fs_safety::write(install_dir.join(VERSION_MARKER), serialized)?;
     Ok(())
 }
 
@@ -609,6 +609,7 @@ pub fn write_version_marker(install_dir: &Path, version: &InstalledVersion) -> R
 /// "no usable installation".
 #[must_use]
 pub fn read_version_marker(install_dir: &Path) -> Option<InstalledVersion> {
+    crate::fs_safety::ensure_file(install_dir.join(VERSION_MARKER)).ok()?;
     let raw = std::fs::read_to_string(install_dir.join(VERSION_MARKER)).ok()?;
     toml::from_str(&raw).ok()
 }

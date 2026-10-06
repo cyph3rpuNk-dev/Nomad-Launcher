@@ -101,6 +101,12 @@ characters, and names ending in a space or dot are also rejected. This keeps
 updates from replacing the profile or launcher state and keeps `Data/` and
 `Nomad/` beside the launcher.
 
+Existing symlinks or Windows junctions/reparse points in installation, staging,
+backup, state or profile write paths are refused before mutation. Keep these as
+ordinary directories/files; Nomad does not automatically move or delete an
+invalid link or its target. Downloads use fixed filenames within fresh staging.
+See [Filesystem paths before mutation](docs/UPDATE-SAFETY.md#filesystem-paths-before-mutation).
+
 If an existing config uses one of these values, Nomad reports a configuration
 error instead of updating or launching. Close the browser and back up the
 portable folder before correcting the setting. Changing the setting does not

@@ -99,6 +99,8 @@ pub(crate) fn extract_zip(package: &Path, install_dir: &Path) -> Result<()> {
 }
 
 fn extract_zip_with_budget(package: &Path, install_dir: &Path, budget: u64) -> Result<()> {
+    crate::fs_safety::ensure_directory(install_dir)?;
+    crate::fs_safety::ensure_file(package)?;
     let mut remaining = budget;
     let file = File::open(package)?;
     let mut archive =
@@ -137,11 +139,12 @@ fn extract_zip_with_budget(package: &Path, install_dir: &Path, budget: u64) -> R
 
         let out = install_dir.join(relative);
         if entry.is_dir() || name.ends_with('/') {
-            std::fs::create_dir_all(&out)?;
+            crate::fs_safety::create_dir_all(&out)?;
         } else {
             if let Some(parent) = out.parent() {
-                std::fs::create_dir_all(parent)?;
+                crate::fs_safety::create_dir_all(parent)?;
             }
+            crate::fs_safety::ensure_file(&out)?;
             let mut out_file = File::create(&out)?;
             copy_entry_capped(&mut entry, &mut out_file, &mut remaining)?;
         }
@@ -163,14 +166,16 @@ pub(crate) fn extract_nsis_with_7zip(
     install_dir: &Path,
     marker_exe: &str,
 ) -> Result<()> {
-    std::fs::create_dir_all(install_dir)?;
+    crate::fs_safety::ensure_file(installer)?;
+    crate::fs_safety::create_dir_all(install_dir)?;
 
     let tools = stage_seven_zip(install_dir)?;
     let raw_dir = install_dir.join("__nomad_extract_raw");
+    crate::fs_safety::ensure_directory(&raw_dir)?;
     if raw_dir.exists() {
-        let _ = std::fs::remove_dir_all(&raw_dir);
+        std::fs::remove_dir_all(&raw_dir)?;
     }
-    std::fs::create_dir_all(&raw_dir)?;
+    crate::fs_safety::create_dir_all(&raw_dir)?;
 
     let status = Command::new(&tools.exe)
         .arg("x")
@@ -187,6 +192,7 @@ pub(crate) fn extract_nsis_with_7zip(
         )));
     }
 
+    crate::fs_safety::ensure_tree(&raw_dir)?;
     let exe_dir = find_marker_dir(&raw_dir, marker_exe)
         .ok_or_else(|| BrowserError::Extract(format!("{marker_exe} not found after extraction")))?;
     flatten_into(&exe_dir, install_dir)?;
@@ -218,7 +224,9 @@ pub(crate) fn extract_nsis_with_7zip(
 /// Returns [`BrowserError::Io`] if the nested directory can be read but a
 /// move fails for a non-conflict reason.
 pub(crate) fn promote_subdir(install_dir: &Path, subdir: &str) -> Result<u32> {
+    crate::fs_safety::ensure_directory(install_dir)?;
     let nested = install_dir.join(subdir);
+    crate::fs_safety::ensure_tree(&nested)?;
     if !nested.is_dir() {
         return Ok(0);
     }
@@ -316,7 +324,7 @@ fn stage_seven_zip(base: &Path) -> Result<SevenZipTools> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    std::fs::create_dir_all(base)?;
+    crate::fs_safety::create_dir_all(base)?;
     // Unpredictable name (OS-seeded `RandomState`) so an attacker cannot
     // pre-create the staging dir with a planted `7z.dll`; `create_dir` (not
     // `create_dir_all`) then fails if the path already exists rather than
@@ -326,8 +334,8 @@ fn stage_seven_zip(base: &Path) -> Result<SevenZipTools> {
     let dir = base.join(format!("nomad-7z-{token:016x}"));
     std::fs::create_dir(&dir)?;
     let exe = dir.join("7z.exe");
-    std::fs::write(&exe, SEVENZIP_EXE)?;
-    std::fs::write(dir.join("7z.dll"), SEVENZIP_DLL)?;
+    crate::fs_safety::write(&exe, SEVENZIP_EXE)?;
+    crate::fs_safety::write(dir.join("7z.dll"), SEVENZIP_DLL)?;
     Ok(SevenZipTools {
         exe,
         _dir: TempDir(dir),
@@ -366,6 +374,8 @@ fn find_marker_dir(root: &Path, marker_exe: &str) -> Option<PathBuf> {
 /// same name. Removes `src` and any now-empty ancestors up to (but excluding)
 /// `dest` when it has finished.
 fn flatten_into(src: &Path, dest: &Path) -> Result<()> {
+    crate::fs_safety::ensure_tree(src)?;
+    crate::fs_safety::ensure_tree(dest)?;
     if src == dest {
         return Ok(());
     }
@@ -402,6 +412,47 @@ fn flatten_into(src: &Path, dest: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+
+    #[test]
+    fn archive_promotion_rejects_linked_sources_without_removing_them() {
+        let fixture = tempfile::tempdir().unwrap();
+        let dest = fixture.path().join("stage");
+        let foreign = fixture.path().join("foreign");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("file"), b"keep").unwrap();
+        let linked = dest.join("LibreWolf");
+        crate::tests::owned_directory_link(&fixture, &linked, &foreign);
+        assert!(promote_subdir(&dest, "LibreWolf").is_err());
+        assert!(flatten_into(&linked, &dest).is_err());
+        assert_eq!(std::fs::read(foreign.join("file")).unwrap(), b"keep");
+        assert!(linked.exists());
+        assert!(!dest.join("file").exists());
+    }
+
+    #[test]
+    fn zip_extraction_rejects_a_linked_output_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let stage = temp.path().join("stage");
+        let foreign = temp.path().join("foreign");
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("victim"), b"foreign data").unwrap();
+        crate::tests::owned_directory_link(&temp, &stage.join("nested"), &foreign);
+        let archive = temp.path().join("pkg.zip");
+        let mut zip = zip::ZipWriter::new(File::create(&archive).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("bundle/nested/victim", options).unwrap();
+        zip.write_all(b"replacement").unwrap();
+        zip.start_file("bundle/readme", options).unwrap();
+        zip.write_all(b"fixture").unwrap();
+        zip.finish().unwrap();
+        assert!(extract_zip(&archive, &stage).is_err());
+        assert_eq!(
+            std::fs::read(foreign.join("victim")).unwrap(),
+            b"foreign data"
+        );
+    }
 
     use super::*;
 
