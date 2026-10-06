@@ -16,6 +16,11 @@ on:
 # Default-deny: the job opts into exactly the permissions it needs below.
 permissions: {}
 
+# Serialize reruns for the same tag instead of racing draft creation/upload.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -31,6 +36,12 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - name: Check release target before building or attesting
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: .\scripts\publish-draft-release.ps1 -Tag $env:TAG -Repository $env:GITHUB_REPOSITORY -CheckOnly
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -81,16 +92,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: |
-          $notes = "Draft created by the release workflow.`n`nBefore publishing: download SHA256SUMS from this draft, create the detached signature locally (gpg --armor --detach-sign SHA256SUMS), attach SHA256SUMS.asc, then publish."
-          gh release view $env:TAG *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $env:TAG --draft --verify-tag --title $env:TAG --notes $notes
-            if ($LASTEXITCODE -ne 0) { exit 1 }
-          }
-          $files = @(Get-ChildItem target\release -Filter "Nomad-*.exe" | Sort-Object Name | ForEach-Object FullName)
-          # The public release key ships with every release (README tells users
-          # to import it from here); SHA256SUMS.asc is attached by the owner.
-          $files += @("target\release\SHA256SUMS", "target\release\licenses.zip", "nomad-release-signing-key.asc")
-          gh release upload $env:TAG @files --clobber
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+        run: .\scripts\publish-draft-release.ps1 -Tag $env:TAG -Repository $env:GITHUB_REPOSITORY
