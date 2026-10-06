@@ -113,6 +113,10 @@ impl BrowserFamily for Librewolf {
         Engine::Gecko
     }
 
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::Gecko(EXECUTABLE)
+    }
+
     fn public_key(&self) -> Option<&'static [u8]> {
         // LibreWolf signs releases (`.sig` files exist alongside each asset)
         // but the project does not publish a stable GPG signing key in a form

@@ -135,6 +135,7 @@ pub trait BrowserFamily: Send + Sync {
     fn id(&self) -> &'static str;            // e.g. "ungoogled-chromium"
     fn display_name(&self) -> &'static str;  // e.g. "Ungoogled Chromium"
     fn engine(&self) -> Engine;              // Chromium | Gecko | Electron
+    fn staged_install_layout(&self) -> StagedInstallLayout; // mandatory executable/runtime layout
     fn public_key(&self) -> Option<&'static [u8]>; // ASCII-armored PGP key, if upstream signs
 
     fn installed_version(&self, install_dir: &Path) -> Option<InstalledVersion>;
@@ -172,6 +173,15 @@ pub trait BrowserFamily: Send + Sync {
 - The seven defaulted methods keep the common case to zero boilerplate; only the member named in each trailing comment overrides it.
 
 ---
+
+### Staged layout validation
+
+Every adapter declares its Chromium, Gecko, or self-contained portable-app
+layout. The shared finalizer checks required nonempty regular files before
+preparation and after overlays, before writing a version marker or swapping.
+Missing files, directory placeholders, symlinks and Windows reparse-point paths
+fail closed, independently of optional browser-specific hooks or hardening.
+See [the required file contracts](docs/UPDATE-SAFETY.md#update-transaction).
 
 ### Update concurrency and recovery
 

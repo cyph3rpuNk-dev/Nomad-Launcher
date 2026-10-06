@@ -240,6 +240,10 @@ impl BrowserFamily for Firefox {
         Engine::Gecko
     }
 
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::Gecko(EXECUTABLE)
+    }
+
     fn public_key(&self) -> Option<&'static [u8]> {
         // GPG verification is done inside fetch_latest_version (SHA256SUMS is
         // verified, then the per-package SHA-256 is parsed from it). The
