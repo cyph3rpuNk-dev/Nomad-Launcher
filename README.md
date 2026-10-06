@@ -101,7 +101,11 @@ requires one verified replacement before Nomad can report them current.
 Automatic-download settings still apply, and offline/protocol launches can
 continue using the existing installation. Bitwarden selects one portable
 artifact independently of `arch`; its recorded target is `portable`.
-See [Package targets and legacy records](docs/UPDATE-SAFETY.md#package-targets-and-legacy-records).
+Nomad refuses older releases even when changing targets or migrating an older
+install marker. Unknown version formats stop the update for review; they are
+not compared as plain text. Older cached releases trigger a fresh lookup.
+See [Package targets and legacy records](docs/UPDATE-SAFETY.md#package-targets-and-legacy-records)
+and [Downgrade protection](docs/UPDATE-SAFETY.md#downgrade-protection).
 
 `install_dir` must be one Windows-safe folder name beside the launcher, such
 as `Browser`, `App`, or `Custom Browser`. Empty names, `.`/`..`, absolute or
