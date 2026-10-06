@@ -55,6 +55,16 @@ pub(crate) fn redirect_policy() -> reqwest::redirect::Policy {
 /// non-success status, and [`BrowserError::Io`] if the file cannot be
 /// written or renamed.
 pub async fn download(url: &str, dest: &Path, progress: &ProgressSink) -> Result<()> {
+    let client = crate::network::build_client(crate::network::DOWNLOAD_TIMEOUT)?;
+    download_with_client(&client, url, dest, progress).await
+}
+
+async fn download_with_client(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    progress: &ProgressSink,
+) -> Result<()> {
     let tmp = tmp_path(dest);
     crate::fs_safety::ensure_file(dest)?;
     crate::fs_safety::ensure_file(&tmp)?;
@@ -64,15 +74,9 @@ pub async fn download(url: &str, dest: &Path, progress: &ProgressSink) -> Result
         }
     }
 
-    let client = reqwest::Client::builder()
-        .user_agent("nomad-portable")
-        .redirect(redirect_policy())
-        .build()
-        .map_err(|e| BrowserError::Network(e.to_string()))?;
-
     let mut owns_tmp = false;
     let result = match download_to_tmp(
-        &client,
+        client,
         url,
         &tmp,
         progress,
@@ -110,7 +114,7 @@ async fn download_to_tmp(
         .get(url)
         .send()
         .await
-        .map_err(|e| BrowserError::Network(e.to_string()))?;
+        .map_err(crate::network::map_network_err)?;
 
     let status = response.status();
     if !status.is_success() {
@@ -138,7 +142,7 @@ async fn download_to_tmp(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|e| BrowserError::Network(e.to_string()))?
+        .map_err(crate::network::map_network_err)?
     {
         downloaded += chunk.len() as u64;
         // Enforce the cap for chunked / undeclared-length responses too.
@@ -173,6 +177,25 @@ fn tmp_path(dest: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn timeout_preserves_destination_and_removes_owned_partial_download() {
+        let (url, server) = crate::network::tests::socket_fixture(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\npart",
+            b"done",
+            std::time::Duration::from_millis(250),
+        );
+        let fixture = tempfile::tempdir().unwrap();
+        let dest = fixture.path().join("pkg.zip");
+        std::fs::write(&dest, b"working package").unwrap();
+        let client = crate::network::build_client(std::time::Duration::from_millis(80)).unwrap();
+        let (progress, _) = tokio::sync::watch::channel(0.0);
+        let result = download_with_client(&client, &url, &dest, &progress).await;
+        assert!(matches!(result, Err(BrowserError::Offline(_))));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"working package");
+        assert!(!tmp_path(&dest).exists());
+        server.join().unwrap();
+    }
 
     #[tokio::test]
     async fn failed_download_preserves_a_preexisting_temporary_file() {

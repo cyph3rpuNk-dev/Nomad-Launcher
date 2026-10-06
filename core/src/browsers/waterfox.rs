@@ -85,16 +85,7 @@ impl Waterfox {
 /// The file may be a bare 128-character hex string or a standard checksum
 /// line (`<hash>  <filename>`); we take the first whitespace-delimited token.
 async fn fetch_sha512(client: &reqwest::Client, url: &str) -> Option<String> {
-    let text = client
-        .get(url)
-        .send()
-        .await
-        .ok()?
-        .error_for_status()
-        .ok()?
-        .text()
-        .await
-        .ok()?;
+    let text = crate::network::fetch_text(client, url).await.ok()?;
     let hash = text.split_whitespace().next()?.to_ascii_lowercase();
     // A SHA-512 hex digest is exactly 128 characters.
     if hash.len() == 128 && hash.chars().all(|c| c.is_ascii_hexdigit()) {

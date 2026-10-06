@@ -20,6 +20,7 @@ pub mod gpg;
 pub mod hardening;
 pub mod install;
 mod instance;
+mod network;
 pub mod registry;
 mod selfreg_watch;
 pub mod taskbar;

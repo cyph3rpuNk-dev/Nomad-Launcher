@@ -12,8 +12,8 @@ use std::process::Command;
 use serde::Deserialize;
 
 use super::{
-    github::map_network_err, read_version_marker, BrowserError, BrowserFamily, Engine, Hardening,
-    InstalledVersion, ProgressSink, Result, VersionInfo,
+    read_version_marker, BrowserError, BrowserFamily, Engine, Hardening, InstalledVersion,
+    ProgressSink, Result, VersionInfo,
 };
 use crate::config::Arch;
 
@@ -173,40 +173,15 @@ fn parse_sha256sums(sums: &[u8], entry: &str) -> Result<String> {
 /// Builds a `reqwest` client with the Nomad user-agent and the shared
 /// no-downgrade redirect policy.
 fn build_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .user_agent("nomad-portable")
-        .redirect(crate::downloader::redirect_policy())
-        .build()
-        .map_err(|e| BrowserError::Network(e.to_string()))
+    crate::network::build_client(crate::network::METADATA_TIMEOUT)
 }
 
-/// Fetches `url` as raw bytes using `client`.
 async fn fetch_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
-    client
-        .get(url)
-        .send()
-        .await
-        .map_err(map_network_err)?
-        .error_for_status()
-        .map_err(map_network_err)?
-        .bytes()
-        .await
-        .map(|b| b.to_vec())
-        .map_err(map_network_err)
+    crate::network::fetch_bytes(client, url, crate::network::MAX_METADATA_BYTES).await
 }
 
-/// Fetches `url` as a UTF-8 string using `client`.
 async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String> {
-    client
-        .get(url)
-        .send()
-        .await
-        .map_err(map_network_err)?
-        .error_for_status()
-        .map_err(map_network_err)?
-        .text()
-        .await
-        .map_err(map_network_err)
+    crate::network::fetch_text(client, url).await
 }
 
 // ── Product-details response ───────────────────────────────────────────────────
