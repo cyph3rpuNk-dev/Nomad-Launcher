@@ -82,13 +82,30 @@ with the same documented RSA exception. Rust 1.92 all-target checking passed.
 The ignored live/HKCU checks and GitHub CI remain unrun.
 This follow-up is local and awaiting commit approval.
 
+## Launch-language follow-up (2026-10-07)
+
+`launch.language` now produces one `--lang=<value>` argument for Ungoogled
+Chromium and Helium, independently of hardening. Surrounding whitespace is
+trimmed; unset/blank values add no switch. An explicit language switch in
+`extra_args` takes precedence. Gecko and Bitwarden do not receive a generated
+language switch. Existing Chromium/Helium configs with `language = "en-US"`
+now request English; removing the setting retains the browser's own selection.
+
+Offline regressions reproduced the missing switch before the fix and inspect
+all nine adapters' commands without spawning processes. They cover hardening
+on/off, engine scope, blank values, overrides, and single-argument boundaries.
+Browser locale availability, UI behavior, and full-restart behavior still need
+smoke testing. The combined local gate passed: 475 unit tests plus 14 integration
+tests (489 total), formatting, Clippy, safeguard fixtures, and dependency audit
+with the documented RSA exception. Rust 1.92 all-target checking passed. Ignored
+live/HKCU tests and GitHub CI remain unrun. Both follow-ups await commit approval.
+
 ## Remaining code and documentation work
 
 | Priority | Item | Severity / certainty | Location and next action |
 |---|---|---|---|
-| 1 | `launch.language` has no effect | **Low, confirmed in code.** The field is parsed and advertised as `--lang`, but no launch path consumes it. | [`config.rs`](../core/src/config.rs), `LaunchConfig::language`; [`lib.rs`](../core/src/lib.rs), `build_launch_args`. Define supported engines, precedence with extra arguments and behavior when unset; add argument-construction tests. |
-| 2 | Misleading documentation/comments | **Low, confirmed.** SPEC places configuration beside the executable, says resource patching is deferred, confines `unsafe` to taskbar code, and references missing `DESIGN.md`. README's Chromium reprovision path is obsolete. Floorp's comment says its installer executes; Mullvad's module header puts the profile inside the installation tree. | [`SPEC.md`](../SPEC.md) sections 4, 6 and code style; [`README.md`](../README.md) troubleshooting; [`browsers/floorp.rs`](../core/src/browsers/floorp.rs) near `EXECUTABLE`; [`browsers/mullvad.rs`](../core/src/browsers/mullvad.rs) header. Reconcile with configuration loading, extraction, branding, profile paths and extension staging. |
-| 3 | Large orchestration modules | **Low, confirmed maintainability concern; defect impact is a hypothesis.** `lib.rs` is 3,772 lines including tests, combining CLI, UI pipeline, launch, registry integration and cleanup watcher handling. `browsers/mod.rs` is 1,267 lines including tests, mixing the family contract with Gecko provisioning. | Extract cohesive internal modules after behavior fixes, preserving the public contract and failure-path tests. Line counts alone do not establish poor coverage or a bug. |
+| 1 | Misleading documentation/comments | **Low, confirmed.** SPEC places configuration beside the executable, says resource patching is deferred, confines `unsafe` to taskbar code, and references missing `DESIGN.md`. README's Chromium reprovision path is obsolete. Floorp's comment says its installer executes; Mullvad's module header puts the profile inside the installation tree. | [`SPEC.md`](../SPEC.md) sections 4, 6 and code style; [`README.md`](../README.md) troubleshooting; [`browsers/floorp.rs`](../core/src/browsers/floorp.rs) near `EXECUTABLE`; [`browsers/mullvad.rs`](../core/src/browsers/mullvad.rs) header. Reconcile with configuration loading, extraction, branding, profile paths and extension staging. |
+| 2 | Large orchestration modules | **Low, confirmed maintainability concern; defect impact is a hypothesis.** `lib.rs` is 3,856 lines including tests, combining CLI, UI pipeline, launch, registry integration and cleanup watcher handling. `browsers/mod.rs` is 1,267 lines including tests, mixing the family contract with Gecko provisioning. | Extract cohesive internal modules after behavior fixes, preserving the public contract and failure-path tests. Line counts alone do not establish poor coverage or a bug. |
 
 Do not reopen a closed finding merely because the old handoff still lists it.
 Likewise, a green local gate does not close unrun end-to-end validation.
@@ -105,6 +122,6 @@ Likewise, a green local gate does not close unrun end-to-end validation.
 | Historical local artifacts | The handoff reports a nested Mullvad browser tree, stale associations and a stray LibreWolf host profile. These were not re-inspected or removed; they are historical reports, not current verified state. Cleanup needs a separate inventory and user approval. |
 | Review, CI and release | Obtain approval for push/PR creation, run GitHub CI, review/merge within authorized scope, build and verify release artifacts, and obtain approval for publishing/deployment. None follows automatically from a local commit. |
 
-Recommended next code change: finish language handling, then reconcile
-documentation before isolated validation and delivery. Keep a larger module
+Recommended next change: reconcile documentation before isolated validation
+and delivery. Keep a larger module
 split separate from behavior fixes.
