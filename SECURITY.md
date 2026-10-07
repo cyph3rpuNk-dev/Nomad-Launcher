@@ -45,6 +45,13 @@ CLI and owned temporary artifacts. It never creates or changes a real release.
 - **Pre-existing filesystem aliases.** Portable-state writes and update roots reject symlinks and Windows reparse points before following them. Download basenames are fixed, staging is created exclusively, and temporary cleanup requires creation by the current operation. These metadata checks do not protect against a hostile writer replacing paths between checks and operations; drive write access and compromised hosts remain outside the threat model.
 - **Malicious archives and stalled endpoints.** Extraction rejects path traversal and drive-absolute entries. ZIP output and streamed downloads are size-capped; metadata and extension responses are bounded before buffering. HTTP clients have connect, read and total deadlines. Bundled 7-Zip extraction has a deadline and observed output/entry limits before promotion. Its output may overshoot between scans; these are not OS disk, CPU or memory quotas. See [network and extraction budgets](docs/UPDATE-SAFETY.md#network-and-extraction-budgets).
 
+Automatic HKCU handler repairs save bounded, validated write-ahead records before
+mutation. Undo compares raw value type and bytes, preserves subsequent edits,
+and disables automatic repair before restoring commands. The per-folder lock
+serializes Nomad operations; a third-party registry writer can still race the
+last comparison and write. Existing repairs without snapshots cannot be undone.
+See [registry repair safety](docs/REGISTRY-SAFETY.md).
+
 ### What Nomad does not defend against
 
 - **Forensic examination of the host.** Windows keeps execution records Nomad cannot remove: Amcache and ShimCache, SRUM, the USN journal, event logs, and the pagefile. Prefetch scrubbing exists but requires a UAC elevation. If the host may be forensically examined, do not use it.

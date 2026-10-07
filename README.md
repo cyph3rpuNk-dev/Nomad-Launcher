@@ -233,7 +233,9 @@ C:\Portables\Firefox\
 │   ├── nomad.toml                # user configuration
 │   ├── nomad.log
 │   ├── nomad-version-cache.toml
-│   └── nomad.reg-state.json      # present after default registration
+│   ├── nomad.reg-state.json      # present after default registration
+│   ├── nomad.registry-repairs.json # repair history and enabled/disabled state
+│   └── registry-repair.lock       # persistent lock file; do not delete
 └── Nomad-Firefox.exe
 ```
 
@@ -358,11 +360,24 @@ should use a drive-qualified path (for example `C:\My Files\page.html`) or a
 `file://` URL; spaces within one target are preserved. Configure intentional
 browser switches through `[launch] extra_args`.
 
-If the portable folder moves, register it again from its new path.
+Before moving or renaming a registered launcher, run `--unregister-default` from
+its original location. After moving it, run `--register-default` from the new path.
+Outstanding automatic-repair records are bound to their original paths; Nomad
+retains them and refuses repair or registration if those paths no longer match.
 
 Browsers can also register themselves. If you use the browser's own "make this my default" button, Windows records the browser executable rather than the launcher, and a clicked link then starts a second copy of the browser on its default profile under `%LOCALAPPDATA%` or `%APPDATA%` instead of opening a tab in the portable one. That second copy has none of your extensions or sign-ins, and older versions then deleted its profile when the browser closed.
 
-To prevent that, each launch inspects the `HKCU` handler entries and rewrites any whose command runs a file inside the launcher's own folder, so those links go through the launcher and land in the portable profile. Because the "make default" button is normally used while the browser is open, the launcher's background helper also watches those entries for the whole session and rewrites a new self-registration within about a second, and checks once more after the browser exits. Links clicked in that first second can still open a separate copy; using `--register-default` as described above avoids even that. Handlers pointing anywhere else, including other browsers and separately installed copies of the same browser, are left as they are. This is the only registry write Nomad makes without being asked, and it is confined to `HKCU`.
+To prevent that, each launch inspects the `HKCU` handler entries and repairs recognized browser commands whose executable is inside the launcher's browser installation, so those links go through the launcher and land in the portable profile. Because the "make default" button is normally used while the browser is open, the launcher's background helper also watches those entries for the whole session and rewrites a new self-registration within about a second, and checks once more after the browser exits. Links clicked in that first second can still open a separate copy; using `--register-default` as described above avoids even that. Handlers pointing anywhere else, including other browsers and separately installed copies of the same browser, are left as they are. This is the only registry write Nomad makes without being asked, and it is confined to `HKCU`.
+
+Automatic repairs are recorded before writing in `Nomad/nomad.registry-repairs.json`.
+`--unregister-default` restores recorded commands only while they still contain
+Nomad's exact replacement, preserving subsequent changes and deleted handlers.
+It also disables automatic repairs until `--register-default` succeeds again,
+including repairs by a helper that is already running. This works even if you
+never registered the Nomad entry in Windows Settings. Custom command arguments
+are left alone. Repairs made by older versions cannot be reconstructed.
+Keep the journal and its lock file; see [registry repair safety](docs/REGISTRY-SAFETY.md)
+for failure recovery and concurrency limits.
 
 ## Troubleshooting
 

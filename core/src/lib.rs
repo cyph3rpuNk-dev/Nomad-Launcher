@@ -262,7 +262,7 @@ where
         |dir| config::nomad_subdir(dir).join("nomad.reg-state.json"),
     );
 
-    match registry::unregister(&sidecar) {
+    match registry::unregister_launcher(&sidecar, &exe_path) {
         Ok(()) => {
             show_msgbox("Browser registration removed successfully.", false);
             ExitCode::SUCCESS

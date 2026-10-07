@@ -2,7 +2,7 @@
 
 ## 1. Objective
 
-Nomad Launcher is a family of portable Windows browser launchers. Each launcher is a single self-contained executable, `nomad-<browser-id>.exe`, that updates, privacy-hardens, and launches exactly one browser from a local directory. No installer. No registry writes during normal operation. Distributable to end users as-is.
+Nomad Launcher is a family of portable Windows browser launchers. Each launcher is a single self-contained executable, `nomad-<browser-id>.exe`, that updates, privacy-hardens, and launches exactly one browser from a local directory. No installer. No new default-browser registration during normal operation; existing browser self-registrations may be repaired as specified in §10. Distributable to end users as-is.
 
 **Inspiration:** chrlauncher, expanded to cover Firefox-family browsers and more.
 
@@ -528,7 +528,7 @@ Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are 
 
 - Opt-in only: registration is not performed automatically. It is triggered by running the launcher with `--register-default` (and undone with `--unregister-default`).
 - Writes to `HKCU\Software\Classes\...` and `HKCU\Software\RegisteredApplications` only (no UAC, no `HKLM`).
-- On register: records written keys to a sidecar `nomad.reg-state.json` beside the `.exe`.
+- On register: records written keys in `Nomad/nomad.reg-state.json`.
 - On unregister: reads the sidecar and removes exactly those keys (no guessing, no collateral damage).
 - The registered handler launches `"nomad-<browser-id>.exe" -- "%1"` so the
   launcher mediates URL/file opens. Require exactly one non-empty target after
@@ -544,12 +544,31 @@ Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are 
 
 Browsers can register *themselves* as URL/HTML handlers (the "Make default" button in their own settings). For a Nomad-managed install that registration points straight at the browser exe inside the portable tree (e.g. `"...\Browser\chrome.exe" --single-argument %1`), bypassing the launcher entirely: the browser then starts with its default host-profile location (`%LOCALAPPDATA%`) instead of the portable `Data` dir. Every clicked link opens a second, empty-profile instance — and older cleanup could delete that host profile on exit, which read as "the browser deleted my logins". Shared host profiles are now preserved.
 
-`registry::repair_self_registration` therefore sweeps **every** ProgId under `HKCU\Software\Classes` (including the per-exe `Applications\<exe>` handlers) plus the `HKCU\Software\Clients\StartMenuInternet` clients, and rewrites any `shell\open\command` whose executable lives **strictly inside this launcher's `install_dir`** to route through the launcher (`"<launcher>" -- "%1"`). This is the one registry write permitted outside `--register-default`; it is `HKCU`-only, touches only commands that already point into Nomad's own install tree (never other browsers, other Nomad launchers, or system installs), and repairs state the browser itself wrote about Nomad's files. Combined with the launcher's stable `--user-data-dir`/`--profile`, a clicked URL reaches the already-running portable instance as a new tab (Chromium process singleton; Gecko per-profile remoting — which is also why Gecko launch commands must **not** pass `--no-remote`).
+`registry::repair_self_registration` therefore sweeps **every** ProgId under `HKCU\Software\Classes` (including the per-exe `Applications\<exe>` handlers) plus the `HKCU\Software\Clients\StartMenuInternet` clients, and repairs recognized browser `shell\open\command` values whose executable lives **strictly inside this launcher's `install_dir`** to route through the launcher (`"<launcher>" -- "%1"`). This is the one registry write permitted outside `--register-default`; it is `HKCU`-only, touches only commands that already point into Nomad's own install tree (never other browsers, other Nomad launchers, or system installs), and repairs state the browser itself wrote about Nomad's files. Combined with the launcher's stable `--user-data-dir`/`--profile`, a clicked URL reaches the already-running portable instance as a new tab (Chromium process singleton; Gecko per-profile remoting — which is also why Gecko launch commands must **not** pass `--no-remote`).
 
 Two properties of the sweep are load-bearing:
 
-- **It is not restricted to the ProgIds currently selected via `UserChoice`.** A third-party redirector (Winhance's `OpenWebSearch` stub, MSEdgeRedirect, …) commonly owns the `http`/`https` `UserChoice` slot and dispatches onward to the browser's own ProgId — so the command that actually launches the browser is frequently not the selected one. Scanning only `UserChoice` left those commands pointing straight at the browser exe. Safety comes entirely from the `install_dir` containment check, not from the narrowness of the candidate set; an empty `install_dir` is refused outright so containment can never degenerate into "every path".
+- **It is not restricted to the ProgIds currently selected via `UserChoice`.** A third-party redirector (Winhance's `OpenWebSearch` stub, MSEdgeRedirect, …) commonly owns the `http`/`https` `UserChoice` slot and dispatches onward to the browser's own ProgId — so the command that actually launches the browser is frequently not the selected one. Scanning only `UserChoice` left those commands pointing straight at the browser exe. Safety requires validated command/key shapes, ordinary filesystem paths, install-directory containment and a durable repair journal; an empty `install_dir` is refused outright so containment can never degenerate into "every path".
 - **It runs before launch, during the session, and after browser exit.** The user clicks "Make default" *inside* the browser, mid-session. Until the command is rewritten, every clicked link starts a second browser on its host profile instead of opening a tab in the portable instance. The detached cleanup watcher therefore watches `HKCU\Software\Classes` with `RegNotifyChangeKeyValue` for as long as the browser runs and re-runs the repair once each burst of changes settles (`selfreg_watch.rs`). A per-install named mutex keeps this to one watcher when several link clicks have each spawned one. The watcher re-runs the repair once more after the browser tree is down. Both derive `install_dir` from the launched browser executable's own path.
+
+Automatic repair uses a separate versioned journal at
+`Nomad/nomad.registry-repairs.json`, with a persistent per-folder file lock shared
+by repair, register and unregister operations. Each original default value's raw
+bytes and type are saved atomically before compare/write. Only recognized
+Chromium/Gecko arguments with one URL placeholder (or an argument-free Start Menu
+command) are eligible; custom arguments, relative/traversing paths and filesystem
+aliases are refused. Command contents are not logged.
+
+`--unregister-default` durably disables automatic repair, then conditionally
+restores recorded commands and removes the Nomad picker registration. Only an
+exact recorded replacement is restored; later edits and missing values are
+preserved. Failures retain the disabled journal for retry. A successful undo
+retains an empty disabled journal; successful explicit registration reenables it.
+The helper must honor this state on its next sweep. A journal with outstanding
+records cannot be rebound to a moved/renamed launcher or changed installation
+path. Unregister before relocation, then register again. Legacy repairs without
+snapshots cannot be recovered. See [registry repair safety](docs/REGISTRY-SAFETY.md)
+for limits and testing.
 
 ---
 
