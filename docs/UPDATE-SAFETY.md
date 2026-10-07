@@ -304,12 +304,22 @@ The launch path can use that valid backup if the current directory is unavailabl
 The browser-update preserve-state hook also carries the working extension into
 the staged browser so a subsequent offline check does not erase it.
 
-Gecko XPI downloads likewise go into an owned private stage. The existing
-signature-file sanity check must pass before replacement. This does not add
-cryptographic Mozilla signature verification. Failed download, verification or
-promotion leaves the prior XPI and extension version cache unchanged; version
-records advance only after successful promotion. Protocol launch remains free
-of extension provisioning. Tests use inert files, mock HTTP and owned temporary
+Gecko XPI provisioning uses the [AMO add-on metadata API](https://mozilla.github.io/addons-server/topics/api/addons.html)
+to resolve the version, file URL and SHA-256 digest together. Metadata must
+identify `uBlock0@raymondhill.net`, a public file, a nonempty version, and a
+well-formed SHA-256 hash. Nomad downloads that file URL over HTTPS, verifies the
+bounded bytes against the digest, checks signature-file presence, and only then
+writes an owned private stage. It no longer probes `/latest/` with HEAD or guesses
+versions from filenames. A release changing during the download cannot silently
+pair one version's cache record with another version's bytes.
+
+The hash trusts AMO metadata; signature-file presence is only a layout check.
+Firefox performs cryptographic Mozilla signature verification at installation.
+Already-current cached files are not rehashed, and `auto_download = false` still
+defers downloads. Failed metadata resolution, download, verification or promotion
+leaves the prior XPI and extension version cache unchanged; version records
+advance only after successful promotion. Protocol launch remains free of
+extension provisioning. Tests use inert files, mock HTTP and owned temporary
 folders; they never install an extension into a running browser.
 
 ## Chromium hardening toggle and first-run settings
@@ -338,14 +348,15 @@ All production HTTP clients share `core/src/network.rs`: a 15-second connect
 timeout, a 30-second per-read stall timeout, and a total request deadline of
 60 seconds for metadata or 20 minutes for package/extension-archive transfers.
 These are built-in safeguards, not `nomad.toml` options. Redirect protections
-and signature/digest verification remain required. Metadata includes release
-JSON, signed checksum files, signatures and tag verification responses.
+and signature/digest verification remain required. Metadata includes browser
+release and AMO add-on JSON, signed checksum files, signatures and tag
+verification responses.
 
 Metadata responses are streamed into buffers capped at 16 MiB; Chromium
-extension ZIP responses use 128 MiB. Both declared lengths and bytes actually
-received are checked, including chunked responses. Package/XPI file downloads
-retain the 1 GiB cap. Metadata connection/timeouts use the existing offline
-fallback; package failures follow the existing error/retry/fallback flow.
+extension ZIP and Gecko XPI responses use 128 MiB. Both declared lengths and bytes
+actually received are checked, including chunked responses. Browser package file
+downloads retain the 1 GiB cap. Metadata connection/timeouts use the existing
+offline fallback; package failures follow the existing error/retry/fallback flow.
 Oversized responses are failures. Failed transfers preserve the prior
 destination and remove only their own partial temporary file. Optional extension
 checks keep their existing graceful failure behavior.
