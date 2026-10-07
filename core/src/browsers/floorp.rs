@@ -1,7 +1,7 @@
 //! [`BrowserFamily`] implementation for Floorp.
 //!
 //! Floorp is a Firefox-based browser distributed via GitHub releases.
-//! Releases are verified via the GitHub-recorded SHA-256 digest on each asset.
+//! Releases are verified against SHA-256 from the release's hashes.txt asset.
 
 use std::path::Path;
 use std::process::Command;
@@ -27,7 +27,8 @@ const NOMAD_CFG: &str = include_str!("../../payloads/firefox/nomad.cfg");
 const API_URL: &str = "https://api.github.com/repos/floorp-projects/floorp/releases/latest";
 
 // Floorp no longer ships a portable .zip since v12.x; the NSIS installer
-// is run silently with /S /D=<path>.  SHA-256 is sourced from hashes.txt.
+// is unpacked with the bundled 7-Zip extractor, never executed.
+// SHA-256 is sourced from hashes.txt and checked before extraction.
 const EXECUTABLE: &str = "floorp.exe";
 
 fn installer_asset_name(arch: Arch) -> &'static str {
