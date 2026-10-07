@@ -345,6 +345,10 @@ Nomad-Firefox.exe --unregister-default
 ```
 
 Writes to `HKCU` only, so there is no UAC prompt. State is tracked in `Nomad/nomad.reg-state.json`.
+The cleanup record is saved before the first registry write. If registration
+fails or is interrupted, retry `--register-default` to finish it, or run
+`--unregister-default` to remove its partial entries. Keep the record until
+recovery succeeds; its presence alone does not mean registration completed.
 
 When Windows invokes a registered Nomad browser for a URL or file, the launcher
 requires an existing browser installation and skips all browser and extension
