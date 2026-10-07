@@ -34,9 +34,9 @@ Each browser (and channel) ships as its own launcher binary. v1 produces nine bi
 
 Notes:
 - **Helium** — upstream signs commits via GitHub's web-flow key, which cannot produce detached signatures for release assets; no usable GPG key is available for embedding. SHA-256 only; absence of GPG signature logged at `WARN`.
-- **LibreWolf** — ships pre-hardened; Nomad applies a thin `policies.json`-only override rather than the full arkenfox `user.js` stack (see §5). No upstream GPG signing key usable for release asset verification. SHA-256 only.
+- **LibreWolf** — ships pre-hardened; Nomad applies its own minimal `user.js` and shared `policies.json`, preserving LibreWolf's autoconfig (see §5). No upstream GPG signing key usable for release asset verification. SHA-256 only.
 - **Mullvad Browser** — ships its own complete anti-fingerprinting stack (RFP, letterboxing, standardized UA / timezone / fonts) plus uBlock Origin and NoScript; Nomad applies **no** `user.js` and provisions **no** uBO, writing only a `DisableAppUpdate` `policies.json` (see §5) so its crowd-blending model stays intact. Verified with the Tor Browser Developers GPG key (`core/keys/mullvad.asc`) plus the SHA-256 GitHub asset digest.
-- Patching the downloaded browser's own icon resources (PE resource editing) is deferred to post-v1.
+- Ungoogled Chromium receives verified PE icon and PAK logo overlays during staging; see §6.
 
 ### Non-browser apps
 
@@ -219,7 +219,7 @@ and disabled headless checks skip staging recovery. See
 
 ## 4. Configuration
 
-File: `nomad.toml`, sitting beside its launcher `.exe`. Each launcher has its own config, scoped to that one browser — there is no browser array.
+File: `Nomad/nomad.toml`, inside the `Nomad/` subfolder beside its launcher `.exe`. Each launcher has its own config, scoped to that one browser — there is no browser array.
 
 ```toml
 [browser]
@@ -346,9 +346,9 @@ preference disables update access without removing a binary dependency.
 
 ### Gecko-family (Firefox, LibreWolf, Floorp, Waterfox) — layered profile
 
-Two layers, both written into `install_dir`:
+Two layers, written to separate profile and installation locations:
 
-1. **`user.js`** — a Nomad-curated "safe" profile derived from the arkenfox `user.js` template: the arkenfox core sections minus every preference arkenfox itself tags as site-breaking (`[SETUP-WEB]`), aggressive (`[SETUP-HARDEN]`), or optional (sections 4000+, including RFP). The Nomad-written block is fenced with marker comments; preferences outside the fence — including the user's own — are preserved, and the block is re-seeded idempotently on every launch.
+1. **`user.js`** — written to the portable profile returned by `profile_dir` (`Data/` for these browsers), outside the replaceable installation. A Nomad-curated "safe" profile derived from the arkenfox `user.js` template: the arkenfox core sections minus every preference arkenfox itself tags as site-breaking (`[SETUP-WEB]`), aggressive (`[SETUP-HARDEN]`), or optional (sections 4000+, including RFP). The Nomad-written block is fenced with marker comments; preferences outside the fence — including the user's own — are preserved, and the block is re-seeded idempotently on every launch.
 2. **`policies.json`** — written to `<install_dir>/distribution/policies.json`. Carries the structural locks `user.js` cannot enforce: disable the browser's built-in updater (Nomad is the sole updater), disable telemetry / studies / crash reporting, disable Pocket and Firefox accounts. This file is fully Nomad-managed.
 
 ### LibreWolf — own minimal `user.js`, shares `policies.json`, skips the autoconfig pair
@@ -373,12 +373,18 @@ The gorhill ZIP is fetched only after its GitHub asset metadata supplies a valid
 
 ## 6. Branding
 
-v1 branding is limited to the launcher executables themselves:
+Branding covers launcher assets and the supported Ungoogled Chromium overlays:
 
 - Each launcher crate embeds a browser-branded `icon.ico` into its `.exe` at compile time via a `winresource` build script. `nomad-firefox.exe` carries a Firefox-branded icon, and so on.
 - The status window's identity card displays the browser's logo and brand colors (see §7), matching the Nomad mockups.
-
-Patching the **downloaded browser's** own icon/resource data (PE resource editing) is **deferred to post-v1**. v1 does not modify the browser binaries' resources.
+- Ungoogled Chromium uses [`core/src/branding.rs`](core/src/branding.rs) and
+  [`core/src/branding/chromium.rs`](core/src/branding/chromium.rs) to patch PE icon
+  resources and PAK logos after package verification. The mandatory staged
+  compatibility check verifies required files and overlays before promotion;
+  failure preserves the working installation. A `.branding-patched` fingerprint
+  controls repeat application. Cosmetic rebranding of an existing installation
+  logs failures and retries next launch; it does not bypass staged update checks.
+  Other launchers do not supply this branding configuration.
 
 ### PE Version Metadata (Windows exe Properties → Details)
 
@@ -404,7 +410,8 @@ There is no tray icon and no persistent window. Running `nomad-<browser>.exe` op
 
 ### Design language
 "Nomad dark" palette — the design tokens (palette + type/spacing/radius/motion
-scales) live in `core/src/ui/theme.rs`; see `DESIGN.md` for the full system.
+scales) live in [`core/src/ui/theme.rs`](core/src/ui/theme.rs); identity rendering
+is implemented in [`core/src/ui/identity.rs`](core/src/ui/identity.rs).
 Unified chrome across all nine launchers; per-browser differentiation is the
 identity card's logo + name, plus an optional accent override
 (`BrowserFamily::accent`, default = the family amber accent). The footer carries
@@ -448,7 +455,7 @@ A narrow window containing two stacked cards and a footer link.
   - **`<Browser>` version** — the browser's own version
   - **Build date** — build date, or `—` when unknown
 
-**3. Footer** — left: "Open upstream release page" link (`#E8B255`), opens the browser's upstream release page in the system default browser. Right: the shared Nomad brand lockup — the Nomad emblem + `NOMAD` wordmark (the family signature; emblem from `core/payloads/nomad/`, wordmark in the accent; see `DESIGN.md`).
+**3. Footer** — left: "Open upstream release page" link (`#E8B255`), opens the browser's upstream release page in the system default browser. Right: the shared Nomad brand lockup — the Nomad emblem + `NOMAD` wordmark (the family signature; emblem from `core/payloads/nomad/`, wordmark in the accent; see [`core/src/ui/identity.rs`](core/src/ui/identity.rs)).
 
 ### Behavior
 - **Auto-close** — once the browser process is spawned, the window closes itself automatically. No user interaction is required on the happy path.
@@ -614,7 +621,7 @@ for limits and testing.
 - No `unwrap()` / `expect()` outside of launcher `main()` startup initialization.
 - All HTTP via `reqwest` with `native-tls` feature on Windows.
 - Public keys embedded via `include_bytes!` at compile time; no runtime file reads for keys. Launcher icons embedded at build time via `winresource`.
-- No `unsafe` except in the `taskbar.rs` COM interface calls, isolated behind a safe wrapper.
+- Isolate `unsafe` Windows API calls behind safe Rust interfaces and document their safety assumptions. Current uses include taskbar COM, Authenticode, PE resource branding, registry notifications/repair, cleanup, and launcher DLL-search configuration; they are not confined to `taskbar.rs`.
 
 ---
 
@@ -675,7 +682,7 @@ for limits and testing.
 - Write to `HKLM` (requires elevation and breaks the portability promise).
 - Execute a downloaded binary that has not passed hash (and, where applicable, GPG or Authenticode) verification.
 - **Bitwarden:** use the `-x64.appx` (inert when unpacked), build it from source, or run any NSIS/web installer — only the official portable `.exe` is wrapped. Do not relocate the vault (`App\Data`) outside `install_dir` *without* keeping the `preserve_state_across_update` copy, and do not drop the Authenticode signer check.
-- Modify the downloaded browser's binaries or resources in v1 (PE resource patching is post-v1).
+- Modify downloaded binaries before verification, or bypass required staged overlay validation. The supported PE/PAK branding overlays in §6 are deliberate post-verification modifications.
 - Store credentials, tokens, or personally identifiable information anywhere.
 - Silently ignore config parse errors or unknown keys.
 - Apply aggressive, site-breaking hardening (full RFP / fingerprint-resistance, `--disable-webgl`, arkenfox `[SETUP-HARDEN]` / optional-section prefs); those are explicitly out of scope (§5).

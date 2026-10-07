@@ -416,9 +416,24 @@ blindly. Verify the binary against `SHA256SUMS` and the build attestation first.
 If verification succeeds, unblock only that file; do not disable SmartScreen
 system-wide.
 
-**uBlock Origin isn't installed.** Close and re-launch once. If it still doesn't appear, check the launcher log for AMO metadata, SHA-256 verification, or file-replacement errors. `Nomad/Gecko-extensions/uBlock0.xpi` must exist; signature-file names alone do not prove its integrity.
+**uBlock Origin isn't installed in a Nomad-managed Gecko browser.** Close and re-launch once. If it still doesn't appear, check the launcher log for AMO metadata, SHA-256 verification, or file-replacement errors. `Nomad/Gecko-extensions/uBlock0.xpi` must exist; signature-file names alone do not prove its integrity.
 
-**To force a uBO re-provision:** delete `Nomad/Gecko-extensions/uBlock0.xpi` (Gecko) or `Browser/default_apps/uBlock0.crx` (Chromium) and re-launch.
+**To retry Nomad-managed uBO provisioning:** close the browser and launcher,
+then rename the affected staged copy as a backup:
+
+- Firefox, Firefox ESR, LibreWolf, Floorp and Waterfox: rename
+  `Nomad/Gecko-extensions/uBlock0.xpi` to `uBlock0.xpi.saved`.
+- Ungoogled Chromium: rename `Browser/nomad-extensions/uBlock0/` to
+  `Browser/nomad-extensions/uBlock0.saved/`. If the sibling
+  `Browser/nomad-extensions/uBlock0.backup/` also exists, rename it
+  to a separate saved name too; Nomad can otherwise reuse that recovery copy.
+  Substitute your configured installation folder for `Browser`.
+
+Choose unused backup names. Start Nomad directly while online with hardening
+and automatic downloads enabled; a URL/file handoff does not provision software.
+Keep the saved copy until the replacement works. These paths do not apply to
+Helium or Mullvad, which ship their own extensions. This does not reset extension
+settings stored in the browser profile.
 
 **I lost my bookmarks.** You deleted `Data/` (the browser profile) instead of `Nomad/` (Nomad's bookkeeping). They are separate folders.
 
