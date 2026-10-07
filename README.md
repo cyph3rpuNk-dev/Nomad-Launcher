@@ -153,7 +153,7 @@ stays, because nothing in it breaks a site and it is what installs uBlock Origin
 
 What each browser family gets:
 
-**Chromium (Ungoogled Chromium, Helium):** launch flags disable sync, telemetry, and JumpList, and enable canvas/rects/measureText noise, WebRTC restriction, and referrer stripping. DoH is seeded to Quad9 secure mode. uBlock Origin is loaded via `--load-extension=`, sourced from [gorhill/uBlock](https://github.com/gorhill/uBlock) releases with a GPG-verified tag. The machine-ID and encryption switches are not part of this profile, for the reason given above.
+**Chromium (Ungoogled Chromium, Helium):** launch flags disable sync, telemetry, and JumpList, and enable canvas/rects/measureText noise, WebRTC restriction, and referrer stripping. DoH is seeded to Quad9 secure mode. uBlock Origin is loaded via `--load-extension=`, sourced from [gorhill/uBlock](https://github.com/gorhill/uBlock) releases with a GPG-verified tag, a verified SHA-256 asset digest, and an upload-timeline check. The machine-ID and encryption switches are not part of this profile, for the reason given above.
 
 **Gecko (Firefox, Floorp, Waterfox):** a fenced `user.js` (a safe subset derived from arkenfox) and a `policies.json` that disables the updater, telemetry, and Pocket are written on every launch. uBlock Origin is provisioned from a locally cached AMO-signed `.xpi`.
 
@@ -472,7 +472,7 @@ Nomad builds on the work of these projects:
 
 - [Firefox](https://www.mozilla.org/firefox/) / Firefox ESR, [Floorp](https://floorp.app), [Waterfox](https://www.waterfox.net), [LibreWolf](https://librewolf.net), [Mullvad Browser](https://mullvad.net/en/browser), [Ungoogled Chromium](https://github.com/ungoogled-software/ungoogled-chromium), [Helium](https://github.com/imputnet/helium-windows), and [Bitwarden](https://bitwarden.com).
 - [arkenfox/user.js](https://github.com/arkenfox/user.js), the basis for the Gecko "safe subset" `user.js`.
-- [uBlock Origin](https://github.com/gorhill/uBlock), provisioned automatically for the Gecko launchers (AMO-signed XPI) and Ungoogled Chromium (GPG-verified gorhill release). Helium ships its own built-in fork, so Nomad doesn't provision it there.
+- [uBlock Origin](https://github.com/gorhill/uBlock), provisioned automatically for the Gecko launchers (AMO-signed XPI) and Ungoogled Chromium (GPG-verified gorhill tag and SHA-256-verified ZIP). Helium ships its own built-in fork, so Nomad doesn't provision it there.
 
 Nomad is an independent project and is not affiliated with, endorsed by, or sponsored by any of the projects above. See [TRADEMARKS.md](TRADEMARKS.md).
 
