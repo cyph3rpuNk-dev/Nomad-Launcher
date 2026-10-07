@@ -53,6 +53,26 @@ CLI and owned temporary artifacts. It never creates or changes a real release.
 - **Network-level anonymity.** The hardening reduces fingerprinting and tracking. It does not hide your IP address or your traffic from the network operator. Use a VPN or Tor Browser for anonymity.
 - **Unsigned upstreams.** LibreWolf, Floorp, Waterfox, Ungoogled Chromium, and Helium publish no usable signing key, so their integrity chain is TLS to the distribution host plus the hash that host publishes. There is no publisher key to pin because none exists.
 
+## Build and CI safeguards
+
+Distribution builds use the committed lockfile and the explicit Windows x64
+target. Required inputs and the exact launcher set must be present; requested
+signing and verification failures stop packaging. Signers work on an owned stage.
+Final copied bytes are checked before the completion manifest is promoted.
+Build failures remove completion manifests rather than leaving stale signatures
+beside incomplete artifacts. File promotion is not a multi-file transaction;
+partial output files may remain, but the workflow must stop on the error.
+
+`NOMAD_SIGN_PASS` is rejected before child processes start. Certificate-store
+thumbprints avoid putting PFX passwords in process arguments or inherited
+environments. The script never imports certificates. Unsigned review/CI builds
+remain supported; public release signing remains a separate owner action.
+
+Hardening Sync defaults to no token permissions. Only its existing baseline-PR
+jobs request contents/pull-request writes; verification jobs remain read-only.
+CI checkouts used only for validation do not persist credentials. See
+[Build and CI safeguards](docs/BUILD-SAFETY.md) for exact behavior and limits.
+
 ## Dependency audit policy
 
 The canonical gate runs `cargo audit --deny warnings`, including yanked-crate

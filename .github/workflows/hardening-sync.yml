@@ -10,15 +10,18 @@ on:
     - cron: '0 6 * * 1'   # Every Monday 06:00 UTC
   workflow_dispatch:        # Manual trigger for testing
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   # ── Job 1: ungoogled-chromium flags.md ────────────────────────────────────
   chromium-flags:
     name: Ungoogled-Chromium flags drift
     runs-on: ubuntu-latest
+
+    # These jobs publish curated baseline PRs; verification jobs stay read-only.
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -122,6 +125,11 @@ jobs:
   arkenfox:
     name: Arkenfox user.js release watch
     runs-on: ubuntu-latest
+
+    # These jobs publish curated baseline PRs; verification jobs stay read-only.
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -238,7 +246,8 @@ jobs:
   # signing subkey after the snapshot was taken. The only signal was a user
   # reporting the failure.
   #
-  # Like job 3 this FAILS rather than opening a PR. Refreshing a trust anchor
+  # Like the upstream-verification job this FAILS rather than opening a PR.
+  # Refreshing a trust anchor
   # is a human decision, and auto-committing a downloaded public key would
   # defeat the point of pinning one.
   signing-keys:
@@ -287,8 +296,8 @@ jobs:
           toolchain: stable
 
       - name: Resolve every upstream release and confirm it is verifiable
-        run: cargo test -p nomad-core --test upstream_live -- --ignored --nocapture
+        run: cargo test --locked -p nomad-core --test upstream_live -- --ignored --nocapture
 
       - name: Download, verify, extract, and validate current browser overlays
         run: >-
-          cargo test -p nomad-core --test upstream_extract -- --ignored --nocapture
+          cargo test --locked -p nomad-core --test upstream_extract -- --ignored --nocapture

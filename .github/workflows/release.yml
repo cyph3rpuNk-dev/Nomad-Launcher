@@ -56,7 +56,7 @@ jobs:
         run: pwsh -NoProfile -File scripts/check.ps1
 
       - name: Verify current Chromium compatibility before building release artifacts
-        run: cargo test -p nomad-core --test upstream_extract chromium_release -- --ignored --nocapture
+        run: cargo test --locked -p nomad-core --test upstream_extract chromium_release -- --ignored --nocapture
 
       # No cargo cache on purpose: a poisoned cache entry restored into a
       # release build could end up inside a shipped binary (zizmor's
@@ -65,10 +65,10 @@ jobs:
 
       - name: Build launchers and write SHA256SUMS (dist.ps1)
         # NOMAD_SIGN_CERT / NOMAD_SIGNING_KEY are deliberately not set, so
-        # dist.ps1 runs only its build portion: cargo build --release
-        # --workspace, license staging, and the SHA256SUMS manifest, with
+        # dist.ps1 runs a locked x64 Windows build, validates the exact artifact
+        # set, stages licenses and writes the SHA256SUMS manifest, with
         # artifact naming identical to a local build. The "UNSIGNED" warnings
-        # it prints are expected here.
+        # for unrequested signing are expected here.
         run: .\dist.ps1
 
       - name: Attest build provenance

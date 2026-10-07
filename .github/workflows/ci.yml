@@ -19,6 +19,8 @@ jobs:
       contents: read # checkout
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -39,6 +41,8 @@ jobs:
       contents: read # checkout
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -71,4 +75,4 @@ jobs:
         with:
           toolchain: '1.92'
       - name: Check workspace at MSRV
-        run: cargo +1.92 check --workspace --locked
+        run: cargo +1.92 check --workspace --all-targets --locked

@@ -33,7 +33,7 @@ jobs:
         with:
           toolchain: '1.92'
       - name: Check workspace at the minimum Rust version
-        run: cargo +1.92 check --workspace --locked
+        run: cargo +1.92 check --workspace --all-targets --locked
   chromium:
     runs-on: windows-latest
     timeout-minutes: 45
@@ -50,7 +50,7 @@ jobs:
       - name: Canonical validation
         run: pwsh -NoProfile -File scripts/check.ps1
       - name: Verify current Chromium archive, layout, and all required overlays
-        run: cargo test -p nomad-core --test upstream_extract chromium_release -- --ignored --nocapture
+        run: cargo test --locked -p nomad-core --test upstream_extract chromium_release -- --ignored --nocapture
       - name: Build reviewable launchers and checksum manifest
         run: .\dist.ps1
       - name: Upload validated build for review

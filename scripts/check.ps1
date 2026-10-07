@@ -32,14 +32,20 @@ try {
         Invoke-GateStep 'Release publishing regression fixtures' {
             pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-release-publish.ps1')
         }
+        Invoke-GateStep 'Build safeguard regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-build-safeguards.ps1')
+        }
+        Invoke-GateStep 'CI safeguard regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-ci-safeguards.ps1')
+        }
         Invoke-GateStep 'Formatting' {
             cargo fmt --all -- --check
         }
         Invoke-GateStep 'Clippy' {
-            cargo clippy --workspace --all-targets -- -D warnings
+            cargo clippy --workspace --all-targets --locked -- -D warnings
         }
         Invoke-GateStep 'Tests' {
-            cargo test --workspace
+            cargo test --workspace --locked
         }
     }
 
