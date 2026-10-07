@@ -21,13 +21,13 @@ The Mullvad checksum fixture was cryptographically verified with GPG and
 Nomad's Rust verifier. The refreshed 7-Zip extractor ran against inert temporary
 ZIP fixtures. No installer or browser was launched.
 
-Still unrun: four ignored HKCU tests, nine ignored browser-release metadata
-checks, two ignored current-package extraction checks, real browser smoke tests,
-and GitHub CI for this work. The signing-key check does not replace them.
+Still unrun: four ignored HKCU tests, real browser smoke tests, and GitHub CI
+for this work. The signing-key check does not replace them.
 Test counts measure examples exercised, not code coverage; no coverage percentage
 has been measured.
 
-Code fixes below are local commits; the documentation follow-up is uncommitted.
+Code fixes and documentation cleanup are local commits; the live-check results
+records below are uncommitted.
 This work has not been pushed, merged,
 published or copied into the user's portable installations. At the baseline review,
 `origin/main..HEAD` contained 24 commits using the local tracking ref. No remote
@@ -81,7 +81,8 @@ and no stage/backup creation when a hash-only adapter lacks a digest.
 The canonical gate passed for this follow-up: 472 unit tests and 14 integration
 checks (486 total), formatting, Clippy, safeguard fixtures, and dependency audit
 with the same documented RSA exception. Rust 1.92 all-target checking passed.
-The ignored live/HKCU checks and GitHub CI remain unrun.
+At that validation, ignored live/HKCU checks and GitHub CI remained unrun;
+see the current live metadata results below.
 Committed locally as `af8772a`.
 
 ## Launch-language follow-up (2026-10-07)
@@ -100,7 +101,7 @@ Browser locale availability, UI behavior, and full-restart behavior still need
 smoke testing. The combined local gate passed: 475 unit tests plus 14 integration
 tests (489 total), formatting, Clippy, safeguard fixtures, and dependency audit
 with the documented RSA exception. Rust 1.92 all-target checking passed. Ignored
-live/HKCU tests and GitHub CI remain unrun. Language handling is committed locally
+live/HKCU tests and GitHub CI were unrun at that point. Language handling is committed locally
 as `1b13fb8`; verification monitoring is committed as `af8772a`.
 
 ## Documentation follow-up (2026-10-07)
@@ -113,13 +114,70 @@ actual extension staging paths and distinguishes Nomad-managed provisioning
 from Helium/Mullvad's bundled extensions. Floorp and Mullvad comments now match
 nonexecuting extraction and the separate `Data/Profile` location.
 
-Only documentation and Rust comments changed. This follow-up awaits commit
-approval; the earlier code fixes remain committed. The canonical gate passed
+Only documentation and Rust comments changed. Committed locally as `67cde4a`. The canonical gate passed
 again: 489 tests, formatting, Clippy, safeguard fixtures, and dependency audit
 with the documented RSA exception. All 56 local Markdown file targets in the
 three edited documents exist, and both Rust diffs were checked as comments only.
 Rust 1.92 validation is carried forward from the language commit; it was not
-rerun for comment-only changes. Live/HKCU tests and GitHub CI remain unrun.
+rerun for comment-only changes. Live/HKCU tests and GitHub CI were unrun at
+that point; the metadata checks have since run as recorded below.
+
+## Live upstream metadata validation (2026-10-07)
+
+Executed on `67cde4a` using
+`cargo test -p nomad-core --test upstream_live --locked -- --ignored --nocapture`.
+All nine x64 metadata checks passed; the two offline regressions in that test
+binary were filtered out by `--ignored` (they passed in the canonical gate).
+
+| Adapter | Resolved version | Package verification metadata |
+|---|---|---|
+| Firefox | 157.0.1 | SHA-256 from authenticated checksum manifest |
+| Firefox ESR | 140.17.0esr | SHA-256 from authenticated checksum manifest |
+| Floorp | 12.19.0 | SHA-256 |
+| Waterfox | 6.7.5 | SHA-512 |
+| LibreWolf | 157.0-1 | SHA-256 |
+| Mullvad | 15.0.24 | Required detached signature URL and SHA-256 |
+| Ungoogled Chromium | 154.0.8037.97-1.1 | SHA-256 |
+| Helium | 0.18.3.1 | SHA-256 |
+| Bitwarden | 2026.9.1 | SHA-256 |
+
+This exercised real upstream resolution, the shared verification-metadata
+preflight, and adapter update compatibility checks. Firefox authenticates its
+checksum manifest during resolution; its lack of a package-signing key in the
+printed metadata summary does not mean signature verification was skipped.
+No browser package was downloaded, extracted, installed, or launched by this
+suite. Mullvad package signatures, Bitwarden Authenticode, staged layouts,
+required overlays and browser behavior still need their separate checks.
+Other architectures were not tested. These are point-in-time upstream results.
+
+The live results records await commit approval. The canonical gate and Rust
+1.92 results above are carried forward; neither was rerun merely to record
+these live runs.
+
+## Live package extraction and overlays (2026-10-07)
+
+Executed on `67cde4a` using
+`cargo test -p nomad-core --test upstream_extract --locked -- --ignored --nocapture`.
+Both tests passed (2 passed, 0 failed) in 26 seconds on Windows:
+
+- Floorp: real upstream resolution, package download and verification, extraction,
+  staged update promotion, configured launch-target existence, and installed
+  version-marker checks.
+- Ungoogled Chromium: real upstream resolution, package download and verification,
+  extraction, production staged compatibility and mandatory PE/PAK branding
+  checks, update promotion, executable/branding-marker/version-marker checks.
+  The test also asserted that no `Data/` profile directory was created.
+
+Each test used its own `tempfile::tempdir()` and exercised the shared updater.
+The bundled extractor ran; downloaded browser installers and browser executables
+were not launched. The tests did not use the user's portable installations or
+profiles. Exact resolved versions were not printed by this suite; the preceding
+metadata table records the separate metadata run, not an extraction-test manifest.
+
+This closes the two extraction/overlay checks for this run, not all-browser
+installation coverage. Browser startup, extension acceptance, existing-profile
+updates, offline launch, rollback/retry and real Windows integration remain
+separate validation. No runtime source was changed for these live checks.
 
 ## Remaining maintenance work
 
@@ -134,14 +192,13 @@ Likewise, a green local gate does not close unrun end-to-end validation.
 
 | Work | Evidence needed / scope |
 |---|---|
-| Current upstream metadata | Run the nine ignored `upstream_live` checks with the shared production preflight. Metadata resolution does not establish successful browser installation. |
-| Actual extraction and overlays | Run the two ignored `upstream_extract` checks in isolated temporary storage. They download real packages and exercise Floorp/Chromium extraction and overlays without launching the browser; they do not cover every browser. |
 | Windows registration and URL handoff | Use an isolated Windows account for the four ignored HKCU tests, then verify real same-profile URL/file handoff. Mock registry tests do not prove Windows picker integration. |
 | Portable browser smoke tests | Fresh install, update, offline launch, rollback/retry, hardening toggle and extension acceptance in disposable portable folders. Do not use the user's real profiles as fixtures. |
 | Historical Helium cross-machine sign-in report | Still needs reproduction. The handoff references issue #54, but current GitHub status and root cause were not checked here. Portability flags alone do not prove cookie portability. Use a disposable account/profile and a controlled move between machines. |
 | Historical local artifacts | The handoff reports a nested Mullvad browser tree, stale associations and a stray LibreWolf host profile. These were not re-inspected or removed; they are historical reports, not current verified state. Cleanup needs a separate inventory and user approval. |
 | Review, CI and release | Obtain approval for push/PR creation, run GitHub CI, review/merge within authorized scope, build and verify release artifacts, and obtain approval for publishing/deployment. None follows automatically from a local commit. |
 
-Recommended next step: run the nine current-upstream metadata checks, then
-isolated extraction and browser validation before delivery. Keep the optional
-module split separate from behavior fixes and validation.
+Recommended next step: prepare disposable browser smoke-test folders and an
+isolated Windows test account for startup, profile persistence and URL handoff
+validation. Keep the four HKCU tests confined to that account. Review and CI
+remain separate delivery work; defer the optional module split until validation.
