@@ -50,7 +50,10 @@ mutation. Undo compares raw value type and bytes, preserves subsequent edits,
 and disables automatic repair before restoring commands. The per-folder lock
 serializes Nomad operations; a third-party registry writer can still race the
 last comparison and write. Existing repairs without snapshots cannot be undone.
-See [registry repair safety](docs/REGISTRY-SAFETY.md).
+Explicit default-browser registration persists a validated cleanup plan before
+its first HKCU write and retains it on failure for retry/removal. This is
+recoverable partial state, not atomic multi-key rollback; separate copies still
+share browser-wide picker names. See [registry repair safety](docs/REGISTRY-SAFETY.md).
 
 ### What Nomad does not defend against
 

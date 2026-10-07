@@ -528,8 +528,14 @@ Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are 
 
 - Opt-in only: registration is not performed automatically. It is triggered by running the launcher with `--register-default` (and undone with `--unregister-default`).
 - Writes to `HKCU\Software\Classes\...` and `HKCU\Software\RegisteredApplications` only (no UAC, no `HKLM`).
-- On register: records written keys in `Nomad/nomad.reg-state.json`.
-- On unregister: reads the sidecar and removes exactly those keys (no guessing, no collateral damage).
+- On register: atomically saves the complete cleanup plan in
+  `Nomad/nomad.reg-state.json` before the first HKCU write. Reject invalid,
+  oversized, unknown-schema or different-browser prior state without replacing
+  it. Retain the record after a failed write for explicit retry or removal.
+- On unregister: validates the version-1 record against the browser's exact
+  planned keys/values and removes those entries. Missing entries are harmless;
+  registry failures retain the record. Failure to remove the record is also an
+  error. The record describes a prepared attempt, not a completion marker.
 - The registered handler launches `"nomad-<browser-id>.exe" -- "%1"` so the
   launcher mediates URL/file opens. Require exactly one non-empty target after
   the separator; reject missing targets, additional arguments, and targets
