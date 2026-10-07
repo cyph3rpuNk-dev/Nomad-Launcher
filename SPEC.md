@@ -273,8 +273,8 @@ enum Hardening {
         preferences: Option<&'static str>,
     },
     /// Gecko-family: a marker-fenced user.js, an optional policies.json, an
-    /// optional autoconfig pair (autoconfig.js + .cfg), and an optional AMO
-    /// uBlock XPI URL — all embedded/resolved at compile time. `autoconfig`
+    /// optional autoconfig pair (autoconfig.js + .cfg), and an optional
+    /// uBlock AMO metadata URL — all embedded/resolved at compile time. `autoconfig`
     /// and `cfg` are `None` for forks shipping their own (e.g. LibreWolf);
     /// `ublock_xpi_releases_url` is `None` for browsers bundling uBlock.
     GeckoProfile {
@@ -363,7 +363,11 @@ LibreWolf still shares `firefox/policies.json` (the structural updater/telemetry
 
 The arkenfox-derived profile and the Chromium flag sets are **vendored** — pinned snapshots embedded in `nomad-core` via `include_str!`, never fetched at runtime (runtime fetch would break offline / USB use and add a per-launch failure mode). They are bumped deliberately, tracking upstream arkenfox releases and ungoogled-chromium flag changes.
 
-The AMO-signed uBlock Origin XPI (Gecko) and the gorhill `uBlock0_X.X.X.chromium.zip` (Ungoogled Chromium) are the explicit runtime-fetch exceptions: the AMO XPI is downloaded because Gecko requires a Mozilla-signed artifact that Nomad cannot reproduce. The gorhill ZIP is fetched only after its GitHub asset metadata supplies a valid `sha256:<64 hex characters>` digest, the release tag's GPG signature verifies against the embedded gorhill key (`F5630CAE62A14316`), and the upload timeline passes `github::asset_provenance_suspect`. ZIP bytes must match the digest before extraction; absent, malformed or mismatched digests leave the installed extension and cache untouched. The tag signature authenticates the tag/commit only. GitHub's asset digest provides archive integrity dependent on GitHub metadata, not a publisher signature over the ZIP; the timeline check remains additional evidence against asset replacement. Already-current installed files are not rehashed. Nomad remains the sole updater for the extension binary.
+The AMO-signed uBlock Origin XPI (Gecko) and the gorhill `uBlock0_X.X.X.chromium.zip` (Ungoogled Chromium) are the explicit runtime-fetch exceptions.
+
+The AMO XPI is downloaded because Gecko requires a Mozilla-signed artifact that Nomad cannot reproduce. Nomad reads its version, exact file URL, and SHA-256 digest from one AMO add-on metadata response; the GUID must be `uBlock0@raymondhill.net` and the file status `public`. Missing/malformed hashes or mismatched XPI bytes fail before staging. The digest depends on AMO metadata over HTTPS, while Firefox performs Mozilla signature validation at installation. The local signature-file check is only a layout check. Version discovery no longer follows a mutable `/latest/` redirect or guesses from filenames.
+
+The gorhill ZIP is fetched only after its GitHub asset metadata supplies a valid `sha256:<64 hex characters>` digest, the release tag's GPG signature verifies against the embedded gorhill key (`F5630CAE62A14316`), and the upload timeline passes `github::asset_provenance_suspect`. ZIP bytes must match the digest before extraction; absent, malformed or mismatched digests leave the installed extension and cache untouched. The tag signature authenticates the tag/commit only. GitHub's asset digest provides archive integrity dependent on GitHub metadata, not a publisher signature over the ZIP; the timeline check remains additional evidence against asset replacement. Already-current installed files are not rehashed. Nomad remains the sole updater for the extension binary.
 
 ---
 

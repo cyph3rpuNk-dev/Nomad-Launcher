@@ -155,7 +155,7 @@ What each browser family gets:
 
 **Chromium (Ungoogled Chromium, Helium):** launch flags disable sync, telemetry, and JumpList, and enable canvas/rects/measureText noise, WebRTC restriction, and referrer stripping. DoH is seeded to Quad9 secure mode. uBlock Origin is loaded via `--load-extension=`, sourced from [gorhill/uBlock](https://github.com/gorhill/uBlock) releases with a GPG-verified tag, a verified SHA-256 asset digest, and an upload-timeline check. The machine-ID and encryption switches are not part of this profile, for the reason given above.
 
-**Gecko (Firefox, Floorp, Waterfox):** a fenced `user.js` (a safe subset derived from arkenfox) and a `policies.json` that disables the updater, telemetry, and Pocket are written on every launch. uBlock Origin is provisioned from a locally cached AMO-signed `.xpi`.
+**Gecko (Firefox, Floorp, Waterfox):** a fenced `user.js` (a safe subset derived from arkenfox) and a `policies.json` that disables the updater, telemetry, and Pocket are written on every launch. uBlock Origin is provisioned from a locally cached AMO-signed `.xpi`, verified against the SHA-256 digest in AMO metadata before replacement. Firefox validates its Mozilla signature at installation.
 
 **LibreWolf** ships pre-hardened, so Nomad applies a lighter touch. It gets its own minimal `user.js` rather than the shared Firefox one, adding only what LibreWolf doesn't already do: Quad9 malware-blocking DoH, `geo.enabled` off, network prediction off, WebRTC restricted, and the shutdown sanitize block. LibreWolf's own `librewolf.cfg` and autoconfig pair are never touched, and `privacy.resistFingerprinting` is left intact. uBlock Origin is provisioned the same way as for Firefox, since the portable ZIP doesn't bundle it.
 
@@ -405,7 +405,7 @@ blindly. Verify the binary against `SHA256SUMS` and the build attestation first.
 If verification succeeds, unblock only that file; do not disable SmartScreen
 system-wide.
 
-**uBlock Origin isn't installed.** Close and re-launch once. If it still doesn't appear, check that `Nomad/Gecko-extensions/uBlock0.xpi` exists and contains `META-INF/mozilla.rsa`.
+**uBlock Origin isn't installed.** Close and re-launch once. If it still doesn't appear, check the launcher log for AMO metadata, SHA-256 verification, or file-replacement errors. `Nomad/Gecko-extensions/uBlock0.xpi` must exist; signature-file names alone do not prove its integrity.
 
 **To force a uBO re-provision:** delete `Nomad/Gecko-extensions/uBlock0.xpi` (Gecko) or `Browser/default_apps/uBlock0.crx` (Chromium) and re-launch.
 
