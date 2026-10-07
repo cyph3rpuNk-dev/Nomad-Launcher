@@ -538,6 +538,38 @@ fn flatten_into(src: &Path, dest: &Path) -> Result<()> {
 mod tests {
     use std::io::Write;
 
+    #[test]
+    fn embedded_7zip_matches_reviewed_manifest() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../payloads/7zip/manifest.json")).unwrap();
+        for (name, bytes) in [
+            ("7z.exe", SEVENZIP_EXE),
+            ("7z.dll", SEVENZIP_DLL),
+            (
+                "LICENSE.txt",
+                include_bytes!("../payloads/7zip/LICENSE.txt").as_slice(),
+            ),
+        ] {
+            let expected = manifest["files"][name]
+                .as_str()
+                .expect("reviewed digest is required");
+            crate::gpg::sha256::verify(bytes, expected).unwrap_or_else(|error| {
+                panic!("bundled {name} differs from the reviewed manifest: {error}")
+            });
+        }
+        assert_eq!(manifest["architecture"], "x86_64");
+        for bytes in [SEVENZIP_EXE, SEVENZIP_DLL] {
+            assert_eq!(&bytes[..2], b"MZ");
+            let offset = u32::from_le_bytes(bytes[0x3c..0x40].try_into().unwrap()) as usize;
+            assert_eq!(&bytes[offset..offset + 4], b"PE\0\0");
+            assert_eq!(
+                u16::from_le_bytes(bytes[offset + 4..offset + 6].try_into().unwrap()),
+                0x8664,
+                "the bundled extractor must match the x64 release target"
+            );
+        }
+    }
+
     // Child runs this same inert test helper, never an installer or browser.
     #[test]
     fn extractor_process_fixture() {
