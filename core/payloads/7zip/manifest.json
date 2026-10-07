@@ -1,0 +1,16 @@
+{
+  "name": "7-Zip",
+  "version": "26.04",
+  "architecture": "x86_64",
+  "source": {
+    "url": "https://github.com/ip7z/7zip/releases/download/26.04/7z2604-x64.exe",
+    "sha256": "d54bf805f9f3704d1e8db2fa3498ae7ef2df0312b40b558e7c71c734430a665d",
+    "release_url": "https://github.com/ip7z/7zip/releases/tag/26.04"
+  },
+  "files": {
+    "7z.exe": "95fff19b73eff77c87c0d7bd32822e43fb90dd2932459f962eb532d8dfb6ba53",
+    "7z.dll": "899cd73d7fc60e1c1c35c7de0f5bed3dc69bfe2cecbd48014d868a347970a0b1",
+    "LICENSE.txt": "32369594a3a9f7c643d124035120eaa6a7707e75e57c4386ef509f801447bc49"
+  },
+  "license_normalization": "LF line endings"
+}

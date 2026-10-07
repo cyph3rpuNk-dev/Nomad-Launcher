@@ -99,3 +99,10 @@ Upstream has no patched release. Re-evaluate this exception if cryptographic
 usage changes or a fixed release becomes available. Signature verification is
 retained. The previous `quick-xml` exceptions were removed after upgrading its
 dependency paths to patched releases.
+
+## Vendored verification dependencies
+
+The embedded 7-Zip extractor and browser public keys are outside Cargo audit.
+See [vendored dependency maintenance](docs/VENDORED-DEPENDENCIES.md) for reviewed
+extractor provenance, the offline file-integrity gate, and signing-key refresh
+evidence and limitations.

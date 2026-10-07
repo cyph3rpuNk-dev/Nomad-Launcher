@@ -480,6 +480,6 @@ Nomad is an independent project and is not affiliated with, endorsed by, or spon
 
 Nomad Launcher source code is licensed under the [MIT License](LICENSE-MIT).
 
-Nomad bundles Atkinson Hyperlegible (SIL OFL 1.1) and 7-Zip 24.09 (LGPL-2.1) inside its binaries. License texts ship in `licenses/` alongside each release.
+Nomad bundles Atkinson Hyperlegible (SIL OFL 1.1) and 7-Zip 26.04 (LGPL-2.1 with the upstream BSD and unRAR notices) inside its binaries. License texts ship in `licenses/` alongside each release. See [vendored dependency maintenance](docs/VENDORED-DEPENDENCIES.md) for source hashes and signing-key refresh checks.
 
 The browsers Nomad launches belong to their respective owners. Nomad is not affiliated with or endorsed by any of them. See [TRADEMARKS.md](TRADEMARKS.md).
