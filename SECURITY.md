@@ -52,8 +52,9 @@ serializes Nomad operations; a third-party registry writer can still race the
 last comparison and write. Existing repairs without snapshots cannot be undone.
 Explicit default-browser registration persists a validated cleanup plan before
 its first HKCU write and retains it on failure for retry/removal. This is
-recoverable partial state, not atomic multi-key rollback; separate copies still
-share browser-wide picker names. See [registry repair safety](docs/REGISTRY-SAFETY.md).
+recoverable partial state, not atomic multi-key rollback. New picker names are
+scoped to the launcher location, and deletion requires a matching version-2 owner
+record. Migration preserves historical shared entries and archives their records. See [registry repair safety](docs/REGISTRY-SAFETY.md).
 
 ### What Nomad does not defend against
 

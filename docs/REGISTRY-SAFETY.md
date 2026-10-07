@@ -56,8 +56,8 @@ for review; deleting one discards the repair history and disabled state.
 
 `core/src/registry/registration.rs` builds the 16 explicit registration values
 and their cleanup plan. Before any HKCU mutation, it atomically saves the plan
-in `Nomad/nomad.reg-state.json`, using the existing version-1 format. Existing
-records must match the supported schema, browser ID and exact planned key/value
+in `Nomad/nomad.reg-state.json`, using a version-2 format bound to the current
+launcher location. Existing records must match the supported schema, browser ID and exact planned key/value
 lists; inputs over 64 KiB, unknown fields and malformed records are refused.
 A record for another browser is preserved and prevents registration writes.
 
@@ -75,6 +75,36 @@ Do not treat the mere presence of the file as a successful registration marker.
 This provides recoverability, not a multi-key registry transaction or automatic
 rollback of prior values after a failed refresh.
 
+## Separate portable copies and migration
+
+New names derive from SHA-256 over the browser ID, a NUL separator and the
+canonical launcher-parent path plus executable filename, folded to ASCII
+lowercase. The ProgID is `NomadPortable.` plus 24 digest hex characters (38
+characters total); capability roots and RegisteredApplications use the full
+digest. This follows Microsoft's [ProgID length and character guidance](https://learn.microsoft.com/en-us/windows/win32/com/-progid--key).
+The Windows picker label includes the folder so copies can be distinguished.
+
+Version-2 state binds the generated key/value names to that launcher path.
+Unregistration validates the current location before any picker deletion or
+CLI automatic-repair undo. Copied records, modified paths and legacy version-1
+records cannot authorize removal. A per-folder lock serializes CLI operations;
+separate copies address different registry names.
+
+On explicit registration, a valid same-browser record from another location or
+an old version-1 record is preserved under `Nomad/registration-history/` in a
+file named by the record's SHA-256. An existing matching archive is reused; a
+conflicting, unreadable or redirected archive stops the attempt. The archive
+must be saved before replacing the active plan or performing registry writes.
+A failure replacing the active plan leaves the prior plan available for retry.
+
+Migration creates a new entry and leaves all historical registry entries alone.
+Select the new folder-labelled entry in Windows Default apps. Old shared entries
+may still appear and need manual review; the archive is a record, not automatic
+permission to delete them. An unregister attempt against an old/shared or copied
+record gives guidance to register this location first. Automatic repair journals
+with outstanding snapshots still require undo at the original location before
+moving, as described above.
+
 ## Limits
 
 - Older versions did not save originals. Already-repaired commands without a
@@ -84,9 +114,12 @@ rollback of prior values after a failed refresh.
   in one folder only. Close the browser before explicit registration changes.
 - Raw REG_EXPAND_SZ bytes are preserved, but environment-variable executable
   paths are not expanded or repaired.
-- Explicit registration still uses browser-wide Nomad ProgID names. Separate
-  portable copies of the same browser can overwrite or remove each other's
-  picker registration. Cross-instance ownership remains separate work.
+- Older launcher versions still use shared names. Migration leaves those entries
+  intact; old executables can still change their shared entries. Removing stale
+  historical registrations remains a manual review operation.
+- Identity is location-based, not a globally unique installation ID. Replacing a
+  launcher at the same path reuses that location's names. Case-sensitive Windows
+  directories and deliberately engineered digest collisions are not supported.
 - Filesystem checks reject existing redirects, but cannot defeat a hostile writer
   swapping paths concurrently. Portable-drive write access is outside the threat
   model. Journal durability also depends on the filesystem and storage device.
@@ -105,3 +138,8 @@ Explicit registration tests use injected writes, covering failures before and
 after each of the 16 writes (32 interruption cases), retry, write-ahead ordering,
 sidecar persistence failure, rejected old records and failed record deletion.
 They do not create or modify real HKCU entries.
+
+Ownership tests cover two copies in one fake registry, deletion of one while
+preserving the other, copied-state rejection, stable/distinct identities,
+legacy migration without shared-key writes, archive failures and retries, and
+tampered scoped paths. No live HKCU entries are changed by these tests.
