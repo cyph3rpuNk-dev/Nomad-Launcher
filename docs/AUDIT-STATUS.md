@@ -8,7 +8,7 @@ work list are historical.
 
 ## Verification and delivery
 
-The last executed canonical gate passed on the source tree committed as
+The baseline canonical gate passed on the source tree committed as
 `f37c9a9`: 471 unit tests plus 12 integration tests (483 total), formatting,
 Clippy, release/build/CI safeguard fixtures, and dependency audit with the
 sole documented `RUSTSEC-2023-0071` exception. Rust 1.92 workspace/all-target
@@ -43,7 +43,7 @@ F-numbers refer to the original handoff. Paths below identify current evidence.
 | F3: forwarded browser switches | Fixed. Exactly one supported URL/file argument; switch-like and extra arguments are rejected before configuration or browser construction. | `split_forwarded_args` / `validate_forwarded_args` in [`lib.rs`](../core/src/lib.rs), `1bc3fdc`. |
 | F4/F10: unsafe or nested installation folders | Fixed. A single Windows-safe, nonreserved folder component is required. Filesystem aliases and instance ownership are checked separately. | [`config.rs`](../core/src/config.rs), [`fs_safety.rs`](../core/src/fs_safety.rs), [`instance.rs`](../core/src/instance.rs); `cd93fad`, `1734e26`. |
 | F5: unbounded network waits | Fixed. Shared connection, read and total deadlines, plus metadata/archive byte limits. | [`network.rs`](../core/src/network.rs), [`downloader.rs`](../core/src/downloader.rs), `87caecd`. |
-| F6: missing required signature falls back to hash | Fixed in production. Signature-bearing adapters fail closed before staging. The live-check mismatch below remains. | [`updater.rs`](../core/src/updater.rs), `c01e3c7`. |
+| F6: missing required signature falls back to hash | Fixed in production. Signature-bearing adapters fail closed before staging. The follow-up below aligns live monitoring with this requirement. | [`updater.rs`](../core/src/updater.rs), `c01e3c7`. |
 | F7: Gecko XPI signature-file names treated as integrity | Mitigated. AMO metadata binds identity, version, URL and SHA-256; bytes are verified before staging. Mozilla signature verification remains Firefox's responsibility. | [`browsers/mod.rs`](../core/src/browsers/mod.rs), `4280eb0`; [trust limits](UPDATE-SAFETY.md). |
 | F8: unbounded Chromium extension download / tag does not cover ZIP | Download bounded; GitHub asset digest required and verified. The tag signature still does not authenticate ZIP bytes: archive integrity depends on GitHub metadata. | [`browsers/github.rs`](../core/src/browsers/github.rs), [`browsers/ungoogled.rs`](../core/src/browsers/ungoogled.rs); `87caecd`, `89e2529`. |
 | F9: untracked registry repair | Fixed for new repairs. Write-ahead journal and compare-before-restore undo; explicit registrations are recoverable and location-scoped. Unknown historical originals cannot be reconstructed. | [`registry/repair_journal.rs`](../core/src/registry/repair_journal.rs), [`registry/registration.rs`](../core/src/registry/registration.rs); `f00175c`, `5975143`, `87360f8`; [limits](REGISTRY-SAFETY.md). |
@@ -63,14 +63,32 @@ The reported Mullvad update failure now has a reproduced cause and fix: a missin
 signing subkey, refreshed under the same primary fingerprint (`f37c9a9`). See
 [the signed-fixture and binding evidence](VENDORED-DEPENDENCIES.md).
 
+## Verification-monitoring follow-up (2026-10-07)
+
+The local follow-up shares the integrity-material policy between
+`updater::validate_verification_metadata`, package verification, and the live
+release checker. A required signature URL cannot fall back to SHA-256 or
+SHA-512. Hash-only adapters without a digest now fail before stage creation or
+download. Metadata availability does not establish package authenticity;
+cryptographic verification remains mandatory.
+
+An offline regression reproduced the previous false success before the fix.
+The policy matrix covers signed/hash-only adapters, signature presence, and
+SHA-256/SHA-512/no digest. A mocked pipeline regression confirms zero requests
+and no stage/backup creation when a hash-only adapter lacks a digest.
+The canonical gate passed for this follow-up: 472 unit tests and 14 integration
+checks (486 total), formatting, Clippy, safeguard fixtures, and dependency audit
+with the same documented RSA exception. Rust 1.92 all-target checking passed.
+The ignored live/HKCU checks and GitHub CI remain unrun.
+This follow-up is local and awaiting commit approval.
+
 ## Remaining code and documentation work
 
 | Priority | Item | Severity / certainty | Location and next action |
 |---|---|---|---|
-| 1 | Live verification check can give a false success | **Medium, confirmed predicate mismatch.** `gpg || hash` accepts a hash when an embedded key exists but the signature URL is missing. Production rejects that combination. This is a monitoring gap, not a production verification bypass. | [`core/tests/upstream_live.rs`](../core/tests/upstream_live.rs), `assert_verifiable`, versus [`core/src/updater.rs`](../core/src/updater.rs). Align the predicates and add an offline regression; avoid another duplicated verification policy. |
-| 2 | `launch.language` has no effect | **Low, confirmed in code.** The field is parsed and advertised as `--lang`, but no launch path consumes it. | [`config.rs`](../core/src/config.rs), `LaunchConfig::language`; [`lib.rs`](../core/src/lib.rs), `build_launch_args`. Define supported engines, precedence with extra arguments and behavior when unset; add argument-construction tests. |
-| 3 | Misleading documentation/comments | **Low, confirmed.** SPEC places configuration beside the executable, says resource patching is deferred, confines `unsafe` to taskbar code, and references missing `DESIGN.md`. README's Chromium reprovision path is obsolete. Floorp's comment says its installer executes; Mullvad's module header puts the profile inside the installation tree. | [`SPEC.md`](../SPEC.md) sections 4, 6 and code style; [`README.md`](../README.md) troubleshooting; [`browsers/floorp.rs`](../core/src/browsers/floorp.rs) near `EXECUTABLE`; [`browsers/mullvad.rs`](../core/src/browsers/mullvad.rs) header. Reconcile with configuration loading, extraction, branding, profile paths and extension staging. |
-| 4 | Large orchestration modules | **Low, confirmed maintainability concern; defect impact is a hypothesis.** `lib.rs` is 3,772 lines including tests, combining CLI, UI pipeline, launch, registry integration and cleanup watcher handling. `browsers/mod.rs` is 1,267 lines including tests, mixing the family contract with Gecko provisioning. | Extract cohesive internal modules after behavior fixes, preserving the public contract and failure-path tests. Line counts alone do not establish poor coverage or a bug. |
+| 1 | `launch.language` has no effect | **Low, confirmed in code.** The field is parsed and advertised as `--lang`, but no launch path consumes it. | [`config.rs`](../core/src/config.rs), `LaunchConfig::language`; [`lib.rs`](../core/src/lib.rs), `build_launch_args`. Define supported engines, precedence with extra arguments and behavior when unset; add argument-construction tests. |
+| 2 | Misleading documentation/comments | **Low, confirmed.** SPEC places configuration beside the executable, says resource patching is deferred, confines `unsafe` to taskbar code, and references missing `DESIGN.md`. README's Chromium reprovision path is obsolete. Floorp's comment says its installer executes; Mullvad's module header puts the profile inside the installation tree. | [`SPEC.md`](../SPEC.md) sections 4, 6 and code style; [`README.md`](../README.md) troubleshooting; [`browsers/floorp.rs`](../core/src/browsers/floorp.rs) near `EXECUTABLE`; [`browsers/mullvad.rs`](../core/src/browsers/mullvad.rs) header. Reconcile with configuration loading, extraction, branding, profile paths and extension staging. |
+| 3 | Large orchestration modules | **Low, confirmed maintainability concern; defect impact is a hypothesis.** `lib.rs` is 3,772 lines including tests, combining CLI, UI pipeline, launch, registry integration and cleanup watcher handling. `browsers/mod.rs` is 1,267 lines including tests, mixing the family contract with Gecko provisioning. | Extract cohesive internal modules after behavior fixes, preserving the public contract and failure-path tests. Line counts alone do not establish poor coverage or a bug. |
 
 Do not reopen a closed finding merely because the old handoff still lists it.
 Likewise, a green local gate does not close unrun end-to-end validation.
@@ -79,7 +97,7 @@ Likewise, a green local gate does not close unrun end-to-end validation.
 
 | Work | Evidence needed / scope |
 |---|---|
-| Current upstream metadata | Run the nine ignored `upstream_live` checks after correcting their verification predicate. Metadata resolution does not establish successful browser installation. |
+| Current upstream metadata | Run the nine ignored `upstream_live` checks with the shared production preflight. Metadata resolution does not establish successful browser installation. |
 | Actual extraction and overlays | Run the two ignored `upstream_extract` checks in isolated temporary storage. They download real packages and exercise Floorp/Chromium extraction and overlays without launching the browser; they do not cover every browser. |
 | Windows registration and URL handoff | Use an isolated Windows account for the four ignored HKCU tests, then verify real same-profile URL/file handoff. Mock registry tests do not prove Windows picker integration. |
 | Portable browser smoke tests | Fresh install, update, offline launch, rollback/retry, hardening toggle and extension acceptance in disposable portable folders. Do not use the user's real profiles as fixtures. |
@@ -87,6 +105,6 @@ Likewise, a green local gate does not close unrun end-to-end validation.
 | Historical local artifacts | The handoff reports a nested Mullvad browser tree, stale associations and a stray LibreWolf host profile. These were not re-inspected or removed; they are historical reports, not current verified state. Cleanup needs a separate inventory and user approval. |
 | Review, CI and release | Obtain approval for push/PR creation, run GitHub CI, review/merge within authorized scope, build and verify release artifacts, and obtain approval for publishing/deployment. None follows automatically from a local commit. |
 
-Recommended next code change: close the live verification predicate mismatch,
-then finish language handling and documentation before isolated validation and
-delivery. Keep a larger module split separate from behavior fixes.
+Recommended next code change: finish language handling, then reconcile
+documentation before isolated validation and delivery. Keep a larger module
+split separate from behavior fixes.

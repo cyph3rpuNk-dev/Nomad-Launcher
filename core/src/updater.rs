@@ -54,6 +54,38 @@ pub fn needs_update(
     })
 }
 
+/// Checks that release metadata supplies the integrity material this adapter requires.
+/// This does not download or authenticate bytes; [`verify_package`] must still run.
+///
+/// # Errors
+/// Returns [`BrowserError::Verification`] if a required signature URL is missing,
+/// or an adapter without a package-signing key has no supported digest.
+pub fn validate_verification_metadata<B: BrowserFamily + ?Sized>(
+    browser: &B,
+    info: &VersionInfo,
+) -> Result<()> {
+    require_verification_material(browser, info, info.signature_url.is_some())
+}
+
+fn require_verification_material<B: BrowserFamily + ?Sized>(
+    browser: &B,
+    info: &VersionInfo,
+    signature_available: bool,
+) -> Result<()> {
+    if browser.public_key().is_some() {
+        if !signature_available {
+            return Err(missing_package_signature(browser.id()));
+        }
+    } else if info.sha256.is_none() && info.sha512.is_none() {
+        return Err(BrowserError::Verification(format!(
+            "no integrity material (GPG signature or SHA hash) available for {}; \
+             refusing to extract an unverified package",
+            browser.id()
+        )));
+    }
+    Ok(())
+}
+
 /// Verifies a downloaded package before it is extracted.
 ///
 /// A detached GPG signature is required whenever the adapter exposes a package
@@ -72,6 +104,8 @@ pub fn verify_package<B: BrowserFamily + ?Sized>(
     package: &Path,
     signature: Option<&Path>,
 ) -> Result<()> {
+    require_verification_material(browser, info, signature.is_some())?;
+
     // Tracks whether at least one cryptographic check actually ran. A package
     // that reaches the end with nothing verified must never be installed.
     let mut verified = false;
@@ -220,11 +254,8 @@ pub(crate) async fn download_and_install<B: BrowserFamily>(
         browser.installed_version(install_dir).as_ref(),
         latest,
     )?;
-    // The shared UI/headless path must reject incomplete signature metadata
-    // before downloading or creating a stage, including cached releases.
-    if browser.public_key().is_some() && latest.signature_url.is_none() {
-        return Err(missing_package_signature(browser.id()));
-    }
+    // Share the preflight policy with upstream monitoring, including cached releases.
+    validate_verification_metadata(browser, latest)?;
     let stage_dir = crate::install::stage_dir(install_dir);
     let backup_dir = crate::install::backup_dir(install_dir);
     // Recovery must have removed any stale stage under this same lock.
@@ -1073,6 +1104,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_digest_stops_before_download_or_stage_creation() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        let request = server
+            .mock_async(|when, then| {
+                when.method(GET);
+                then.status(500);
+            })
+            .await;
+        let fixture = tempfile::tempdir().unwrap();
+        let install = fixture.path().join("Browser");
+        let lock = crate::install::InstanceLock::acquire(&install).unwrap();
+        let browser = UngoogledChromium::new(Arch::X64);
+        let mut info = version_info("2.0", None);
+        info.download_url = server.url("/package.zip");
+        // Even a published signature is unusable without an embedded key.
+        info.signature_url = Some(server.url("/package.sig"));
+        let (progress, _rx) = watch::channel(0.0);
+        let mut steps = Vec::new();
+        let result = download_and_install(
+            &browser,
+            &install,
+            &info,
+            false,
+            None,
+            progress,
+            |step| steps.push(step),
+            &lock,
+        )
+        .await;
+        let error = result.expect_err("missing integrity material must fail before staging");
+        assert!(matches!(error, BrowserError::Verification(_)));
+        assert!(error.to_string().contains("no integrity material"));
+        request.assert_calls_async(0).await;
+        assert!(steps.is_empty());
+        assert!(!crate::install::stage_dir(&install).exists());
+        assert!(!crate::install::backup_dir(&install).exists());
+    }
+
+    #[tokio::test]
     async fn missing_signature_url_stops_before_download_or_stage_creation() {
         use httpmock::prelude::*;
         let server = MockServer::start_async().await;
@@ -1227,7 +1298,7 @@ mod tests {
         let result = download_and_install(
             &browser,
             &install,
-            &version_info("2.0", None),
+            &version_info("2.0", Some(&"0".repeat(64))),
             false,
             None,
             progress,
