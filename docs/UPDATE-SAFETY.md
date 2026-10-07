@@ -283,6 +283,16 @@ cleaning up. A failed restoration retains the private directory and reports the
 original's location. Read-only settings remain untouched. These checks do not
 serialize writes by a running browser or protect against a hostile drive writer.
 
+Chromium uBlock downloads require a well-formed GitHub SHA-256 asset digest,
+a verified gorhill tag/commit GPG signature, and an acceptable upload timeline.
+The ZIP bytes must match the digest before extraction or staging. Missing,
+malformed or mismatched digests preserve the installed extension and version
+cache. GitHub's digest is not a gorhill signature over the ZIP: archive integrity
+still trusts GitHub metadata. The tag signature and timeline checks remain
+independent requirements. Already-current and deferred updates do not download
+or rehash the existing extension. See GitHub's
+[release asset digest documentation](https://docs.github.com/en/rest/releases/assets).
+
 Chromium uBlock updates extract into `uBlock0.stage`, enforce the decompressed
 budget and ordinary-path checks, and require a parseable manifest with a nonempty
 version before touching the active `uBlock0` directory. This is a minimum layout

@@ -486,16 +486,12 @@ struct GitTagVerification {
 ///
 /// # Trust model
 ///
-/// The GPG signature covers the release **tag/commit only** — it proves the
-/// release event is gorhill's, but GitHub release assets are mutable
-/// independently of git history, are not covered by that signature, and
-/// gorhill publishes no asset checksums (`digest` is `null`). The zip's
-/// bytes are therefore trusted to GitHub (TLS + API), with
-/// [`super::github::asset_provenance_suspect`] as tamper evidence against a
-/// post-publication asset swap. Rebuilding the zip from the signed source
-/// tree is impossible in principle: it bundles filter lists pulled from the
-/// latest `uBlockOrigin/uAssets` branches at gorhill's build time, which the
-/// signed commit does not pin.
+/// The GPG signature covers the release **tag/commit only**, not its mutable
+/// release assets. Before extraction, the ZIP bytes must also match GitHub's
+/// SHA-256 asset digest. Missing or malformed digests fail closed. The digest
+/// trusts GitHub's release metadata; it is not a publisher signature over the
+/// archive. The upload timeline provides additional evidence of an asset swap.
+/// Already-current installed files are not rehashed by this update check.
 ///
 /// `gorhill_key` is the embedded ASCII-armored GPG public key bytes. Passing
 /// it as a parameter enables tests to inject a test key.
@@ -559,9 +555,8 @@ async fn update_ubo_from_gorhill(
 
     // ── Asset provenance check ────────────────────────────────────────────────
     // The GPG signature below covers the release *tag/commit only* — GitHub
-    // release assets are mutable independently of git history and gorhill
-    // publishes no asset checksums, so the zip's upload timeline is the only
-    // tamper evidence available against a post-publication asset swap.
+    // release assets and their GitHub digests are mutable independently of
+    // git history, so retain the upload timeline as additional tamper evidence.
     if super::github::asset_provenance_suspect(asset, &release) {
         tracing::warn!(
             version = %upstream_version,
@@ -572,6 +567,18 @@ async fn update_ubo_from_gorhill(
         );
         return Ok(());
     }
+
+    // Require well-formed integrity metadata before requesting the archive.
+    let expected_sha256 = asset
+        .digest
+        .as_deref()
+        .and_then(|digest| digest.strip_prefix("sha256:"))
+        .filter(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| {
+            BrowserError::Verification(format!(
+                "gorhill uBO {upstream_version} asset has no valid SHA-256 digest"
+            ))
+        })?;
 
     // ── Resolve tag ref and GPG-verify ────────────────────────────────────────
     let verification =
@@ -593,13 +600,16 @@ async fn update_ubo_from_gorhill(
         "downloading gorhill uBO zip (release tag GPG-verified, asset provenance checked)"
     );
     let zip_bytes = super::github::fetch_archive(&client, &asset.browser_download_url).await?;
+    crate::gpg::sha256::verify(&zip_bytes, expected_sha256).map_err(|e| {
+        BrowserError::Verification(format!("gorhill uBO {upstream_version} ZIP: {e}"))
+    })?;
 
     stage_chromium_ubo_from_gorhill_zip(install_dir, &zip_bytes, &upstream_version)?;
     crate::version_cache::update_ubo_version(cache_path, &upstream_version);
 
     tracing::info!(
         version = %upstream_version,
-        "gorhill uBO staged (release tag GPG-verified, asset provenance checked)"
+        "gorhill uBO staged (ZIP SHA-256 verified, release tag GPG-verified, asset provenance checked)"
     );
     Ok(())
 }
@@ -1289,13 +1299,35 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
         commit_json: &str,
         zip_bytes: &[u8],
     ) {
+        let digest = format!("sha256:{}", crate::gpg::sha256::hex(zip_bytes));
+        mock_gorhill_commit_flow_with_digest(
+            server,
+            tag,
+            commit_sha,
+            commit_json,
+            zip_bytes,
+            Some(&digest),
+        );
+    }
+
+    fn mock_gorhill_commit_flow_with_digest(
+        server: &httpmock::MockServer,
+        tag: &str,
+        commit_sha: &str,
+        commit_json: &str,
+        zip_bytes: &[u8],
+        digest: Option<&str>,
+    ) {
         let zip_path = format!("/{tag}.zip");
         let zip_url = server.url(&zip_path);
+        let mut release: serde_json::Value =
+            serde_json::from_str(&gorhill_release_json(tag, &zip_url)).unwrap();
+        release["assets"][0]["digest"] = serde_json::json!(digest);
         server.mock(|when, then| {
             when.method(GET).path("/releases/latest");
             then.status(200)
                 .header("Content-Type", "application/json")
-                .body(gorhill_release_json(tag, &zip_url));
+                .body(release.to_string());
         });
         server.mock(|when, then| {
             when.method(GET).path(format!("/git/refs/tags/{tag}"));
@@ -1320,7 +1352,117 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
     // ── tests ─────────────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn gorhill_ubo_update_stages_on_valid_gpg_signature() {
+    async fn gorhill_ubo_update_rejects_digest_mismatch_without_changing_state() {
+        let server = MockServer::start();
+        let zip = make_ubo_zip();
+        let digest = format!("sha256:{}", "0".repeat(64));
+        let commit_json =
+            gorhill_commit_json(true, "valid", Some(TEST_GPG_PAYLOAD), Some(TEST_GPG_SIG));
+        mock_gorhill_commit_flow_with_digest(
+            &server,
+            "1.99.0",
+            "abc123",
+            &commit_json,
+            &zip,
+            Some(&digest),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        let extension = install.join("nomad-extensions/uBlock0");
+        std::fs::create_dir_all(&extension).unwrap();
+        let manifest = br#"{"version":"1.0.0"}"#;
+        std::fs::write(extension.join("manifest.json"), manifest).unwrap();
+        std::fs::write(extension.join("working.js"), b"old extension").unwrap();
+        let cache_path = dir.path().join("cache.toml");
+        crate::version_cache::update_ubo_version(&cache_path, "1.0.0");
+        let cache_before = std::fs::read(&cache_path).unwrap();
+
+        let err = update_ubo_from_gorhill(
+            &install,
+            &server.base_url(),
+            true,
+            &cache_path,
+            TEST_GPG_PUBKEY.as_bytes(),
+        )
+        .await
+        .expect_err("a signed release tag cannot authorize mismatched ZIP bytes");
+        assert!(matches!(err, BrowserError::Verification(_)), "{err:?}");
+        assert_eq!(
+            std::fs::read(extension.join("manifest.json")).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            std::fs::read(extension.join("working.js")).unwrap(),
+            b"old extension"
+        );
+        assert_eq!(std::fs::read(&cache_path).unwrap(), cache_before);
+        assert_eq!(
+            std::fs::read_dir(extension.parent().unwrap())
+                .unwrap()
+                .count(),
+            1,
+            "verification must not create staging, backup, or lock files"
+        );
+    }
+
+    #[tokio::test]
+    async fn gorhill_ubo_update_rejects_missing_or_malformed_digest_before_download() {
+        let hex = "a".repeat(64);
+        let cases = vec![
+            None,
+            Some(String::new()),
+            Some(format!("sha512:{hex}")),
+            Some(format!("sha256:{}", "a".repeat(63))),
+            Some(format!("sha256:{}", "a".repeat(65))),
+            Some(format!("sha256:{}g", "a".repeat(63))),
+            Some(format!("sha256:{hex} ")),
+            Some(format!(" sha256:{hex}")),
+        ];
+        for digest in cases {
+            let server = MockServer::start();
+            let mut release: serde_json::Value = serde_json::from_str(&gorhill_release_json(
+                "1.99.0",
+                &server.url("/extension.zip"),
+            ))
+            .unwrap();
+            release["assets"][0]["digest"] = serde_json::json!(digest);
+            server.mock(|when, then| {
+                when.method(GET).path("/releases/latest");
+                then.status(200).body(release.to_string());
+            });
+            let archive = server.mock(|when, then| {
+                when.method(GET).path("/extension.zip");
+                then.status(500);
+            });
+            let tag = server.mock(|when, then| {
+                when.method(GET).path("/git/refs/tags/1.99.0");
+                then.status(500);
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let install = dir.path().join("Browser");
+            let cache_path = dir.path().join("cache.toml");
+            let err = update_ubo_from_gorhill(
+                &install,
+                &server.base_url(),
+                true,
+                &cache_path,
+                TEST_GPG_PUBKEY.as_bytes(),
+            )
+            .await
+            .expect_err("a valid SHA-256 digest is required");
+            assert!(
+                matches!(err, BrowserError::Verification(_)),
+                "digest {digest:?}: {err:?}"
+            );
+            archive.assert_calls(0);
+            tag.assert_calls(0);
+            assert!(!install.exists());
+            assert!(!cache_path.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn gorhill_ubo_update_stages_on_valid_gpg_signature_and_digest() {
         let tag = "1.99.0";
         let zip = make_ubo_zip();
         // Use the pre-computed test key + signature (gorhill_key_armored bypasses
@@ -1427,6 +1569,34 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
             !install.join("nomad-extensions/uBlock0").is_dir(),
             "nothing must be staged when signature is unverified"
         );
+    }
+
+    #[tokio::test]
+    async fn gorhill_ubo_update_rejects_invalid_gpg_signature_despite_matching_digest() {
+        let server = MockServer::start();
+        let zip = make_ubo_zip();
+        let commit_json = gorhill_commit_json(
+            true,
+            "valid",
+            Some("tampered signed payload"),
+            Some(TEST_GPG_SIG),
+        );
+        mock_gorhill_commit_flow(&server, "1.99.0", "abc123", &commit_json, &zip);
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        let cache_path = dir.path().join("cache.toml");
+        let err = update_ubo_from_gorhill(
+            &install,
+            &server.base_url(),
+            true,
+            &cache_path,
+            TEST_GPG_PUBKEY.as_bytes(),
+        )
+        .await
+        .expect_err("matching digest must not bypass GPG verification");
+        assert!(matches!(err, BrowserError::Verification(_)), "{err:?}");
+        assert!(!install.exists());
+        assert!(!cache_path.exists());
     }
 
     #[tokio::test]

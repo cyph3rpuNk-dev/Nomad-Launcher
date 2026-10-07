@@ -1,9 +1,9 @@
 //! Chromium uBO extension staging from gorhill's release archives.
 //!
-//! Downloads gorhill's `uBlock0_X.X.X.chromium.zip` (GPG-authenticated via
-//! the release tag's signature), extracts it under a Nomad-managed subdir of
-//! the install directory, and exposes the resulting path so the launcher
-//! can append it to `--load-extension=` at launch.
+//! Extracts gorhill's `uBlock0_X.X.X.chromium.zip` under a Nomad-managed
+//! subdirectory and exposes its path for `--load-extension=`. The caller verifies
+//! the ZIP's GitHub SHA-256 digest, the release tag's GPG signature, and the asset
+//! upload timeline before staging. The tag signature does not cover ZIP bytes.
 //!
 //! gorhill's `manifest.json` carries the `key` field that deterministically
 //! derives the canonical CWS extension ID `cjpalhdlnbpafiamejdnhcphjbkeiagm`,
@@ -453,8 +453,8 @@ mod tests {
 
     #[test]
     fn extract_zip_into_rejects_an_over_budget_extension_zip() {
-        // The gorhill zip is the one runtime-fetched artifact without a hash
-        // pin, so the decompressed budget is its only bomb protection.
+        // A matching archive digest does not bound decompressed output.
+        // Enforce the extraction budget independently of download verification.
         let dir = tempfile::tempdir().unwrap();
         let zip = make_zip(&[("payload.bin", &[0u8; 1024][..])]);
         let err = extract_zip_into_with_budget(&zip, dir.path(), 64)
