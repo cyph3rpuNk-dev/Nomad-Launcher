@@ -21,9 +21,9 @@
 //!
 //! ## Profile layout
 //!
-//! Like Tor Browser, Mullvad stores its profile inside the installation tree
-//! (no `%APPDATA%` writes), so the entire `Browser/` + `Data/` tree is
-//! portable to a USB drive without modification.
+//! Nomad selects `Data/Profile` beside the installation directory via
+//! `--profile`. The profile stays outside the replaceable browser bundle,
+//! so an update can replace `Browser/` while preserving profile data.
 
 use std::path::Path;
 use std::process::Command;

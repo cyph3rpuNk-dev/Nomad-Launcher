@@ -1,6 +1,7 @@
 # Audit status
 
-Reviewed 2026-10-07 against `f37c9a9` on `rebuild/foundation`.
+Baseline reviewed 2026-10-07 against `f37c9a9`; documentation follow-up against
+`1b13fb8` on `rebuild/foundation`.
 This reconciles the original handoff findings with the current source and local
 commit history. It is a scoped static follow-up, not a new exhaustive security
 audit. The handoff's compiler versions, test counts, line numbers and pending
@@ -26,9 +27,10 @@ and GitHub CI for this work. The signing-key check does not replace them.
 Test counts measure examples exercised, not code coverage; no coverage percentage
 has been measured.
 
-All fixes below are local commits. This work has not been pushed, merged,
-published or copied into the user's portable installations. At review time,
-`origin/main..HEAD` contains 24 commits using the local tracking ref. No remote
+Code fixes below are local commits; the documentation follow-up is uncommitted.
+This work has not been pushed, merged,
+published or copied into the user's portable installations. At the baseline review,
+`origin/main..HEAD` contained 24 commits using the local tracking ref. No remote
 fetch was performed, so this is not GitHub's independently verified current state.
 
 ## Original findings
@@ -52,7 +54,7 @@ F-numbers refer to the original handoff. Paths below identify current evidence.
 | F13: obsolete embedded 7-Zip | Fixed as of review: 26.04, verified package/file hashes, x64 integrity regression and current license notices. Future freshness remains maintenance work. | [`extract.rs`](../core/src/extract.rs), [`manifest.json`](../core/payloads/7zip/manifest.json), `f37c9a9`; [provenance](VENDORED-DEPENDENCIES.md). |
 | F14: browser downgrades / unknown extension version | Browser downgrades and unorderable versions are rejected (`d221e9d`). Gecko uses AMO's explicit version without the `unknown` fallback (`4280eb0`). Extension rollback policy is separate from browser downgrade protection. | [`version_order.rs`](../core/src/version_order.rs), [`updater.rs`](../core/src/updater.rs), [`browsers/mod.rs`](../core/src/browsers/mod.rs). |
 | F15: build, signing and CI safeguards | Fixed locally: locked Cargo operations, required distribution inputs, protected signing flow, explicit job permissions and release-asset safeguards. Actual publishing remains unrun. | [`dist.ps1`](../dist.ps1), [`scripts/check.ps1`](../scripts/check.ps1), [build safety](BUILD-SAFETY.md); `7cd3f4b`, `8950a4e`. |
-| F16: documentation drift | Partially fixed. Cache TTL, cleanup and updated verification/registry behavior are documented; remaining contradictions are listed below. | [`SPEC.md`](../SPEC.md), [`README.md`](../README.md). |
+| F16: documentation drift | Documentation reconciled locally for the listed contradictions, including configuration/profile paths, resource overlays, unsafe-code scope, UI references and extension recovery. This is a scoped correction, not an exhaustive documentation audit. | [`SPEC.md`](../SPEC.md), [`README.md`](../README.md). |
 
 Other completed work includes disabling Helium's built-in updater independently
 of hardening (`bfd4880`), preserving settings/extensions on failed replacement
@@ -80,7 +82,7 @@ The canonical gate passed for this follow-up: 472 unit tests and 14 integration
 checks (486 total), formatting, Clippy, safeguard fixtures, and dependency audit
 with the same documented RSA exception. Rust 1.92 all-target checking passed.
 The ignored live/HKCU checks and GitHub CI remain unrun.
-This follow-up is local and awaiting commit approval.
+Committed locally as `af8772a`.
 
 ## Launch-language follow-up (2026-10-07)
 
@@ -98,14 +100,32 @@ Browser locale availability, UI behavior, and full-restart behavior still need
 smoke testing. The combined local gate passed: 475 unit tests plus 14 integration
 tests (489 total), formatting, Clippy, safeguard fixtures, and dependency audit
 with the documented RSA exception. Rust 1.92 all-target checking passed. Ignored
-live/HKCU tests and GitHub CI remain unrun. Both follow-ups await commit approval.
+live/HKCU tests and GitHub CI remain unrun. Language handling is committed locally
+as `1b13fb8`; verification monitoring is committed as `af8772a`.
 
-## Remaining code and documentation work
+## Documentation follow-up (2026-10-07)
+
+Reconciled SPEC with configuration under `Nomad/`, profile `user.js` outside the
+browser bundle, LibreWolf's minimal hardening, and current PE/PAK overlays.
+Replaced missing design-document references with existing UI modules and
+corrected the claimed scope of unsafe Windows API code. README now names the
+actual extension staging paths and distinguishes Nomad-managed provisioning
+from Helium/Mullvad's bundled extensions. Floorp and Mullvad comments now match
+nonexecuting extraction and the separate `Data/Profile` location.
+
+Only documentation and Rust comments changed. This follow-up awaits commit
+approval; the earlier code fixes remain committed. The canonical gate passed
+again: 489 tests, formatting, Clippy, safeguard fixtures, and dependency audit
+with the documented RSA exception. All 56 local Markdown file targets in the
+three edited documents exist, and both Rust diffs were checked as comments only.
+Rust 1.92 validation is carried forward from the language commit; it was not
+rerun for comment-only changes. Live/HKCU tests and GitHub CI remain unrun.
+
+## Remaining maintenance work
 
 | Priority | Item | Severity / certainty | Location and next action |
 |---|---|---|---|
-| 1 | Misleading documentation/comments | **Low, confirmed.** SPEC places configuration beside the executable, says resource patching is deferred, confines `unsafe` to taskbar code, and references missing `DESIGN.md`. README's Chromium reprovision path is obsolete. Floorp's comment says its installer executes; Mullvad's module header puts the profile inside the installation tree. | [`SPEC.md`](../SPEC.md) sections 4, 6 and code style; [`README.md`](../README.md) troubleshooting; [`browsers/floorp.rs`](../core/src/browsers/floorp.rs) near `EXECUTABLE`; [`browsers/mullvad.rs`](../core/src/browsers/mullvad.rs) header. Reconcile with configuration loading, extraction, branding, profile paths and extension staging. |
-| 2 | Large orchestration modules | **Low, confirmed maintainability concern; defect impact is a hypothesis.** `lib.rs` is 3,856 lines including tests, combining CLI, UI pipeline, launch, registry integration and cleanup watcher handling. `browsers/mod.rs` is 1,267 lines including tests, mixing the family contract with Gecko provisioning. | Extract cohesive internal modules after behavior fixes, preserving the public contract and failure-path tests. Line counts alone do not establish poor coverage or a bug. |
+| 1 | Large orchestration modules | **Low, confirmed maintainability concern; defect impact is a hypothesis.** `lib.rs` is 3,856 lines including tests, combining CLI, UI pipeline, launch, registry integration and cleanup watcher handling. `browsers/mod.rs` is 1,267 lines including tests, mixing the family contract with Gecko provisioning. | Extract cohesive internal modules after behavior fixes, preserving the public contract and failure-path tests. Line counts alone do not establish poor coverage or a bug. |
 
 Do not reopen a closed finding merely because the old handoff still lists it.
 Likewise, a green local gate does not close unrun end-to-end validation.
@@ -122,6 +142,6 @@ Likewise, a green local gate does not close unrun end-to-end validation.
 | Historical local artifacts | The handoff reports a nested Mullvad browser tree, stale associations and a stray LibreWolf host profile. These were not re-inspected or removed; they are historical reports, not current verified state. Cleanup needs a separate inventory and user approval. |
 | Review, CI and release | Obtain approval for push/PR creation, run GitHub CI, review/merge within authorized scope, build and verify release artifacts, and obtain approval for publishing/deployment. None follows automatically from a local commit. |
 
-Recommended next change: reconcile documentation before isolated validation
-and delivery. Keep a larger module
-split separate from behavior fixes.
+Recommended next step: run the nine current-upstream metadata checks, then
+isolated extraction and browser validation before delivery. Keep the optional
+module split separate from behavior fixes and validation.
