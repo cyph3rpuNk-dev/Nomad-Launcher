@@ -216,9 +216,10 @@ where
         Ok(()) => {
             show_msgbox(
                 &format!(
-                    "{} (Nomad Launcher) is now registered as a browser candidate.\n\n\
+                    "{} (Nomad Launcher: {}) is now registered as a browser candidate.\n\n\
                      Open Settings \u{2192} Default apps to make it your default browser.",
-                    browser.display_name()
+                    browser.display_name(),
+                    base.display()
                 ),
                 false,
             );

@@ -333,7 +333,7 @@ existing assets if publication or another upload races the final check.
 2. Run the launcher once with `--register-default`, for example
    `Nomad-Firefox.exe --register-default`.
 3. Open Windows **Settings → Apps → Default apps**, find the entry named
-   "*Browser* (Nomad Launcher)", and set it as the default. Pick that entry,
+   "*Browser* (Nomad Launcher: *folder*)", and set it as the default. Pick that entry,
    not the browser's own entry.
 
 Clicked links then always go through the launcher and open as a new tab in the
@@ -349,6 +349,16 @@ The cleanup record is saved before the first registry write. If registration
 fails or is interrupted, retry `--register-default` to finish it, or run
 `--unregister-default` to remove its partial entries. Keep the record until
 recovery succeeds; its presence alone does not mean registration completed.
+Each launcher location gets separate registration names, and the Windows picker
+label includes its folder. Registering or unregistering one portable copy leaves
+other locations' entries intact.
+
+When upgrading an older shared registration, `--register-default` preserves its
+record under `Nomad/registration-history/` and creates a separate entry. Select
+that new folder-labelled entry in Windows Default apps. The old shared entry is
+left in place because Nomad cannot prove which copy owns it. Unregistering an old
+shared record, or a record copied from another folder, is refused; register the
+current copy first. Historical records are retained for manual review.
 
 When Windows invokes a registered Nomad browser for a URL or file, the launcher
 requires an existing browser installation and skips all browser and extension
