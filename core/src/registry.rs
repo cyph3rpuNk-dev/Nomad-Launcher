@@ -51,13 +51,16 @@ pub type Result<T> = std::result::Result<T, RegistryError>;
 struct RegState {
     version: u32,
     browser_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    launcher: Option<std::path::PathBuf>,
     /// `HKCU`-relative paths whose entire subtrees are deleted on unregister.
     keys: Vec<String>,
     /// `(key_path, value_name)` pairs whose values are deleted on unregister.
     values: Vec<(String, String)>,
 }
 
-// ── ProgId / app-key naming ───────────────────────────────────────────────────
+// Legacy version-1 names, used only to validate historical shared records.
+// New location-scoped names are constructed in registration::scoped_state.
 
 fn prog_id(browser_id: &str) -> String {
     format!("NomadPortable.{browser_id}.HTML")
@@ -171,7 +174,7 @@ mod win {
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
     use winreg::RegKey;
 
-    use super::{is_nomad_owned_key, is_nomad_owned_value, registration, RegistryError, Result};
+    use super::{registration, Result};
 
     pub(super) fn register(
         browser_id: &str,
@@ -189,71 +192,19 @@ mod win {
         Ok(())
     }
 
-    pub(super) fn unregister(sidecar: &Path) -> Result<()> {
-        let state = registration::read_state(sidecar)?.ok_or(RegistryError::NotRegistered)?;
-
+    pub(super) fn unregister(sidecar: &Path, launcher: &Path) -> Result<()> {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-
-        let mut failed: usize = 0;
-
-        for key_path in &state.keys {
-            // Defense-in-depth: refuse to delete anything the sidecar claims
-            // that Nomad would not itself have created (CWE-610).
-            if !is_nomad_owned_key(key_path) {
-                tracing::warn!(
-                    key = %key_path,
-                    "refusing to delete registry key outside the Nomad namespace (tampered sidecar?)"
-                );
-                continue;
-            }
-            // A NotFound is fine (key already gone); anything else is a real
-            // leftover that must keep the sidecar alive for a retry.
-            if let Err(e) = hkcu.delete_subkey_all(key_path) {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(key = %key_path, error = %e, "could not delete registry key");
-                    failed += 1;
-                }
-            }
-        }
-
-        for (key_path, value_name) in &state.values {
-            if !is_nomad_owned_value(key_path, value_name) {
-                tracing::warn!(
-                    key = %key_path,
-                    value = %value_name,
-                    "refusing to delete registry value outside the Nomad namespace (tampered sidecar?)"
-                );
-                continue;
-            }
-            match hkcu.open_subkey_with_flags(key_path, KEY_WRITE) {
-                Ok(key) => {
-                    if let Err(e) = key.delete_value(value_name) {
-                        if e.kind() != std::io::ErrorKind::NotFound {
-                            tracing::warn!(
-                                key = %key_path,
-                                value = %value_name,
-                                error = %e,
-                                "could not delete registry value"
-                            );
-                            failed += 1;
-                        }
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // parent gone
-                Err(e) => {
-                    tracing::warn!(
-                        key = %key_path,
-                        error = %e,
-                        "could not open registry key for value deletion"
-                    );
-                    failed += 1;
-                }
-            }
-        }
-
+        let result = registration::remove_owned(
+            sidecar,
+            launcher,
+            |key| hkcu.delete_subkey_all(key),
+            |key, name| {
+                hkcu.open_subkey_with_flags(key, KEY_WRITE)?
+                    .delete_value(name)
+            },
+        );
         notify_shell();
-
-        registration::finish_unregistration(sidecar, failed)
+        result
     }
 
     pub(super) fn repair_self_registration(install_dir: &Path, launcher_exe: &Path) -> usize {
@@ -470,7 +421,8 @@ mod win {
 /// recorded in `sidecar` before writing, for recovery by retry or [`unregister`].
 ///
 /// Calling this again on an already-registered launcher is idempotent: it
-/// overwrites the existing entries with the current exe path.
+/// refreshes that location's entries. Legacy or copied records are archived
+/// before creating a separate registration for the current location.
 ///
 /// # Errors
 /// Returns [`RegistryError::Io`] for persistence failures before registry writes,
@@ -493,14 +445,16 @@ pub fn register(
 /// written paths from `sidecar`.
 ///
 /// Deletes only the planned keys and values in a validated registration record.
-/// Missing entries from a partial registration are harmless.
+/// Missing entries from a partial registration are harmless. Only a version-2
+/// record bound to the current executable can be removed; legacy shared records
+/// and records copied from another location are refused.
 ///
 /// # Errors
 /// Returns [`RegistryError::NotRegistered`] when the sidecar is absent,
 /// [`RegistryError::Io`] on read/delete failures.
 #[cfg(windows)]
 pub fn unregister(sidecar: &Path) -> Result<()> {
-    win::unregister(sidecar)
+    win::unregister(sidecar, &std::env::current_exe()?)
 }
 
 /// Restore recorded automatic repairs and disable future repairs until registration.
@@ -511,11 +465,13 @@ pub fn unregister(sidecar: &Path) -> Result<()> {
 #[cfg(windows)]
 pub fn unregister_launcher(sidecar: &Path, launcher: &Path) -> Result<()> {
     let mut journal = repair_journal::Session::open(launcher, None)?;
+    // Validate picker ownership before any automatic repair undo.
+    registration::owned_state(sidecar, launcher)?;
     journal.undo(&mut win::Store(winreg::RegKey::predef(
         winreg::enums::HKEY_CURRENT_USER,
     )))?;
     win::notify_shell();
-    match win::unregister(sidecar) {
+    match win::unregister(sidecar, launcher) {
         Err(RegistryError::NotRegistered) => Ok(()),
         result => result,
     }
@@ -588,6 +544,7 @@ mod tests {
         let state = RegState {
             version: 1,
             browser_id: "test-browser".to_owned(),
+            launcher: None,
             keys: vec![
                 "Software\\Classes\\NomadPortable.test-browser.HTML".to_owned(),
                 "Software\\NomadPortable\\test-browser".to_owned(),
@@ -903,13 +860,13 @@ mod tests {
         let json = std::fs::read_to_string(&sidecar).unwrap();
         let state: RegState = serde_json::from_str(&json).expect("sidecar must be valid JSON");
         assert_eq!(state.browser_id, "nomad-test-reg");
-        assert_eq!(state.version, 1);
+        assert_eq!(state.version, 2);
         assert!(
             !state.keys.is_empty(),
             "register must record at least one key"
         );
 
-        unregister(&sidecar).expect("unregister must succeed");
+        unregister_launcher(&sidecar, &exe).expect("unregister must succeed");
         assert!(!sidecar.exists(), "unregister must remove the sidecar");
     }
 }

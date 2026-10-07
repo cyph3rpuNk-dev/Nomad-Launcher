@@ -532,10 +532,21 @@ Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are 
   `Nomad/nomad.reg-state.json` before the first HKCU write. Reject invalid,
   oversized, unknown-schema or different-browser prior state without replacing
   it. Retain the record after a failed write for explicit retry or removal.
-- On unregister: validates the version-1 record against the browser's exact
+- On unregister: validates the version-2 record against the current launcher location and exact
   planned keys/values and removes those entries. Missing entries are harmless;
   registry failures retain the record. Failure to remove the record is also an
   error. The record describes a prepared attempt, not a completion marker.
+- Registration names derive from SHA-256 of the browser ID and canonical parent
+  plus launcher filename (ASCII case folded). ProgIDs use 24 digest hex characters
+  after `NomadPortable.`; capability roots and RegisteredApplications names use
+  the full digest. The version-2 record contains its bound launcher path and the
+  Windows picker label includes the folder. A copied record cannot authorize
+  removal at its original location.
+- A same-browser legacy or copied record is archived under
+  `Nomad/registration-history/` before replacing the active plan. No historical
+  registry entries are changed by migration. Version-1 records are accepted for
+  preservation, but refused for deletion. The user selects the new entry in
+  Windows Settings; Nomad never rewrites UserChoice.
 - The registered handler launches `"nomad-<browser-id>.exe" -- "%1"` so the
   launcher mediates URL/file opens. Require exactly one non-empty target after
   the separator; reject missing targets, additional arguments, and targets
