@@ -588,8 +588,8 @@ Two properties of the sweep are load-bearing:
 ### CI (GitHub Actions, `windows-latest`)
 ```yaml
 - cargo fmt --check
-- cargo clippy --workspace --all-targets -- -D warnings
-- cargo test --workspace
+- cargo clippy --workspace --all-targets --locked -- -D warnings
+- cargo test --workspace --locked
 ```
 
 ---
