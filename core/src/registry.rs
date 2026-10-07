@@ -16,6 +16,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(windows, test))]
+mod repair_journal;
+
 // ── Error type ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]
@@ -114,7 +117,7 @@ fn is_nomad_owned_value(key_path: &str, value_name: &str) -> bool {
 fn command_exe(command: &str) -> Option<&str> {
     let s = command.trim_start();
     if let Some(rest) = s.strip_prefix('"') {
-        rest.split('"').next()
+        rest.split_once('"').map(|(exe, _)| exe)
     } else {
         s.split_whitespace().next()
     }
@@ -125,6 +128,22 @@ fn command_exe(command: &str) -> Option<&str> {
 /// Pure string comparison — the paths come from registry values and may not
 /// exist on disk, so filesystem canonicalization is not an option.
 fn path_is_under(root: &Path, path: &Path) -> bool {
+    if !root.is_absolute()
+        || !path.is_absolute()
+        || root.components().chain(path.components()).any(|c| match c {
+            std::path::Component::ParentDir => true,
+            std::path::Component::Normal(name) => {
+                let name = name.to_string_lossy();
+                name.ends_with(['.', ' '])
+                    || name
+                        .chars()
+                        .any(|c| c.is_control() || "<>:\"|?*".contains(c))
+            }
+            _ => false,
+        })
+    {
+        return false;
+    }
     let norm = |p: &Path| -> Vec<String> {
         p.components()
             .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
@@ -144,12 +163,13 @@ fn path_is_under(root: &Path, path: &Path) -> bool {
 mod win {
     use std::path::Path;
 
+    use super::repair_journal::{Command, CommandStore, Session};
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
     use winreg::RegKey;
 
     use super::{
-        app_key_path, classes_path, command_exe, is_nomad_owned_key, is_nomad_owned_value,
-        path_is_under, prog_id, RegState, RegistryError, Result, REGISTERED_APPS_KEY,
+        app_key_path, classes_path, is_nomad_owned_key, is_nomad_owned_value, prog_id, RegState,
+        RegistryError, Result, REGISTERED_APPS_KEY,
     };
 
     pub(super) fn register(
@@ -310,9 +330,6 @@ mod win {
     }
 
     pub(super) fn repair_self_registration(install_dir: &Path, launcher_exe: &Path) -> usize {
-        let Some(launcher_str) = launcher_exe.to_str() else {
-            return 0; // non-UTF-8 launcher path — nothing sane to write
-        };
         // An empty install_dir would make path_is_under match every path on the
         // machine, turning the sweep below into a rewrite of every handler in
         // HKCU. Callers derive it from a browser exe path, so refuse the
@@ -320,16 +337,21 @@ mod win {
         if install_dir.as_os_str().is_empty() {
             return 0;
         }
+        let mut journal = match Session::open(launcher_exe, Some(install_dir)) {
+            Ok(journal) => journal,
+            Err(error) => {
+                tracing::warn!(%error, "registry repair journal unavailable; skipping repair");
+                return 0;
+            }
+        };
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let mut repaired = 0;
 
         // 1. Every ProgId under HKCU\Software\Classes whose open command runs a
         //    binary inside our install tree.
-        let url_command = format!("\"{launcher_str}\" -- \"%1\"");
-        repaired += repair_classes_commands(&hkcu, install_dir, &url_command);
+        repaired += repair_classes_commands(&hkcu, &mut journal);
 
         // 2. Start-Menu-Internet clients (launch-without-URL surface).
-        let smi_command = format!("\"{launcher_str}\"");
         if let Ok(clients) = hkcu.open_subkey("Software\\Clients\\StartMenuInternet") {
             let names: Vec<String> = clients
                 .enum_keys()
@@ -338,7 +360,7 @@ mod win {
             for name in names {
                 let key_path =
                     format!("Software\\Clients\\StartMenuInternet\\{name}\\shell\\open\\command");
-                if repair_command_key(&hkcu, &key_path, install_dir, &smi_command) {
+                if repair_command_key(&hkcu, &key_path, &mut journal) {
                     repaired += 1;
                 }
             }
@@ -358,7 +380,7 @@ mod win {
     /// selected one. Scanning only `UserChoice` left those commands pointing
     /// straight at the browser exe, which is the bug this sweep closes.
     ///
-    /// Safety is carried entirely by `path_is_under` in [`repair_command_key`]:
+    /// The journal checks command shape, filesystem aliases and containment:
     /// a command is rewritten only when its executable lives strictly inside
     /// this launcher's own install tree. Other browsers, other Nomad
     /// launchers, and system installs are never touched (SPEC §10).
@@ -366,7 +388,7 @@ mod win {
     /// `Software\Classes` holds a few thousand keys on a typical machine and
     /// most have no `shell\open\command`, so this is a few thousand failed
     /// opens — cheap relative to the launch it runs alongside.
-    fn repair_classes_commands(hkcu: &RegKey, install_dir: &Path, url_command: &str) -> usize {
+    fn repair_classes_commands(hkcu: &RegKey, journal: &mut Session) -> usize {
         let Ok(classes) = hkcu.open_subkey("Software\\Classes") else {
             return 0;
         };
@@ -378,18 +400,18 @@ mod win {
         for name in names {
             // Extension keys (".html") name a ProgId rather than carrying a
             // command; Nomad's own ProgId already routes through the launcher.
-            if name.starts_with('.') || name.starts_with("NomadPortable.") {
+            if name.starts_with('.') || name.to_ascii_lowercase().starts_with("nomadportable.") {
                 continue;
             }
             // `Applications\<exe>` is a container of per-exe handlers, one
             // level deeper than an ordinary ProgId. Chromium registers itself
             // there too, so descend instead of skipping.
             if name.eq_ignore_ascii_case("Applications") {
-                repaired += repair_applications_commands(hkcu, install_dir, url_command);
+                repaired += repair_applications_commands(hkcu, journal);
                 continue;
             }
             let key_path = format!("Software\\Classes\\{name}\\shell\\open\\command");
-            if repair_command_key(hkcu, &key_path, install_dir, url_command) {
+            if repair_command_key(hkcu, &key_path, journal) {
                 repaired += 1;
             }
         }
@@ -398,7 +420,7 @@ mod win {
 
     /// Per-exe "Open with" handlers under
     /// `HKCU\Software\Classes\Applications\<exe>\shell\open\command`.
-    fn repair_applications_commands(hkcu: &RegKey, install_dir: &Path, url_command: &str) -> usize {
+    fn repair_applications_commands(hkcu: &RegKey, journal: &mut Session) -> usize {
         let Ok(apps) = hkcu.open_subkey("Software\\Classes\\Applications") else {
             return 0;
         };
@@ -409,54 +431,86 @@ mod win {
         let mut repaired = 0;
         for name in names {
             let key_path = format!("Software\\Classes\\Applications\\{name}\\shell\\open\\command");
-            if repair_command_key(hkcu, &key_path, install_dir, url_command) {
+            if repair_command_key(hkcu, &key_path, journal) {
                 repaired += 1;
             }
         }
         repaired
     }
 
-    /// Rewrites the default value of `key_path` to `replacement` when its
-    /// current command launches an executable strictly inside `install_dir`.
-    /// Returns whether a rewrite happened.
-    pub(super) fn repair_command_key(
-        hkcu: &RegKey,
-        key_path: &str,
-        install_dir: &Path,
-        replacement: &str,
-    ) -> bool {
-        let Ok(key) = hkcu.open_subkey_with_flags(key_path, KEY_READ | KEY_WRITE) else {
-            return false;
-        };
-        let Ok(current) = key.get_value::<String, _>("") else {
-            return false;
-        };
-        let Some(exe) = command_exe(&current) else {
-            return false;
-        };
-        if !path_is_under(install_dir, Path::new(exe)) {
-            return false;
-        }
-        if current == replacement {
-            return false; // already routed through this launcher
-        }
-        match key.set_value("", &replacement.to_owned()) {
-            Ok(()) => {
-                tracing::info!(
-                    key = %key_path,
-                    old = %current,
-                    "rerouted browser self-registration through the Nomad launcher"
-                );
-                true
+    pub(super) struct Store(pub RegKey);
+
+    impl CommandStore for Store {
+        fn read(&self, path: &str) -> std::io::Result<Option<Command>> {
+            let result = self
+                .0
+                .open_subkey_with_flags(path, KEY_READ)
+                .and_then(|key| key.get_raw_value(""));
+            match result {
+                Ok(value) => Ok(Some(Command {
+                    kind: value.vtype as u32,
+                    bytes: value.bytes,
+                })),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e),
             }
-            Err(e) => {
-                tracing::warn!(key = %key_path, error = %e, "could not repair self-registration");
+        }
+
+        fn replace(
+            &mut self,
+            path: &str,
+            expected: &Command,
+            value: &Command,
+        ) -> std::io::Result<bool> {
+            let key = match self.0.open_subkey_with_flags(path, KEY_READ | KEY_WRITE) {
+                Ok(key) => key,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => return Err(e),
+            };
+            let current = match key.get_raw_value("") {
+                Ok(current) => current,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => return Err(e),
+            };
+            if current.vtype as u32 != expected.kind || current.bytes != expected.bytes {
+                return Ok(false);
+            }
+            let vtype = match value.kind {
+                1 => winreg::enums::REG_SZ,
+                2 => winreg::enums::REG_EXPAND_SZ,
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "unsupported registry command type",
+                    ))
+                }
+            };
+            key.set_raw_value(
+                "",
+                &winreg::RegValue {
+                    bytes: value.bytes.clone(),
+                    vtype,
+                },
+            )?;
+            Ok(true)
+        }
+    }
+
+    pub(super) fn repair_command_key(hkcu: &RegKey, key_path: &str, journal: &mut Session) -> bool {
+        let mut store = Store(match hkcu.open_subkey("") {
+            Ok(key) => key,
+            Err(_) => return false,
+        });
+        match journal.repair(&mut store, key_path) {
+            Ok(changed) => changed,
+            Err(error) => {
+                tracing::warn!(%error, "could not journal or repair browser self-registration");
                 false
             }
         }
     }
 
-    fn notify_shell() {
+    pub(super) fn notify_shell() {
         // Declare SHChangeNotify without pulling in the large Win32_UI_Shell feature set.
         #[link(name = "shell32")]
         extern "system" {
@@ -500,7 +554,10 @@ pub fn register(
     exe_path: &Path,
     sidecar: &Path,
 ) -> Result<()> {
-    win::register(browser_id, display_name, exe_path, sidecar)
+    let mut journal = repair_journal::Session::open(exe_path, None)?;
+    win::register(browser_id, display_name, exe_path, sidecar)?;
+    journal.enable()?;
+    Ok(())
 }
 
 /// Removes the registration created by [`register`], reading the list of
@@ -517,11 +574,34 @@ pub fn unregister(sidecar: &Path) -> Result<()> {
     win::unregister(sidecar)
 }
 
+/// Restore recorded automatic repairs and disable future repairs until registration.
+/// Later edits and missing commands are preserved. Failed restores retain the journal.
+///
+/// # Errors
+/// Returns an error if the journal cannot be validated/saved or a registry operation fails.
+#[cfg(windows)]
+pub fn unregister_launcher(sidecar: &Path, launcher: &Path) -> Result<()> {
+    let mut journal = repair_journal::Session::open(launcher, None)?;
+    journal.undo(&mut win::Store(winreg::RegKey::predef(
+        winreg::enums::HKEY_CURRENT_USER,
+    )))?;
+    win::notify_shell();
+    match win::unregister(sidecar) {
+        Err(RegistryError::NotRegistered) => Ok(()),
+        result => result,
+    }
+}
+
+#[cfg(not(windows))]
+pub fn unregister_launcher(sidecar: &Path, _launcher: &Path) -> Result<()> {
+    unregister(sidecar)
+}
+
 /// Reroutes browser self-registrations through the launcher.
 ///
 /// Sweeps every `ProgId` under `HKCU\Software\Classes` (including the per-exe
 /// `Applications\<exe>` handlers) plus the `StartMenuInternet` clients, and
-/// rewrites any `shell\open\command` whose executable lives strictly inside
+/// repairs recognized `shell\open\command` values whose executable lives strictly inside
 /// `install_dir` so it invokes `launcher_exe` instead (`"<launcher>" -- "%1"`
 /// for URL handlers). Commands pointing anywhere else — other browsers, other
 /// Nomad launchers, system installs — are never touched.
@@ -702,45 +782,37 @@ mod tests {
         use winreg::RegKey;
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let base = "Software\\Classes\\NomadPortable.test-repair.HTML";
+        let base = "Software\\Classes\\NomadTestRepair.HTML";
         let key_path = format!("{base}\\shell\\open\\command");
         let (key, _) = hkcu.create_subkey(&key_path).unwrap();
 
-        let install_dir = Path::new(r"C:\Portables\TestBrowser\Browser");
-        let replacement = r#""C:\Portables\TestBrowser\Nomad-Test.exe" -- "%1""#;
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        let install_dir = install.as_path();
+        let launcher = dir.path().join("Nomad-Test.exe");
+        let replacement = format!("\"{}\" -- \"%1\"", launcher.display());
+        let mut journal = repair_journal::Session::open(&launcher, Some(install_dir)).unwrap();
 
         // Command pointing inside the install dir: must be rewritten.
         key.set_value(
             "",
-            &r#""C:\Portables\TestBrowser\Browser\chrome.exe" --single-argument %1"#.to_owned(),
+            &format!(
+                "\"{}\" --single-argument %1",
+                install_dir.join("chrome.exe").display()
+            ),
         )
         .unwrap();
-        assert!(win::repair_command_key(
-            &hkcu,
-            &key_path,
-            install_dir,
-            replacement
-        ));
+        assert!(win::repair_command_key(&hkcu, &key_path, &mut journal));
         let rewritten: String = hkcu.open_subkey(&key_path).unwrap().get_value("").unwrap();
         assert_eq!(rewritten, replacement);
 
         // Second pass is a no-op (already routed through the launcher).
-        assert!(!win::repair_command_key(
-            &hkcu,
-            &key_path,
-            install_dir,
-            replacement
-        ));
+        assert!(!win::repair_command_key(&hkcu, &key_path, &mut journal));
 
         // Command pointing elsewhere: must be left alone.
         let foreign = r#""C:\Program Files\Other\browser.exe" %1"#.to_owned();
         key.set_value("", &foreign).unwrap();
-        assert!(!win::repair_command_key(
-            &hkcu,
-            &key_path,
-            install_dir,
-            replacement
-        ));
+        assert!(!win::repair_command_key(&hkcu, &key_path, &mut journal));
         let untouched: String = hkcu.open_subkey(&key_path).unwrap().get_value("").unwrap();
         assert_eq!(untouched, foreign);
 
@@ -762,8 +834,11 @@ mod tests {
         use winreg::RegKey;
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let install_dir = Path::new(r"C:\Portables\NomadTestSweep\Browser");
-        let launcher = Path::new(r"C:\Portables\NomadTestSweep\Nomad-Test.exe");
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        let install_dir = install.as_path();
+        let launcher_path = dir.path().join("Nomad-Test.exe");
+        let launcher = launcher_path.as_path();
 
         // A ProgId the user never selected, pointing into the install tree —
         // exactly what a browser's own "Make default" leaves behind.
@@ -774,8 +849,10 @@ mod tests {
             .0
             .set_value(
                 "",
-                &r#""C:\Portables\NomadTestSweep\Browser\chrome.exe" --single-argument %1"#
-                    .to_owned(),
+                &format!(
+                    "\"{}\" --single-argument %1",
+                    install_dir.join("chrome.exe").display()
+                ),
             )
             .unwrap();
 
@@ -787,7 +864,7 @@ mod tests {
             .0
             .set_value(
                 "",
-                &r#""C:\Portables\NomadTestSweep\Browser\chrome.exe" -- "%1""#.to_owned(),
+                &format!("\"{}\" -- \"%1\"", install_dir.join("chrome.exe").display()),
             )
             .unwrap();
 
@@ -831,9 +908,29 @@ mod tests {
             .unwrap();
     }
 
-    /// An empty root must match nothing. Otherwise a caller that derives
-    /// `install_dir` from a bare exe name — whose parent is `""` — would turn
-    /// the sweep into "rewrite every handler command in `HKCU`".
+    #[test]
+    fn path_is_under_rejects_parent_traversal_and_relative_paths() {
+        assert!(!path_is_under(
+            Path::new(r"C:\Browser"),
+            Path::new(r"C:\Browser\..\Other\browser.exe")
+        ));
+        assert!(!path_is_under(
+            Path::new("Browser"),
+            Path::new("Browser/browser.exe")
+        ));
+        for candidate in [
+            r"C:\Browser\.. \Other\browser.exe",
+            r"C:\Browser\sub.\browser.exe",
+            r"C:\Browser\chrome.exe:stream",
+        ] {
+            assert!(!path_is_under(
+                Path::new(r"C:\Browser"),
+                Path::new(candidate)
+            ));
+        }
+    }
+
+    /// An empty install root must never match every registry command.
     #[test]
     fn path_is_under_rejects_an_empty_root() {
         assert!(!path_is_under(
@@ -868,7 +965,7 @@ mod tests {
     fn register_writes_sidecar_and_unregister_removes_it() {
         let dir = tempfile::tempdir().unwrap();
         let sidecar = dir.path().join("nomad.reg-state.json");
-        let exe = std::env::current_exe().unwrap();
+        let exe = dir.path().join("Nomad-Test.exe");
 
         register("nomad-test-reg", "Test Registry Browser", &exe, &sidecar)
             .expect("register must succeed");
