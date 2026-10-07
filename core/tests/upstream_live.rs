@@ -16,8 +16,9 @@
 //!
 //! These tests call the real `fetch_latest_version` against the real endpoints,
 //! so they exercise the same parsers the launcher uses and cannot drift from
-//! them the way a reimplementation in CI script would. The assertion mirrors
-//! what `verify_package` requires: a usable GPG signature, or a checksum.
+//! them the way a reimplementation in CI script would. The assertion uses the
+//! production metadata preflight: a required signature URL cannot fall back to
+//! a checksum. This checks metadata availability, not package authenticity.
 //!
 //! Ignored by default because they hit the network and depend on upstream
 //! availability. The weekly upstream-drift workflow runs them with `--ignored`.
@@ -27,11 +28,11 @@
 
 use nomad_core::{
     Arch, Bitwarden, BrowserFamily, Firefox, Floorp, Helium, Librewolf, Mullvad, UngoogledChromium,
-    Waterfox,
+    VersionInfo, Waterfox,
 };
 
-/// Resolves the current upstream release and asserts it could actually be
-/// verified if it were downloaded.
+/// Resolves the current upstream release and checks its verification metadata.
+/// Package downloads and cryptographic verification are separate checks.
 ///
 /// A failure here means one of two things, both of which leave the launcher
 /// unable to install anything: the release metadata no longer parses, or it
@@ -56,24 +57,12 @@ async fn assert_verifiable<B: BrowserFamily>(browser: &B) {
         "{id}: upstream resolved no download URL"
     );
 
-    // Mirrors verify_package: a GPG check needs both an embedded key and a
-    // published signature; otherwise a hash is the only thing standing between
-    // the download and the disk.
+    assert_verification_metadata(browser, &info);
     let gpg = browser.public_key().is_some() && info.signature_url.is_some();
-    let hash = info.sha256.is_some() || info.sha512.is_some();
-
-    assert!(
-        gpg || hash,
-        "{id}: release {} resolved with no usable signature and no checksum, so \
-         verify_package will refuse to install it. Upstream has probably changed \
-         the name, location, or format of its checksum file, or stopped \
-         publishing one.",
-        info.browser_version
-    );
 
     browser.validate_update(&info).unwrap_or_else(|error| {
         panic!(
-            "{id}: release {} is authentic but incompatible with this launcher: {error}",
+            "{id}: release {} is incompatible with this launcher: {error}",
             info.browser_version
         )
     });
@@ -138,4 +127,60 @@ async fn helium_release_is_verifiable() {
 #[ignore = "hits the network; run via the weekly upstream-drift job"]
 async fn bitwarden_release_is_verifiable() {
     assert_verifiable(&Bitwarden::new(Arch::X64)).await;
+}
+
+fn assert_verification_metadata<B: BrowserFamily>(browser: &B, info: &VersionInfo) {
+    let id = browser.id();
+    nomad_core::updater::validate_verification_metadata(browser, info).unwrap_or_else(|error| {
+        panic!(
+            "{id}: release {} lacks required verification metadata: {error}",
+            info.browser_version
+        )
+    });
+}
+
+#[test]
+fn missing_required_signature_cannot_pass_live_preflight_with_a_hash() {
+    let browser = Mullvad::new(Arch::X64);
+    for sha512 in [false, true] {
+        let info = VersionInfo {
+            browser_version: "2.0".into(),
+            engine_version: "2.0".into(),
+            download_url: "https://example.invalid/package.exe".into(),
+            signature_url: None,
+            sha256: (!sha512).then(|| "0".repeat(64)),
+            sha512: sha512.then(|| "0".repeat(128)),
+        };
+        assert!(
+            std::panic::catch_unwind(|| assert_verification_metadata(&browser, &info)).is_err()
+        );
+    }
+}
+
+#[test]
+fn live_preflight_covers_signature_and_digest_availability() {
+    let signed = Mullvad::new(Arch::X64);
+    let unsigned = UngoogledChromium::new(Arch::X64);
+    for signature in [false, true] {
+        for digest in [0, 256, 512] {
+            let info = VersionInfo {
+                browser_version: "2.0".into(),
+                engine_version: "2.0".into(),
+                download_url: "https://example.invalid/package.exe".into(),
+                signature_url: signature.then(|| "https://example.invalid/package.sig".into()),
+                sha256: (digest == 256).then(|| "0".repeat(64)),
+                sha512: (digest == 512).then(|| "0".repeat(128)),
+            };
+            assert_eq!(
+                std::panic::catch_unwind(|| assert_verification_metadata(&signed, &info)).is_ok(),
+                signature,
+                "signed adapter: signature={signature}, digest={digest}"
+            );
+            assert_eq!(
+                std::panic::catch_unwind(|| assert_verification_metadata(&unsigned, &info)).is_ok(),
+                digest != 0,
+                "hash-only adapter: signature={signature}, digest={digest}"
+            );
+        }
+    }
 }

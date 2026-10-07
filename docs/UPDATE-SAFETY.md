@@ -250,6 +250,14 @@ version formats and real browser behavior have not been checked here.
 
 ## Required package signatures
 
+Production and live release monitoring share
+`updater::validate_verification_metadata`: adapters with an embedded package key
+require a signature URL; other adapters require SHA-256 or SHA-512 metadata.
+Missing material is rejected before staging or downloading, including cached
+releases. This preflight checks availability only. Package verification applies
+the same requirement to the downloaded signature file and still verifies bytes
+cryptographically before extraction.
+
 `BrowserFamily::public_key()` is a requirement for detached package-signature
 verification, not a preference. If it returns `Some` (currently Mullvad), both
 GUI and headless install paths reject a release with no signature URL before
