@@ -79,7 +79,7 @@ check_on_launch = true       # false = skip update check
 auto_download = true         # false = prompt before downloading
 
 [launch]
-language = "en-US"
+language = "en-US"           # Chromium/Helium UI language; omit or blank for browser default
 extra_args = []
 incognito = false
 
@@ -92,6 +92,17 @@ scrub_prefetch = false       # opt-in: needs elevation, prompts for UAC on every
 clear_data_on_exit = false   # Chromium only: wipe cookies/history/sessions on exit
 reduce_system_info = true    # Chromium only: ReducedSystemInfo fingerprint hardening
 ```
+
+`launch.language` requests the UI language for Ungoogled Chromium and Helium
+using `--lang=<value>`, even when hardening is disabled. Surrounding whitespace
+is trimmed; omitting the key or leaving it blank adds no language switch.
+`extra_args = ["--lang=de"]` overrides `language` because extra arguments come
+later ([Chromium switch handling](https://chromium.googlesource.com/chromium/src/+/main/base/command_line.cc)).
+Nomad does not apply this setting to Gecko browsers or Bitwarden; use their own
+language settings. Available translations and fallback behavior belong to the
+browser. Fully exit the browser before relaunching to apply a changed value.
+Existing configs containing `language = "en-US"` now request English on Chromium
+and Helium; remove that line to retain the browser's own language selection.
 
 Release caches and successful install markers record the selected package
 target. Metadata from another target is refreshed. Changing `arch` requires

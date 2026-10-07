@@ -427,8 +427,8 @@ fn effective_update_options(
 
 /// Builds the browser's launch arguments: the privacy-hardening flags
 /// (when `[hardening] enabled` and the browser hardens via launch flags),
-/// followed by the user's configured `extra_args`, followed by the incognito
-/// flag (if enabled for Chromium).
+/// followed by the optional Chromium language, the user's configured
+/// `extra_args`, and the incognito flag (if enabled for Chromium).
 ///
 /// Hardening flags come first so a user-supplied `extra_args` entry can
 /// override a conflicting hardening flag.
@@ -488,6 +488,19 @@ fn build_launch_args<B: BrowserFamily>(browser: &B, config: &Config) -> Vec<Stri
         // Supersedes the default `default_public_interface_only` flag already in
         // the browser's static flag list; Chromium honours the last occurrence.
         args.push("--webrtc-ip-handling-policy=disable_non_proxied_udp".to_owned());
+    }
+    // Language is a launch preference, independent of privacy hardening.
+    // Keep it before extra_args so an explicit --lang=... there wins.
+    if browser.engine() == Engine::Chromium {
+        if let Some(language) = config
+            .launch
+            .language
+            .as_deref()
+            .map(str::trim)
+            .filter(|language| !language.is_empty())
+        {
+            args.push(format!("--lang={language}"));
+        }
     }
     args.extend(config.launch.extra_args.iter().cloned());
     if config.launch.incognito && browser.engine() == Engine::Chromium {
@@ -3189,6 +3202,77 @@ mod tests {
         cmd.get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn launch_language_reaches_only_supported_browser_commands() {
+        fn check<B: BrowserFamily>(browser: &B, expected: bool) {
+            let fixture = tempfile::tempdir().unwrap();
+            let install = fixture.path().join("Browser");
+            let mut config = Config::parse("[browser]\ninstall_dir = \"Browser\"\n").unwrap();
+            config.launch.language = Some(" fr-CA ".into());
+            for hardening in [false, true] {
+                config.hardening.enabled = hardening;
+                let args = build_launch_args(browser, &config);
+                let command_args = argv_of(&browser.launch_command(&install, &args));
+                let languages: Vec<_> = command_args
+                    .iter()
+                    .filter(|a| a.starts_with("--lang="))
+                    .collect();
+                let expected_args: Vec<_> = if expected {
+                    vec!["--lang=fr-CA"]
+                } else {
+                    vec![]
+                };
+                assert_eq!(
+                    languages,
+                    expected_args,
+                    "{}: hardening={hardening}",
+                    browser.id()
+                );
+            }
+        }
+        check(&UngoogledChromium::new(Arch::X64), true);
+        check(&Helium::new(Arch::X64), true);
+        check(&Firefox::new(Arch::X64), false);
+        check(&Firefox::new_esr(Arch::X64), false);
+        check(&Floorp::new(Arch::X64), false);
+        check(&Waterfox::new(Arch::X64), false);
+        check(&Librewolf::new(Arch::X64), false);
+        check(&Mullvad::new(Arch::X64), false);
+        check(&Bitwarden::new(Arch::X64), false);
+    }
+
+    #[test]
+    fn launch_language_omitted_or_blank_adds_no_switch() {
+        let browser = UngoogledChromium::new(Arch::X64);
+        let mut config = Config::parse("[browser]\ninstall_dir = \"Browser\"\n").unwrap();
+        for language in [None, Some(""), Some(" \t\n")] {
+            config.launch.language = language.map(str::to_owned);
+            assert!(!build_launch_args(&browser, &config)
+                .iter()
+                .any(|a| a.starts_with("--lang")));
+        }
+    }
+
+    #[test]
+    fn launch_language_precedes_explicit_overrides_and_keeps_values_in_one_argument() {
+        let browser = Helium::new(Arch::X64);
+        let fixture = tempfile::tempdir().unwrap();
+        let install = fixture.path().join("Browser");
+        let mut config = Config::parse("[browser]\ninstall_dir = \"Browser\"\n").unwrap();
+        config.hardening.enabled = false;
+        // Command::arg keeps this entire value together; it must not become a switch.
+        config.launch.language = Some("fr --incognito".into());
+        config.launch.extra_args = vec!["--lang=de".into(), "--disable-extensions".into()];
+        let args = build_launch_args(&browser, &config);
+        assert_eq!(
+            args,
+            ["--lang=fr --incognito", "--lang=de", "--disable-extensions"]
+        );
+        let command_args = argv_of(&browser.launch_command(&install, &args));
+        assert!(command_args.ends_with(&args));
+        assert!(!command_args.iter().any(|a| a == "--incognito"));
     }
 
     #[test]

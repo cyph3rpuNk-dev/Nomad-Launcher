@@ -40,7 +40,7 @@ check_on_launch = true       # false = skip the update check, launch immediately
 auto_download = true         # false = prompt in the status window before downloading
 
 [launch]
-language = \"en-US\"           # passed as --lang to browsers that accept it
+language = \"en-US\"           # Chromium/Helium UI language; omit or leave blank for browser default
 extra_args = []              # additional command-line arguments
 incognito = false            # true = launch Chromium browsers in --incognito mode
 
@@ -207,7 +207,9 @@ impl Default for UpdateConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LaunchConfig {
-    /// UI language passed to browsers that accept `--lang`.
+    /// Chromium/Helium UI language passed as `--lang=<value>` before `extra_args`.
+    /// Surrounding whitespace is trimmed; unset/blank adds no switch.
+    /// Independent of hardening; ignored for Gecko and Electron apps.
     #[serde(default)]
     pub language: Option<String>,
     /// Extra command-line arguments appended to the browser invocation.

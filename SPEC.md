@@ -231,7 +231,7 @@ check_on_launch = true       # false = skip the update check, launch immediately
 auto_download = true         # false = prompt in the status window before downloading
 
 [launch]
-language = "en-US"           # passed as --lang to browsers that accept it
+language = "en-US"           # Chromium/Helium UI language; omit or blank for browser default
 extra_args = []              # additional command-line arguments
 
 [hardening]
@@ -515,6 +515,17 @@ nomad-<browser>.exe started
 ```
 
 Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are deleted at the start of the next launch.
+
+### Launch language
+
+`build_launch_args` adds a nonblank `launch.language` as one `--lang=<value>`
+argument for `Engine::Chromium` (Ungoogled Chromium and Helium), after trimming
+surrounding whitespace. This is independent of hardening. It precedes
+`extra_args`, so an explicit `--lang=...` there takes precedence. Unset/blank
+values add no switch; Gecko and Electron receive no generated language flag.
+The browser decides available locales and fallback; changing this preference
+requires a full browser restart. It does not install language packs or change
+Nomad's own UI language.
 
 ---
 
