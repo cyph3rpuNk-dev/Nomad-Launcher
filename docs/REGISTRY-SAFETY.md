@@ -52,6 +52,29 @@ paths. If already moved, return the folder/launcher to its original location and
 unregister there before moving again. Preserve unreadable or mismatched journals
 for review; deleting one discards the repair history and disabled state.
 
+## Explicit registration failure recovery
+
+`core/src/registry/registration.rs` builds the 16 explicit registration values
+and their cleanup plan. Before any HKCU mutation, it atomically saves the plan
+in `Nomad/nomad.reg-state.json`, using the existing version-1 format. Existing
+records must match the supported schema, browser ID and exact planned key/value
+lists; inputs over 64 KiB, unknown fields and malformed records are refused.
+A record for another browser is preserved and prevents registration writes.
+
+A failed sidecar save makes no registration writes and preserves the prior
+record. A registry write failure stops further writes and keeps the complete
+plan. Retry `--register-default` to finish the same plan, or use
+`--unregister-default` to remove partial entries. RegisteredApplications is
+written last. Reenabling automatic repair can also fail after registry writes;
+that failure reports an incomplete registration with the same recovery options.
+
+Unregister validates the record before removing picker entries. Missing keys or
+values from an interrupted registration are harmless. Removal failures retain
+the record for retry; a failure deleting the record itself is reported too.
+Do not treat the mere presence of the file as a successful registration marker.
+This provides recoverability, not a multi-key registry transaction or automatic
+rollback of prior values after a failed refresh.
+
 ## Limits
 
 - Older versions did not save originals. Already-repaired commands without a
@@ -61,10 +84,9 @@ for review; deleting one discards the repair history and disabled state.
   in one folder only. Close the browser before explicit registration changes.
 - Raw REG_EXPAND_SZ bytes are preserved, but environment-variable executable
   paths are not expanded or repaired.
-- The journal covers automatic command repairs. Existing explicit registration
-  still uses browser-wide Nomad ProgID names and its separate removal sidecar;
-  cross-instance picker ownership and registration failure atomicity remain
-  separate work.
+- Explicit registration still uses browser-wide Nomad ProgID names. Separate
+  portable copies of the same browser can overwrite or remove each other's
+  picker registration. Cross-instance ownership remains separate work.
 - Filesystem checks reject existing redirects, but cannot defeat a hostile writer
   swapping paths concurrently. Portable-drive write access is outside the threat
   model. Journal durability also depends on the filesystem and storage device.
@@ -78,3 +100,8 @@ relocation, malformed and oversized state, locking, and filesystem aliases.
 Native HKCU tests remain explicitly ignored and require a separate isolated
 Windows test account. A passing local gate does not establish a live Windows
 Default-apps or multi-process browser smoke-test result.
+
+Explicit registration tests use injected writes, covering failures before and
+after each of the 16 writes (32 interruption cases), retry, write-ahead ordering,
+sidecar persistence failure, rejected old records and failed record deletion.
+They do not create or modify real HKCU entries.

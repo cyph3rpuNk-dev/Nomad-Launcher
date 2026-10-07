@@ -2,9 +2,8 @@
 //!
 //! Writes only to `HKCU\Software\Classes\...` and
 //! `HKCU\Software\RegisteredApplications` — never `HKLM`. On registration,
-//! every written path is recorded in a `nomad.reg-state.json` sidecar beside
-//! the launcher so [`unregister`] can remove exactly those keys without
-//! touching anything else.
+//! planned paths are recorded in `Nomad/nomad.reg-state.json` before writing
+//! so [`unregister`] can also remove entries from an interrupted registration.
 //!
 //! # Windows Default-apps integration
 //!
@@ -16,6 +15,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(windows, test))]
+mod registration;
 #[cfg(any(windows, test))]
 mod repair_journal;
 
@@ -34,6 +35,8 @@ pub enum RegistryError {
          record was kept so --unregister-default can be retried"
     )]
     PartialUnregister { failed: usize },
+    #[error("registration is incomplete: {0}; the cleanup record was kept; retry --register-default or run --unregister-default")]
+    PartialRegister(#[source] std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, RegistryError>;
@@ -42,8 +45,9 @@ pub type Result<T> = std::result::Result<T, RegistryError>;
 
 /// Data written to `nomad.reg-state.json` on registration.
 ///
-/// Consumed by [`unregister`] to delete exactly the keys we wrote.
-#[derive(Debug, Serialize, Deserialize)]
+/// Consumed by [`unregister`] to remove the planned keys, including partial writes.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RegState {
     version: u32,
     browser_id: String,
@@ -167,10 +171,7 @@ mod win {
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
     use winreg::RegKey;
 
-    use super::{
-        app_key_path, classes_path, is_nomad_owned_key, is_nomad_owned_value, prog_id, RegState,
-        RegistryError, Result, REGISTERED_APPS_KEY,
-    };
+    use super::{is_nomad_owned_key, is_nomad_owned_value, registration, RegistryError, Result};
 
     pub(super) fn register(
         browser_id: &str,
@@ -178,86 +179,18 @@ mod win {
         exe_path: &Path,
         sidecar: &Path,
     ) -> Result<()> {
-        // Refuse a redirected journal before making any registry changes.
-        crate::fs_safety::ensure_file(sidecar)?;
-        let exe_str = exe_path.to_str().ok_or_else(|| {
-            RegistryError::Sidecar("exe path contains non-UTF-8 characters".to_owned())
-        })?;
-        let icon_str = format!("{exe_str},0");
-        let command_str = format!("\"{exe_str}\" -- \"%1\"");
-        let pid = prog_id(browser_id);
-        let app_label = format!("{display_name} (Nomad Launcher)");
-        let app_desc = format!("Privacy-hardened {display_name} \u{2014} Nomad Launcher");
-
+        let plan = registration::Plan::new(browser_id, display_name, exe_path)?;
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-
-        // 1. ProgId definition under HKCU\Software\Classes\NomadPortable.{id}.HTML
-        let cls = classes_path(browser_id);
-        let (cls_key, _) = hkcu.create_subkey(&cls)?;
-        cls_key.set_value("", &app_label)?;
-
-        let (app_sub, _) = cls_key.create_subkey("Application")?;
-        app_sub.set_value("ApplicationName", &app_label)?;
-        app_sub.set_value("ApplicationIcon", &icon_str)?;
-        app_sub.set_value("ApplicationDescription", &app_desc)?;
-
-        let (icon_sub, _) = cls_key.create_subkey("DefaultIcon")?;
-        icon_sub.set_value("", &icon_str)?;
-
-        let (cmd_sub, _) = cls_key.create_subkey("shell\\open\\command")?;
-        cmd_sub.set_value("", &command_str)?;
-
-        // 2. Capabilities under HKCU\Software\NomadPortable\{id}\Capabilities
-        let app_path = app_key_path(browser_id);
-        let caps_path = format!("{app_path}\\Capabilities");
-        let (caps_key, _) = hkcu.create_subkey(&caps_path)?;
-        caps_key.set_value("ApplicationName", &app_label)?;
-        caps_key.set_value("ApplicationDescription", &app_desc)?;
-
-        let (file_assoc, _) = caps_key.create_subkey("FileAssociations")?;
-        for ext in [".htm", ".html", ".shtml", ".xhtml"] {
-            file_assoc.set_value(ext, &pid)?;
-        }
-
-        let (url_assoc, _) = caps_key.create_subkey("URLAssociations")?;
-        for proto in ["http", "https", "ftp"] {
-            url_assoc.set_value(proto, &pid)?;
-        }
-
-        // 3. RegisteredApplications entry
-        let app_reg_name = format!("NomadPortable.{browser_id}");
-        let (reg_apps_key, _) = hkcu.create_subkey(REGISTERED_APPS_KEY)?;
-        reg_apps_key.set_value(&app_reg_name, &caps_path)?;
-
-        // 4. Notify the shell so Default-apps picker refreshes.
+        plan.apply(sidecar, |value| {
+            let (key, _) = hkcu.create_subkey(&value.key)?;
+            key.set_value(&value.name, &value.text)
+        })?;
         notify_shell();
-
-        // 5. Record what we wrote so unregister() can clean up precisely.
-        let state = RegState {
-            version: 1,
-            browser_id: browser_id.to_owned(),
-            keys: vec![cls, app_path],
-            values: vec![(REGISTERED_APPS_KEY.to_owned(), app_reg_name)],
-        };
-        let json = serde_json::to_string_pretty(&state)
-            .map_err(|e| RegistryError::Sidecar(e.to_string()))?;
-        if let Some(parent) = sidecar.parent() {
-            crate::fs_safety::create_dir_all(parent)?;
-        }
-        crate::fs_safety::write(sidecar, json)?;
-
         Ok(())
     }
 
     pub(super) fn unregister(sidecar: &Path) -> Result<()> {
-        crate::fs_safety::ensure_file(sidecar)?;
-        if !sidecar.exists() {
-            return Err(RegistryError::NotRegistered);
-        }
-
-        let json = std::fs::read_to_string(sidecar)?;
-        let state: RegState =
-            serde_json::from_str(&json).map_err(|e| RegistryError::Sidecar(e.to_string()))?;
+        let state = registration::read_state(sidecar)?.ok_or(RegistryError::NotRegistered)?;
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
 
@@ -320,13 +253,7 @@ mod win {
 
         notify_shell();
 
-        if failed > 0 {
-            // Removing the sidecar now would orphan the leftover entries with
-            // no record of them; keep it so unregistering can be retried.
-            return Err(RegistryError::PartialUnregister { failed });
-        }
-        let _ = std::fs::remove_file(sidecar);
-        Ok(())
+        registration::finish_unregistration(sidecar, failed)
     }
 
     pub(super) fn repair_self_registration(install_dir: &Path, launcher_exe: &Path) -> usize {
@@ -539,14 +466,16 @@ mod win {
 /// Registers the launcher as a default-browser candidate in `HKCU`.
 ///
 /// Writes `ProgId`, capabilities, and `RegisteredApplications` entries so the
-/// launcher appears in *Settings → Default apps*. All written paths are
-/// recorded in `sidecar` for clean removal by [`unregister`].
+/// launcher appears in *Settings → Default apps*. Planned paths are atomically
+/// recorded in `sidecar` before writing, for recovery by retry or [`unregister`].
 ///
 /// Calling this again on an already-registered launcher is idempotent: it
 /// overwrites the existing entries with the current exe path.
 ///
 /// # Errors
-/// Returns [`RegistryError::Io`] if a registry write or sidecar write fails.
+/// Returns [`RegistryError::Io`] for persistence failures before registry writes,
+/// [`RegistryError::Sidecar`] for invalid state, or [`RegistryError::PartialRegister`]
+/// for an incomplete registration whose cleanup record has been retained.
 #[cfg(windows)]
 pub fn register(
     browser_id: &str,
@@ -556,15 +485,15 @@ pub fn register(
 ) -> Result<()> {
     let mut journal = repair_journal::Session::open(exe_path, None)?;
     win::register(browser_id, display_name, exe_path, sidecar)?;
-    journal.enable()?;
+    journal.enable().map_err(RegistryError::PartialRegister)?;
     Ok(())
 }
 
 /// Removes the registration created by [`register`], reading the list of
 /// written paths from `sidecar`.
 ///
-/// Deletes only the keys and values recorded at registration time — no
-/// guessing, no collateral damage to other applications.
+/// Deletes only the planned keys and values in a validated registration record.
+/// Missing entries from a partial registration are harmless.
 ///
 /// # Errors
 /// Returns [`RegistryError::NotRegistered`] when the sidecar is absent,
