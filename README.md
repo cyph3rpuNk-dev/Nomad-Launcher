@@ -269,10 +269,10 @@ Requires Rust 1.92+ on Windows 10/11.
 
 ```powershell
 pwsh -NoProfile -File scripts/check.ps1  # canonical local/CI validation gate
-cargo build --workspace --locked # debug build
+cargo build --workspace --locked --target x86_64-pc-windows-msvc # debug build
 .\dist.ps1                       # release build → target/release/Nomad-<browser>.exe
-cargo test --workspace --locked    # test suite
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked --target x86_64-pc-windows-msvc # test suite
+cargo clippy --workspace --all-targets --locked --target x86_64-pc-windows-msvc -- -D warnings
 ```
 
 The repository uses rolling stable for development and separately checks the
@@ -280,6 +280,12 @@ declared Rust 1.92 minimum supported version in CI. The dependency gate treats
 all audit warnings, including yanked crates, as failures. Its sole documented
 advisory exception is the verification-only RSA timing finding; see
 [Dependency audit policy](SECURITY.md#dependency-audit-policy).
+
+The repository Windows MSVC flags statically link the C runtime and retain CFG
+and System32-only import search. Use the explicit `--target` on Windows so
+Cargo keeps host-side proc macros/build scripts separate from those flags.
+The canonical gate does this automatically; non-Windows tooling keeps its native
+OpenGL renderer and target. See [build and artifact checks](docs/BUILD-SAFETY.md).
 
 `dist.ps1` builds the explicit Windows x64 target with locked dependencies,
 requires all nine launchers and license inputs, and stages signing and packaging
@@ -408,7 +414,7 @@ for failure recovery and concurrency limits.
 
 **Nothing happens on launch.** First-run downloads take 30 to 90 seconds. Check `Nomad/nomad.log` for errors. If the log is empty, Windows SmartScreen may be quarantining the `.exe`; look in Windows Security → Protection History.
 
-**"Launch failed: window error" / won't start in a virtual machine.** The status window needs OpenGL 2.0, which VMs without 3D acceleration don't provide (they fall back to Windows' software GL 1.1). Enable it and relaunch. VirtualBox: install Guest Additions and tick **Settings → Display → 3D Acceleration**. VMware: tick **Accelerate 3D graphics** in the VM's display settings. Hyper-V's basic display adapter has no GL acceleration, so you'd need an enhanced-session GPU (GPU-P) or a different hypervisor.
+**"Launch failed: window error" / won't start in a virtual machine.** The Windows status window uses Direct3D 12 through wgpu and the system FXC shader compiler. It can use an available hardware or Windows software adapter; an OpenGL driver or separate Visual C++ runtime installation is not required by the launcher. Check the guest graphics support and driver if window creation fails. See `Nomad/nomad.log` beside the launcher; setting `NOMAD_LOG=debug` for that launch records more diagnostics. See [validation scope and pending checks](docs/AUDIT-STATUS.md) for current Windows and VM coverage.
 
 **"Windows protected your PC" on first launch.** A SmartScreen reputation
 warning is not by itself a malware verdict, but it should not be ignored
@@ -489,7 +495,7 @@ browser families must not share the same portable folder.
 | Operating system | Windows 10 or Windows 11 (64-bit) |
 | Launcher build | `x86_64-pc-windows-msvc` |
 | Browser architecture | `x64` by default; `x86` and `arm64` availability varies by browser and upstream release |
-| Runtime dependencies | Stock Windows components and a graphics driver with OpenGL 2.0 support |
+| Runtime dependencies | Stock Windows components; a usable Direct3D 12 hardware or system software adapter |
 | Network | Required for first run and update checks |
 
 ## Acknowledgements

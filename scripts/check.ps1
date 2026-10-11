@@ -25,7 +25,13 @@ try {
         }
     }
 
+    # --target separates Windows static-CRT target crates from host proc macros.
+    $targetArgs = @()
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $targetArgs = @('--target', 'x86_64-pc-windows-msvc') }
     if (-not $AuditOnly) {
+        Invoke-GateStep 'Artifact guard regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-artifact-guard.ps1')
+        }
         Invoke-GateStep 'Audit gate regression fixtures' {
             pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-audit-gate.ps1')
         }
@@ -42,10 +48,10 @@ try {
             cargo fmt --all -- --check
         }
         Invoke-GateStep 'Clippy' {
-            cargo clippy --workspace --all-targets --locked -- -D warnings
+            cargo clippy --workspace --all-targets --locked @targetArgs -- -D warnings
         }
         Invoke-GateStep 'Tests' {
-            cargo test --workspace --locked
+            cargo test --workspace --locked @targetArgs
         }
     }
 

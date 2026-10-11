@@ -43,7 +43,7 @@ failure classes:
 - Toolchains: rolling stable for development; Rust 1.92 MSRV compatibility gate
 - Primary target: `x86_64-pc-windows-msvc`
 - Dependency strategy: Cargo with committed `Cargo.lock`
-- UI: eframe/egui with the glow renderer
+- UI: eframe/egui with wgpu/DX12 and system FXC on Windows; glow for non-Windows tooling
 - CI/local gate: `pwsh -NoProfile -File scripts/check.ps1`
 
 ## Trust boundaries and invariants
