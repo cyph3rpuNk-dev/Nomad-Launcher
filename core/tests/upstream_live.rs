@@ -24,7 +24,7 @@
 //! availability. The weekly upstream-drift workflow runs them with `--ignored`.
 //!
 //! Run locally with:
-//!   cargo test -p nomad-core --test upstream_live -- --ignored --nocapture
+//!   cargo test -p nomad-core --test upstream_live --locked --target x86_64-pc-windows-msvc -- --ignored --nocapture
 
 use nomad_core::{
     Arch, Bitwarden, BrowserFamily, Firefox, Floorp, Helium, Librewolf, Mullvad, UngoogledChromium,

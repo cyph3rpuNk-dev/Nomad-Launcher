@@ -21,13 +21,16 @@ The Mullvad checksum fixture was cryptographically verified with GPG and
 Nomad's Rust verifier. The refreshed 7-Zip extractor ran against inert temporary
 ZIP fixtures. No installer or browser was launched.
 
-Still unrun: four ignored HKCU tests, real browser smoke tests, and GitHub CI
-for this work. The signing-key check does not replace them.
+The four native HKCU tests have now passed in Windows Sandbox with a static-runtime
+test build (see below). The experimental Firefox baseline also passed its exercised
+startup/profile/Windows-integration checks. Broader browser/update validation and
+GitHub CI remain pending; the signing-key check does not replace them.
 Test counts measure examples exercised, not code coverage; no coverage percentage
 has been measured.
 
 Code fixes and documentation cleanup are local commits; the live-check results
-are committed as `a83ef02`; isolated smoke-test preparation is uncommitted.
+are committed as `a83ef02`; the isolated smoke-test runbook is committed as
+`6f51fe5`. New Sandbox results and documentation updates are uncommitted.
 This work has not been pushed, merged,
 published or copied into the user's portable installations. At the baseline review,
 `origin/main..HEAD` contained 24 commits using the local tracking ref. No remote
@@ -179,11 +182,204 @@ installation coverage. Browser startup, extension acceptance, existing-profile
 updates, offline launch, rollback/retry and real Windows integration remain
 separate validation. No runtime source was changed for these live checks.
 
+## Windows Sandbox validation (2026-10-11)
+
+The user exercised a Firefox baseline in Windows Sandbox using an isolated
+source snapshot of `6f51fe5`, static-CRT linkage and an experimental wgpu/DX12
+renderer. Production runtime source, build configuration and lockfile were
+unchanged during that experiment; subsequent production changes are recorded below. The original binaries required `VCRUNTIME140.dll`; the glow status
+window failed both with vGPU disabled and enabled. The experimental build removes
+the inspected external CRT imports and renders/launches in the GPU-enabled guest.
+These experiments establish viable directions, not completed production fixes.
+
+| Check | Result / evidence |
+|---|---|
+| Four native HKCU tests | Passed serially in the first guest; screenshot-confirmed exit codes 0. |
+| Firefox install/startup and portable paths | Firefox 157.0.1 x64 running from the disposable `Browser/`, using sibling `Data/`; screenshots and version marker. |
+| Extension acceptance | uBlock Origin enabled in Firefox; metadata reports version 1.75.0, active and not user-disabled. Blocking behavior was not tested. |
+| Full exit/relaunch | No remaining Firefox processes before launch and exit 0 are screenshot-confirmed; bookmark and enabled extension persistence are user-confirmed. |
+| Hardening off/on preservation | Both launches exited 0 with the helper reporting false then true; bookmark and enabled extension preservation are user-confirmed. Individual effective preferences were not inspected. |
+| Offline launch | Guest adapter disabled, launcher exited 0, adapter re-enabled, extension enabled; screenshot-confirmed. The offline bookmark observation and Internet reachability after re-enable were not separately confirmed. |
+| Registration and Windows defaults | Version-2 owner/plan and actual HKCU command/capabilities checked; folder-labelled entry selected for HTTP/HTTPS and .htm/.html. |
+| URL/local HTML handoff | Open-window routing retained the same Firefox PID; closed-browser routing reopened the existing install. Marker/executable hashes stayed unchanged. Closed-mode bookmark/extension preservation and no provisioning UI are user-confirmed. |
+| Unclaimed empty-instance URL refusal | Expected ownership error and exit 1; helper confirmed no browser/profile, marker, config or extension cache created. |
+| Two-copy registration and second removal | Separate picker entries and disjoint registrations; second unregister exited 0 and removed its owned state while inspected primary registration and HTTP/HTTPS/HTML defaults stayed unchanged. |
+| Primary unregister and retained data | Exit 0; planned keys/value/sidecar absent. Firefox, version marker and bookmark-database hashes unchanged. |
+
+Guest browser/registry actions were user-executed and observed through screenshots
+or reports. No real browser or HKCU test ran on the host. Static-runtime host
+unit tests passed (475, with four HKCU tests ignored there); trial builds, helper
+syntax and applicable inert text/path fixtures passed. The full canonical gate
+and GitHub CI were not rerun for these experiments. Detailed hashes, screenshot
+names, commands, helper correction and limitations are in
+[the dated validation record](SANDBOX-VALIDATION-2026-10-11.md).
+
+The default warning log's generic Firefox package-signature message does not
+capture the earlier GPG-signed checksum-manifest authentication: that and package
+hash success are debug events in the inspected source. It is not evidence of a
+missing-signature fallback. Authenticated package resolution was not independently
+reconstructed from this warning-only guest log.
+
+Both guest registrations are now removed. Guest files, profile, backups and logs
+remain; closing Sandbox discards them. No fixture folders were deleted. New
+validation results are local and uncommitted.
+
+## Production runtime and renderer safeguards (2026-10-11)
+
+Implemented locally after the experimental baseline, on `rebuild/foundation`:
+
+- `.cargo/config.toml` statically links the Windows MSVC CRT while retaining CFG
+  and `/DEPENDENTLOADFLAG:0x800`. The gate, MSRV and Windows CI commands now pass
+  an explicit Windows target so host build scripts/proc macros stay separate.
+- `core/Cargo.toml` and `core/src/ui/mod.rs` select wgpu/DX12 on Windows, pin the
+  system FXC compiler and exclude external compiler/Agility/debug-layer requests.
+  Non-Windows tooling retains glow. The UI failure message and guides reflect
+  Direct3D rather than OpenGL.
+- `scripts/artifact-guard.ps1` checks bounded PE metadata, direct/delayed imports,
+  GUI/x64 format, CFG metadata and the exact System32-only dependent-load flag.
+  `dist.ps1` requires the guard/config and checks built, staged and promoted files.
+  Unsafe artifacts cannot proceed to signing or a completion manifest.
+- New inert artifact fixtures and extended distribution/CI failure fixtures
+  cover external CRT imports, malformed metadata, missing hardening, required
+  inputs and explicit targets. No fixture launches a browser or writes real HKCU.
+
+Validation completed on the local working tree:
+
+- Canonical gate: 490 Rust tests passed (476 unit + 14 integration), formatting,
+  Clippy, dependency audit with only the existing RSA exception, and offline
+  safeguard fixtures. Four native HKCU tests remain ignored on the host.
+- Artifact fixtures: four accepted and 18 rejected metadata cases. Distribution
+  fixtures: 33 cases; CI failure/wiring fixtures: eight cases plus workflow/set
+  checks. Artifact/distribution fixtures also passed Windows PowerShell 5.1.
+- `cargo +1.92 check --workspace --all-targets --locked --target
+  x86_64-pc-windows-msvc --target-dir target/msrv-runtime-renderer` passed.
+- Unsigned `dist.ps1` built and promoted all nine launchers. Their direct/delayed
+  imports and hardening checks passed; the original dynamic-runtime Firefox
+  artifact is rejected for `VCRUNTIME140.dll`. Signing variables were removed
+  only from the build child's environment; no real signing/publishing ran.
+
+The artifact guard's x64 load-config offsets were corrected after checking a real
+binary (PE32+ retains the two SEH fields). The stock import allowlist also includes
+OpenGL32; a positive fixture prevents treating this OS DLL as an external runtime.
+These corrections are covered by the final fixtures and real-artifact checks.
+
+All nine supported-build artifacts and a hash manifest are staged in the existing
+read-only Sandbox input mapping. The guest helper creates fresh Firefox/Chromium
+instances and enables debug logging only for its launcher child. The user ran
+Firefox mode; screenshot `Screenshot 2026-10-11 141934.png` confirms launcher
+exit code 0, `SHA256SUMS GPG signature verified`, package `SHA-256 hash verified`,
+and `browser launched` with PID `4932`, executable
+`C:\NomadSmoke\Production\Firefox\Browser\firefox.exe`. The wgpu log explicitly
+selects the AMD Radeon 780M integrated adapter using DX12. It also lists Microsoft
+Basic Render Driver as an available CPU adapter, but this run did not exercise
+software rendering. Supported-build launcher/graphics initialization, Firefox
+manifest/package verification and browser process startup therefore pass in this
+Windows 11 guest. Firefox's visible window/profile path, persistence and Windows
+integration on this specific build remain separate observations; prior detailed
+checks cover the experimental build. The user then ran Chromium mode; screenshot
+`Screenshot 2026-10-11 143056.png` shows launcher exit code 0, package `SHA-256
+hash verified`, and browser launch from
+`C:\NomadSmoke\Production\Chromium\Browser\chrome.exe`, with Ungoogled Chromium
+visibly displaying `chrome://ungoogled-first-run`. Its DX12 selection log again
+names the AMD Radeon 780M. Supported-build Chromium verification/startup therefore
+passes in this guest. Screenshot `Screenshot 2026-10-11 144613.png` of
+`chrome://version` confirms Chromium `155.0.8059.39` (64-bit, Ungoogled Chromium),
+Windows 11 24H2 build `26100.9445`, executable
+`C:\NomadSmoke\Production\Chromium\Browser\chrome.exe`, and profile
+`C:\NomadSmoke\Production\Chromium\Data\Default`. Its command line includes the
+expected instance-local `--user-data-dir`, `--lang=en-US`, and a `--load-extension`
+path under this browser's `nomad-extensions\uBlock0`. This establishes portable
+path/argument evidence; extension acceptance and individual flag effects are not
+proved by command-line presence. Screenshot `Screenshot 2026-10-11 145202.png`
+then shows uBlock Origin `1.75.0` in `chrome://extensions`, switch on, with no
+visible Errors button or warning on its card. Initial Chromium extension
+acceptance/enabled state therefore passes; blocking behavior and state across
+relaunch/hardening/update transitions remain untested. A hash-validating
+supported-build relaunch helper was prepared and parsed without executing it;
+it requires the chosen browser to fully exit and reuses the same instance with
+child-only debug logging. Screenshot `Screenshot 2026-10-11 150310.png` then
+shows no Chrome processes remaining before supported relaunch, launcher exit code
+0, and installed-marker hash unchanged. The user explicitly confirmed that the
+bookmark remained and uBlock Origin was still enabled. Supported Chromium full
+exit/relaunch and profile/extension preservation therefore pass. A supported-build
+hardening-toggle helper was prepared and parsed, retaining the original config,
+scoping changes to the hardening enabled boolean, requiring the browser to stop,
+and verifying the supported launcher hash. Its pure text off/on preservation
+fixture passed. Screenshot `Screenshot 2026-10-11 151815.png` shows supported
+Chromium off mode reporting `hardening.enabled = false`, the retained original
+config backup, and launcher exit code 0; Chromium is visibly open. The test
+bookmark and enabled extension are not displayed or explicitly confirmed in this
+off-phase screenshot at that checkpoint. Screenshot
+`Screenshot 2026-10-11 152905.png` subsequently confirms on mode reporting
+`hardening.enabled = true` and launcher exit code 0 (both off/on commands are
+visible). The user confirmed the bookmark and uBlock Origin remained intact in
+response to the requested both-phase checks. Supported Chromium hardening-toggle
+preservation therefore passes by user report, with successful setting/launch
+steps screenshot-confirmed. Individual effective privacy settings were not tested.
+A supported offline helper was prepared and parsed, preserving the previous
+adapter-selection/disconnection/finally-restoration guards while validating the
+supported artifact and enabling child-only debug logs. Screenshot
+`Screenshot 2026-10-11 153442.png` shows guest Ethernet disabled, supported launcher
+exit code 0 while disconnected, and the adapter re-enabled. The user confirmed
+bookmark/uBlock preservation. Debug output shows the gorhill uBlock update check
+skipped after a network-request error, followed by browser launch from the existing
+supported Chromium folder. Supported Chromium offline launch and preservation
+therefore pass, including an observed extension-update network-failure fallback.
+This is not a browser-update download-failure/rollback test; Internet reachability
+after adapter re-enable was not independently checked. A guest-only language
+helper was prepared and parsed with scoping/preservation and rejection fixtures;
+it backs up the original config, changes only launch language/extra_args, guards
+against intervening config edits, and supports fr/explicit-de-override/omitted-key
+phases plus restoration. Screenshot `Screenshot 2026-10-11 154600.png` shows
+French phase exit code 0, `--lang=fr`, unchanged supported Chromium executable/
+profile paths, and French UI labels; the user also confirmed the UI appeared in
+French. Configured French locale selection therefore passes for this package.
+Bookmark/extension state during this phase was not separately confirmed.
+The user subsequently confirmed German UI with the explicit argument override
+and retained bookmark/uBlock Origin. This is a user-reported override/preservation
+pass. Screenshot `Screenshot 2026-10-11 162820.png` additionally confirms exit
+code 0 for both override and default phases, with English New Tab/All Bookmarks
+labels visible after the default phase. Screenshot `Screenshot 2026-10-11 163353.png`
+shows no `--lang` argument and the same supported executable and portable profile
+paths in `chrome://version`. The user confirms the bookmark remains and uBlock
+Origin is enabled. Omitted-language launch/preservation therefore passes for this
+package. Screenshot `Screenshot 2026-10-11 164109.png` confirms the restore phase
+completed with exit code 0; the user confirms English UI and retained bookmark
+and enabled uBlock Origin. The language sequence and original-config restoration
+are complete. Screenshot `Screenshot 2026-10-11 165906.png` confirms supported
+Chromium registration exit code 0, matching ownership/registry checks and the
+folder-labeled candidate in Windows Default apps. Screenshot
+`Screenshot 2026-10-11 170159.png` confirms manual default selection with HTTP,
+HTTPS, .htm and .html assigned to this supported Chromium instance. Screenshot
+`Screenshot 2026-10-11 170611.png` shows HTTPS/local HTML tabs in the existing
+Chromium window, original window PID 3012 retained, and unchanged browser binary
+and installed marker. The user confirms everything is intact. Open-window shell
+handoff passes. Screenshot `Screenshot 2026-10-11 170947.png` shows closed-mode
+handoff completed without errors after the stopped-browser precondition, with
+browser binary and installed marker unchanged. The user subsequently confirms
+both pages reopened with bookmark/uBlock Origin intact and no installation/update
+window. Supported Chromium open- and closed-browser handoff pass. Screenshot
+`Screenshot 2026-10-11 171701.png` confirms unregistration exit code 0, removal of
+planned registry keys/value and ownership sidecar, and unchanged Chromium binary,
+installed marker, Bookmarks and Preferences hashes. Registration cleanup passes;
+browser/profile folders, backups and guest logs are retained. Software
+rendering is not selected in this run either. Supported Firefox's actual profile
+path has not yet been confirmed separately.
+Only the Windows x64 target is installed locally;
+non-Windows compile/graphics and live Windows 10 checks were unavailable/unrun.
+GitHub CI has not run. Changes and validation records remain uncommitted.
+
+Supported-build Firefox SHA-256:
+`79E64AD13B338F80719A0D38B8B68356AE845B0371698B994A3D65B455AE0C6B`.
+Supported-build Chromium SHA-256:
+`4935165932B7721EFDDF84BD1937106F2D8B9547F1A2DD712C0A3CA176353D9C`.
+
 ## Remaining maintenance work
 
 | Priority | Item | Severity / certainty | Location and next action |
 |---|---|---|---|
-| 1 | Large orchestration modules | **Low, confirmed maintainability concern; defect impact is a hypothesis.** `lib.rs` is 3,856 lines including tests, combining CLI, UI pipeline, launch, registry integration and cleanup watcher handling. `browsers/mod.rs` is 1,267 lines including tests, mixing the family contract with Gecko provisioning. | Extract cohesive internal modules after behavior fixes, preserving the public contract and failure-path tests. Line counts alone do not establish poor coverage or a bug. |
+| 1 | Supported-build runtime/renderer validation | **Original high-severity runtime dependency and medium graphics limitation are addressed locally; supported Firefox and Chromium launcher startup is confirmed in Sandbox.** Static CRT and Windows DX12/system FXC are implemented, Rust 1.92/gate and all nine artifact checks pass. | Supported Firefox debug logs confirm DX12 initialization, signed manifest/package hash verification and browser spawn. Both supported Firefox and Chromium now pass verification/startup. Chromium version, portable profile/binary paths and default language argument are confirmed. Initial Chromium extension acceptance and full-exit preservation are confirmed; Chromium hardening off/on preservation is also confirmed; Offline Chromium launch/preservation now passes too; French language selection and user-reported German override/preservation are confirmed; omitted-language launch/preservation also passes; original configuration restoration passes; supported Chromium registration, default selection, open/closed handoff and unregistration pass; supported Firefox profile/integration evidence remains separate; Windows 10/software-adapter coverage remains pending. Preserve experimental records separately. |
+| 2 | Large orchestration modules | **Low, confirmed maintainability concern; defect impact is a hypothesis.** `lib.rs` is 3,854 lines including tests, combining CLI, UI pipeline, launch, registry integration and cleanup watcher handling. `browsers/mod.rs` is 1,267 lines including tests, mixing the family contract with Gecko provisioning. | Extract cohesive internal modules after behavior fixes, preserving the public contract and failure-path tests. Line counts alone do not establish poor coverage or a bug. |
 
 Do not reopen a closed finding merely because the old handoff still lists it.
 Likewise, a green local gate does not close unrun end-to-end validation.
@@ -192,26 +388,28 @@ Likewise, a green local gate does not close unrun end-to-end validation.
 
 | Work | Evidence needed / scope |
 |---|---|
-| Windows registration and URL handoff | Use an isolated Windows account for the four ignored HKCU tests, then verify real same-profile URL/file handoff. Mock registry tests do not prove Windows picker integration. |
-| Portable browser smoke tests | Fresh install, update, offline launch, rollback/retry, hardening toggle and extension acceptance in disposable portable folders. Do not use the user's real profiles as fixtures. |
+| Windows registration and URL handoff | Experimental Firefox baseline passed registration/default selection, open/closed HTTPS/local HTML handoff, unclaimed-instance refusal, separate picker entries and both unregister checks. Supported Chromium also passed registration/default selection, open/closed HTTPS/HTML handoff and unregistration. Other supported-build/family cases and claimed-but-uninstalled refusal remain unrun. |
+| Portable browser smoke tests | Firefox portable profile, enabled uBlock, relaunch, hardening off/on and offline launch are exercised in the experimental build. Supported-build Firefox verification/startup and Chromium verification/startup, version 155.0.8059.39, portable paths and language/load-extension arguments are confirmed. Chromium uBlock Origin 1.75.0 acceptance/enabled state is now screenshot-confirmed; full exit/relaunch preservation is now confirmed. Other browser families, authentic older-to-newer updates, download failure/retry and rollback coverage remain pending. Offline bookmark observation and extension blocking behavior were not captured; supported Firefox debug authentication evidence and Chromium hash/startup evidence are now collected. |
 | Historical Helium cross-machine sign-in report | Still needs reproduction. The handoff references issue #54, but current GitHub status and root cause were not checked here. Portability flags alone do not prove cookie portability. Use a disposable account/profile and a controlled move between machines. |
 | Historical local artifacts | The handoff reports a nested Mullvad browser tree, stale associations and a stray LibreWolf host profile. These were not re-inspected or removed; they are historical reports, not current verified state. Cleanup needs a separate inventory and user approval. |
 | Review, CI and release | Obtain approval for push/PR creation, run GitHub CI, review/merge within authorized scope, build and verify release artifacts, and obtain approval for publishing/deployment. None follows automatically from a local commit. |
 
 Prepared [the isolated Windows smoke-test runbook](SMOKE-TESTS.md), including
 exact native-registry test filters and disposable-instance build/setup steps.
-The runbook and its commands have not been executed. On 2026-10-07, both
+The runbook is partially exercised by the Sandbox session above. On 2026-10-07, both
 PowerShell examples were parsed without execution and the four exact registry
 test names were verified with `--list`. The canonical local gate passed with
 489 tests, formatting, Clippy, safeguard fixtures and dependency audit using
 the documented RSA exception. These are prior-run results, not a fresh run on
 2026-10-11; the temporary gate log is no longer present.
 
-On 2026-10-11, the user confirmed that no isolated Windows test account or
-disposable VM is ready and requested runbook preparation only. Browser smoke
-and native HKCU tests are deferred; none ran during this follow-up.
+Initially on 2026-10-11, no isolated environment was available and the user
+requested preparation only. The user subsequently authorized Windows Sandbox
+setup and executed the four native HKCU tests there, as recorded above.
 
-Recommended next step: execute that runbook in the isolated environment for
-startup, profile persistence and URL handoff validation. Keep the four HKCU
-tests confined to that account. Review and CI remain separate delivery work;
-defer the optional module split until validation.
+Recommended next step: prepare authentic browser-update/failure fixtures. The supported
+Chromium registration/handoff/removal sequence is complete; retain the existing
+Sandbox session while guest logs and fixtures have not been exported. Static runtime and renderer implementation, the canonical
+gate, MSRV and artifact checks are complete locally; broader guest checks and
+GitHub CI remain separate.
+Defer the optional module split until behavior validation.

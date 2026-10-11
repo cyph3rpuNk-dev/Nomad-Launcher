@@ -4,23 +4,32 @@ Set-StrictMode -Version Latest
 $repoRoot=Split-Path -Parent $PSScriptRoot
 $global:GateCalls=[Collections.Generic.List[object]]::new()
 $global:GateCase=''
-function global:pwsh {$global:GateCalls.Add(@('pwsh')+@($args)); $global:LASTEXITCODE=0}
+function global:pwsh {
+    $global:GateCalls.Add(@('pwsh')+@($args)); $global:LASTEXITCODE=0
+    if ($global:GateCase -eq 'artifact-failure' -and ($args -join ' ') -match 'test-artifact-guard.ps1') {$global:LASTEXITCODE=1}
+}
 function global:cargo {
     $global:GateCalls.Add(@('cargo')+@($args)); $global:LASTEXITCODE=0
+    if ($args[0] -in @('clippy','test') -and [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and (-not ($args -contains '--target') -or -not ($args -contains 'x86_64-pc-windows-msvc'))) {throw 'Windows gate must separate target and host crates.'}
     if ($args[0] -in @('clippy','test') -and -not ($args -contains '--locked')) {throw 'Unlocked gate command.'}
     if (($global:GateCase -eq 'clippy-failure' -and $args[0] -eq 'clippy') -or ($global:GateCase -eq 'test-failure' -and $args[0] -eq 'test')) {$global:LASTEXITCODE=1}
 }
-foreach ($case in @('clean','clippy-failure','test-failure')) {
+foreach ($case in @('clean','artifact-failure','clippy-failure','test-failure')) {
     $global:GateCase=$case; $global:GateCalls.Clear(); $failed=$false
     try {& (Join-Path $PSScriptRoot 'check.ps1') -SkipAudit 6>$null} catch {$failed=$true}
     if ($failed -ne ($case -ne 'clean')) {throw 'Gate ignored or invented a native failure.'}
     $tests=@($global:GateCalls | Where-Object {$_[0] -eq 'cargo' -and $_[1] -eq 'test'})
     if ($case -eq 'clippy-failure' -and $tests.Count -ne 0) {throw 'Dependent tests ran after failed Clippy.'}
-    if (@($global:GateCalls | Where-Object {$_[0] -eq 'pwsh'}).Count -ne 4) {throw 'Required fixture gates are not wired.'}
+    $expectedFixtures=if ($case -eq 'artifact-failure') {1} else {5}
+    if ($case -eq 'artifact-failure' -and @($global:GateCalls | Where-Object {$_[0] -eq 'cargo'}).Count -ne 0) {throw 'Cargo ran after failed artifact fixtures.'}
+    if (@($global:GateCalls | Where-Object {$_[0] -eq 'pwsh'}).Count -ne $expectedFixtures) {throw 'Required fixture gates are not wired.'}
 }
 function Assert-WorkflowWiring([string]$Text,[string]$Name) {
     foreach ($line in ($Text -split '\r?\n')) {
         if ($line -match '^\s*(?:run:\s*)?cargo\s+(?:\+[^\s]+\s+)?(?:build|test|check|clippy)\s+' -and $line -notmatch '(?:^|\s)--locked(?:\s|$)') {throw "Unlocked workspace command in $Name"}
+    }
+    foreach ($line in ($Text -split '\r?\n')) {
+        if ($line -match '^\s*(?:run:\s*)?cargo\s+(?:\+[^\s]+\s+)?(?:build|test|check|clippy)\s+' -and $line -notmatch '--target x86_64-pc-windows-msvc') {throw "Windows workspace command must use an explicit target in $Name"}
     }
     if ($Name -eq 'hardening-sync.yml') {
         if ($Text -notmatch '(?m)^permissions: \{\}\s*$') {throw 'Hardening Sync must default-deny.'}
@@ -42,7 +51,8 @@ $sync=[IO.File]::ReadAllText((Join-Path $repoRoot '.github/workflows/hardening-s
 foreach ($mutant in @(
     $sync.Replace('permissions: {}',"permissions: { contents: write }"),
     $sync.Replace('contents: read','contents: write'),
-    $sync.Replace('cargo test --locked','cargo test')
+    $sync.Replace('cargo test --locked','cargo test'),
+    $sync.Replace('--target x86_64-pc-windows-msvc','')
 )) {
     $failed=$false; try {Assert-WorkflowWiring $mutant 'hardening-sync.yml'} catch {$failed=$true}
     if (-not $failed) {throw 'Workflow regression fixture was accepted.'}
@@ -63,5 +73,5 @@ foreach ($manifest in @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'launche
 }
 $distributionNames=@([regex]::Matches($dist,"'(Nomad-[A-Za-z0-9-]+\.exe)'") | ForEach-Object {$_.Groups[1].Value})
 if ((@($distributionNames | Sort-Object) -join ',') -cne (@($declaredNames | Sort-Object) -join ',')) {throw 'Distribution binary set must exactly match the workspace.'}
-Write-Host 'CI safeguard fixtures passed (6 failure/wiring cases plus workflow and binary-set checks).'
+Write-Host 'CI safeguard fixtures passed (8 failure/wiring cases plus workflow and binary-set checks).'
 $global:LASTEXITCODE=0

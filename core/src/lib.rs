@@ -166,11 +166,9 @@ where
             let mut text = format!("Launch failed: {e}");
             if matches!(e, RunError::Ui(_)) {
                 text.push_str(
-                    "\n\nThe status window could not be created. This usually \
-                     means OpenGL 2.0 is not available — common in virtual \
-                     machines without 3D acceleration. Enable it (VirtualBox: \
-                     install Guest Additions and tick \"3D Acceleration\"; \
-                     VMware: tick \"Accelerate 3D graphics\") and try again.",
+                    "\n\nThe status window could not be created. Nomad uses \
+                     Direct3D 12 on Windows. Check the graphics driver and \
+                     guest graphics support when running in a virtual machine.",
                 );
             }
             text.push_str("\n\nDetails: Nomad\\nomad.log beside this launcher.");

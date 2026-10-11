@@ -1,7 +1,10 @@
 # Isolated Windows smoke tests
 
-Prepared against `a83ef02` on `rebuild/foundation`. This runbook has not been
-executed. Passing metadata/extraction tests does not establish these results.
+Prepared against `a83ef02` on `rebuild/foundation`. An experimental Firefox
+baseline was later exercised in Windows Sandbox;
+see [the dated results](SANDBOX-VALIDATION-2026-10-11.md). Supported artifacts must
+be tested separately after the runtime/renderer production changes.
+Passing metadata/extraction tests does not establish these results.
 Record outcomes in [AUDIT-STATUS.md](AUDIT-STATUS.md).
 
 ## Environment and evidence
@@ -32,7 +35,7 @@ $registryTests = @(
     'selfreg_watch::tests::live_repair_reroutes_a_self_registration_written_mid_session'
 )
 foreach ($testName in $registryTests) {
-    cargo test -p nomad-core --lib --locked $testName -- --exact --ignored --nocapture --test-threads=1
+    cargo test -p nomad-core --lib --locked --target x86_64-pc-windows-msvc $testName -- --exact --ignored --nocapture --test-threads=1
     if ($LASTEXITCODE -ne 0) { throw "Native registry check failed: $testName" }
     # Read the result: exactly one test must have run and passed, not zero.
 }

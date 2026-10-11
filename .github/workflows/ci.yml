@@ -75,4 +75,4 @@ jobs:
         with:
           toolchain: '1.92'
       - name: Check workspace at MSRV
-        run: cargo +1.92 check --workspace --all-targets --locked
+        run: cargo +1.92 check --workspace --all-targets --locked --target x86_64-pc-windows-msvc
