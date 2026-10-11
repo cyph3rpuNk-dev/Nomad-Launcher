@@ -27,7 +27,7 @@ Test counts measure examples exercised, not code coverage; no coverage percentag
 has been measured.
 
 Code fixes and documentation cleanup are local commits; the live-check results
-records below are uncommitted.
+are committed as `a83ef02`; isolated smoke-test preparation is uncommitted.
 This work has not been pushed, merged,
 published or copied into the user's portable installations. At the baseline review,
 `origin/main..HEAD` contained 24 commits using the local tracking ref. No remote
@@ -150,7 +150,7 @@ suite. Mullvad package signatures, Bitwarden Authenticode, staged layouts,
 required overlays and browser behavior still need their separate checks.
 Other architectures were not tested. These are point-in-time upstream results.
 
-The live results records await commit approval. The canonical gate and Rust
+The live results records are committed locally as `a83ef02`. The canonical gate and Rust
 1.92 results above are carried forward; neither was rerun merely to record
 these live runs.
 
@@ -198,7 +198,20 @@ Likewise, a green local gate does not close unrun end-to-end validation.
 | Historical local artifacts | The handoff reports a nested Mullvad browser tree, stale associations and a stray LibreWolf host profile. These were not re-inspected or removed; they are historical reports, not current verified state. Cleanup needs a separate inventory and user approval. |
 | Review, CI and release | Obtain approval for push/PR creation, run GitHub CI, review/merge within authorized scope, build and verify release artifacts, and obtain approval for publishing/deployment. None follows automatically from a local commit. |
 
-Recommended next step: prepare disposable browser smoke-test folders and an
-isolated Windows test account for startup, profile persistence and URL handoff
-validation. Keep the four HKCU tests confined to that account. Review and CI
-remain separate delivery work; defer the optional module split until validation.
+Prepared [the isolated Windows smoke-test runbook](SMOKE-TESTS.md), including
+exact native-registry test filters and disposable-instance build/setup steps.
+The runbook and its commands have not been executed. On 2026-10-07, both
+PowerShell examples were parsed without execution and the four exact registry
+test names were verified with `--list`. The canonical local gate passed with
+489 tests, formatting, Clippy, safeguard fixtures and dependency audit using
+the documented RSA exception. These are prior-run results, not a fresh run on
+2026-10-11; the temporary gate log is no longer present.
+
+On 2026-10-11, the user confirmed that no isolated Windows test account or
+disposable VM is ready and requested runbook preparation only. Browser smoke
+and native HKCU tests are deferred; none ran during this follow-up.
+
+Recommended next step: execute that runbook in the isolated environment for
+startup, profile persistence and URL handoff validation. Keep the four HKCU
+tests confined to that account. Review and CI remain separate delivery work;
+defer the optional module split until validation.
