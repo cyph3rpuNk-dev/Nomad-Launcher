@@ -296,8 +296,8 @@ jobs:
           toolchain: stable
 
       - name: Resolve every upstream release and confirm it is verifiable
-        run: cargo test --locked -p nomad-core --test upstream_live -- --ignored --nocapture
+        run: cargo test --locked --target x86_64-pc-windows-msvc -p nomad-core --test upstream_live -- --ignored --nocapture
 
       - name: Download, verify, extract, and validate current browser overlays
         run: >-
-          cargo test --locked -p nomad-core --test upstream_extract -- --ignored --nocapture
+          cargo test --locked --target x86_64-pc-windows-msvc -p nomad-core --test upstream_extract -- --ignored --nocapture

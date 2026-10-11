@@ -44,7 +44,9 @@ function Clear-Manifests([string]$Directory) {
 }
 function Assert-LauncherSet([string]$Directory) {
     Assert-OrdinaryPath $Directory
-    foreach ($name in $expectedNames) {Assert-File (Join-Path $Directory $name)}
+    foreach ($name in $expectedNames) {
+        $file=Join-Path $Directory $name; Assert-File $file; Assert-NomadArtifact $file
+    }
     foreach ($file in @(Get-ChildItem -LiteralPath $Directory -Filter 'Nomad-*.exe')) {
         if ($expectedNames -cnotcontains $file.Name) {throw 'Unexpected launcher artifact; review stale build outputs.'}
     }
@@ -59,6 +61,8 @@ foreach ($directory in @($sourceDir,$artifactDir)) {
     }
 }
 Assert-File (Join-Path $PSScriptRoot 'Cargo.lock')
+Assert-File (Join-Path $PSScriptRoot '.cargo/config.toml')
+$artifactGuard=Join-Path $PSScriptRoot 'scripts/artifact-guard.ps1'; Assert-File $artifactGuard
 $licenses=@(
     @{Source='LICENSE-MIT'; Destination='Nomad-LICENSE-MIT.txt'},
     @{Source='core/payloads/fonts/OFL.txt'; Destination='AtkinsonHyperlegible-OFL.txt'},
@@ -97,6 +101,7 @@ try {
     Write-Host 'Building locked Windows x64 release binaries...'
     cargo build --release --workspace --locked --target x86_64-pc-windows-msvc --target-dir $targetRoot
     if ($LASTEXITCODE -ne 0) {throw 'Release build failed; distribution incomplete.'}
+    . $artifactGuard
     Assert-LauncherSet $sourceDir
     $stage=Join-Path $targetRoot ('.nomad-dist-'+[Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stage | Out-Null; $ownedStage=$true
@@ -110,6 +115,7 @@ try {
             if ($LASTEXITCODE -ne 0) {throw 'Requested Authenticode signature verification failed.'}
         }
     } else {Write-Warning 'Authenticode signing not requested.'}
+    Assert-LauncherSet $stage
     $licenseDir=Join-Path $stage 'licenses'; New-Item -ItemType Directory -Path $licenseDir | Out-Null
     foreach ($entry in $licenses) {
         $source=Join-Path $PSScriptRoot $entry.Source; Assert-File $source

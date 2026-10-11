@@ -56,7 +56,7 @@ jobs:
         run: pwsh -NoProfile -File scripts/check.ps1
 
       - name: Verify current Chromium compatibility before building release artifacts
-        run: cargo test --locked -p nomad-core --test upstream_extract chromium_release -- --ignored --nocapture
+        run: cargo test --locked --target x86_64-pc-windows-msvc -p nomad-core --test upstream_extract chromium_release -- --ignored --nocapture
 
       # No cargo cache on purpose: a poisoned cache entry restored into a
       # release build could end up inside a shipped binary (zizmor's

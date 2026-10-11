@@ -6,6 +6,41 @@ regressions. CI also checks all workspace targets at Rust 1.92. Cargo's
 rejects missing or changed dependency resolution; intentional dependency updates
 must update and review `Cargo.lock` separately.
 
+## Windows runtime and renderer
+
+`.cargo/config.toml` adds static CRT linkage for Windows MSVC targets while
+retaining CFG and `/DEPENDENTLOADFLAG:0x800`. Windows gate, CI, MSRV and manual
+commands use explicit `--target x86_64-pc-windows-msvc`: Cargo then applies target
+flags only to target crates, not host proc macros/build scripts
+([Cargo rustflags](https://doc.rust-lang.org/cargo/reference/config.html#buildrustflags),
+[Rust CRT linkage](https://doc.rust-lang.org/reference/linkage.html#static-and-dynamic-c-runtimes)).
+Environment/compiler overrides can still change flags; artifact inspection must
+pass before distribution completion, so an unsafe override cannot silently pass.
+
+Windows UI builds enable only wgpu's DX12 backend. The setup explicitly uses
+system FXC, disables external Agility SDK/debug-layer requests and clamps backend
+selection instead of accepting unrelated WGPU backend/compiler environment
+requests. Non-Windows tooling retains glow. A usable DX12 adapter is required;
+Windows offers [WARP software rendering](https://learn.microsoft.com/en-us/windows/win32/direct3darticles/directx-warp).
+Host tests construct configuration only and do not enumerate/probe adapters.
+Live Windows/guest checks remain separate from build checks.
+
+`scripts/artifact-guard.ps1` parses bounded PE metadata without loading/executing
+binaries or requiring Visual Studio's dumpbin. `dist.ps1` checks built, staged
+(after optional signing) and promoted launchers. It requires x64 PE32+ GUI images,
+CFG flag/function-table metadata, dependent-load flag exactly `0x800`, and direct
+and delayed DLL imports limited to the reviewed stock Windows allowlist/API-set
+names. External VCRUNTIME/MSVCP/MSVCR imports and unreviewed DLL names fail.
+Malformed, truncated and unsupported import layouts fail closed. Import checks
+do not inspect every dynamic `LoadLibrary` request, prove CFG coverage of every
+instruction, authenticate binaries, or establish graphics behavior on every OS.
+Explicit system-shader-compiler selection and live smoke tests provide complementary evidence.
+
+The canonical gate runs inert positive/negative PE fixtures, including external
+CRT delay imports, bad RVA bounds, malformed descriptors and missing hardening.
+Distribution fixtures check unsafe artifacts stop before signers/manifests and
+preserve failure cleanup. These tests create no real browser or registry state.
+
 ## Distribution outputs
 
 `dist.ps1` runs from its own checkout, builds `x86_64-pc-windows-msvc` with
@@ -17,7 +52,7 @@ and wrong artifact types are refused.
 
 The exact nine launcher names must match the workspace binary declarations.
 Missing/empty or extra launcher outputs fail rather than silently shipping a
-partial or stale set. Four license texts and `TRADEMARKS.md` must be nonempty
+partial or stale set. The artifact guard, Cargo configuration, four license texts and `TRADEMARKS.md` must be nonempty
 ordinary files before building. The notices and license destinations remain
 self-contained beside the final binaries.
 

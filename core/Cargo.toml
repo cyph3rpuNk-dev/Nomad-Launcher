@@ -9,10 +9,10 @@ description = "Shared core library for the Nomad Launcher browser launchers."
 [dependencies]
 # default_fonts dropped: the launcher ships only Atkinson Hyperlegible (vendored
 # in payloads/fonts/), so egui's bundled Ubuntu/NotoEmoji/Hack are not embedded.
-# Keep accessibility and OpenGL. X11 permits non-Windows compile checks;
+# Keep accessibility. X11 permits non-Windows compile checks;
 # Wayland window decorations pull in the unmaintained ttf-parser font stack.
 # Nomad ships only Windows launchers, so that unused backend is not enabled.
-eframe = { version = "0.34.3", default-features = false, features = ["accesskit", "glow", "x11"] }
+eframe = { version = "0.34.3", default-features = false, features = ["accesskit", "x11"] }
 hex = "0.4"
 ico = "0.4"
 pgp = "0.20.0"
@@ -28,7 +28,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zip = "2"
 
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.34.3", default-features = false, features = ["glow"] }
+
 [target.'cfg(windows)'.dependencies]
+# Enable only the Windows DX12 backend, without Vulkan/GL or external shader tools.
+eframe = { version = "0.34.3", default-features = false, features = ["wgpu_no_default_features"] }
+wgpu = { version = "29.0.4", default-features = false, features = ["dx12"] }
 winreg = "0.52"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

@@ -69,7 +69,7 @@ record. Migration preserves historical shared entries and archives their records
 
 Distribution builds use the committed lockfile and the explicit Windows x64
 target. Required inputs and the exact launcher set must be present; requested
-signing and verification failures stop packaging. Signers work on an owned stage.
+signing and verification failures stop packaging. Metadata-only artifact checks reject external CRT/unreviewed direct or delayed DLL imports and missing CFG/System32-only import flags before completion. The Windows UI uses DX12/system FXC; graphics behavior and dynamic loads need separate validation. Signers work on an owned stage.
 Final copied bytes are checked before the completion manifest is promoted.
 Build failures remove completion manifests rather than leaving stale signatures
 beside incomplete artifacts. File promotion is not a multi-file transaction;
