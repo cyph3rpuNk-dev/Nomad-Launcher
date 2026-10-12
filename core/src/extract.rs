@@ -99,6 +99,8 @@ pub(crate) fn extract_zip(package: &Path, install_dir: &Path) -> Result<()> {
 }
 
 fn extract_zip_with_budget(package: &Path, install_dir: &Path, budget: u64) -> Result<()> {
+    crate::fs_safety::ensure_directory(install_dir)?;
+    crate::fs_safety::ensure_file(package)?;
     let mut remaining = budget;
     let file = File::open(package)?;
     let mut archive =
@@ -137,11 +139,12 @@ fn extract_zip_with_budget(package: &Path, install_dir: &Path, budget: u64) -> R
 
         let out = install_dir.join(relative);
         if entry.is_dir() || name.ends_with('/') {
-            std::fs::create_dir_all(&out)?;
+            crate::fs_safety::create_dir_all(&out)?;
         } else {
             if let Some(parent) = out.parent() {
-                std::fs::create_dir_all(parent)?;
+                crate::fs_safety::create_dir_all(parent)?;
             }
+            crate::fs_safety::ensure_file(&out)?;
             let mut out_file = File::create(&out)?;
             copy_entry_capped(&mut entry, &mut out_file, &mut remaining)?;
         }
@@ -157,36 +160,50 @@ fn extract_zip_with_budget(package: &Path, install_dir: &Path, budget: u64) -> R
 ///
 /// # Errors
 /// Returns [`BrowserError::Extract`] on 7-Zip spawn failure, non-zero exit, or
-/// when `marker_exe` cannot be located in the extracted tree.
+/// when `marker_exe` cannot be located, or an extraction budget/deadline is exceeded.
 pub(crate) fn extract_nsis_with_7zip(
     installer: &Path,
     install_dir: &Path,
     marker_exe: &str,
 ) -> Result<()> {
-    std::fs::create_dir_all(install_dir)?;
+    extract_nsis_with_limits(
+        installer,
+        install_dir,
+        marker_exe,
+        MAX_DECOMPRESSED_BYTES,
+        std::time::Duration::from_mins(10),
+    )
+}
+
+fn extract_nsis_with_limits(
+    installer: &Path,
+    install_dir: &Path,
+    marker_exe: &str,
+    max_bytes: u64,
+    timeout: std::time::Duration,
+) -> Result<()> {
+    crate::fs_safety::ensure_file(installer)?;
+    crate::fs_safety::create_dir_all(install_dir)?;
 
     let tools = stage_seven_zip(install_dir)?;
     let raw_dir = install_dir.join("__nomad_extract_raw");
+    crate::fs_safety::ensure_directory(&raw_dir)?;
     if raw_dir.exists() {
-        let _ = std::fs::remove_dir_all(&raw_dir);
+        std::fs::remove_dir_all(&raw_dir)?;
     }
-    std::fs::create_dir_all(&raw_dir)?;
+    crate::fs_safety::create_dir_all(&raw_dir)?;
 
-    let status = Command::new(&tools.exe)
+    let mut command = Command::new(&tools.exe);
+    command
         .arg("x")
         .arg(installer)
         .arg(format!("-o{}", raw_dir.display()))
         .arg("-y")
-        .arg("-bso0") // silence stdout
-        .arg("-bse0") // silence stderr
-        .status()
-        .map_err(|e| BrowserError::Extract(format!("failed to spawn 7-Zip: {e}")))?;
-    if !status.success() {
-        return Err(BrowserError::Extract(format!(
-            "7-Zip exited with status {status}"
-        )));
-    }
+        .arg("-bso0")
+        .arg("-bse0");
+    run_bounded_extractor(&mut command, &raw_dir, max_bytes, timeout)?;
 
+    crate::fs_safety::ensure_tree(&raw_dir)?;
     let exe_dir = find_marker_dir(&raw_dir, marker_exe)
         .ok_or_else(|| BrowserError::Extract(format!("{marker_exe} not found after extraction")))?;
     flatten_into(&exe_dir, install_dir)?;
@@ -206,6 +223,120 @@ pub(crate) fn extract_nsis_with_7zip(
     Ok(())
 }
 
+/// Poll the owned extractor and its ordinary output tree. This is an observed
+/// size limit, not an OS disk quota: output may overshoot between scans.
+fn run_bounded_extractor(
+    command: &mut Command,
+    output: &Path,
+    max_bytes: u64,
+    timeout: std::time::Duration,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    // Never inherit the UI's console or allow captured pipes to fill up.
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| BrowserError::Extract(format!("failed to spawn extractor: {error}")))?;
+    let result = loop {
+        if let Err(error) = check_extracted_budget(output, max_bytes, deadline) {
+            break Err(error);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Recheck after exit: the last scan can precede the last write.
+                break if status.success() {
+                    check_extracted_budget(output, max_bytes, deadline)
+                } else {
+                    Err(BrowserError::Extract(format!(
+                        "extractor exited with status {status}"
+                    )))
+                };
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(error) => break Err(error.into()),
+        }
+    };
+    if result.is_err() {
+        // Stop and reap before the staging/helper directories may be dropped.
+        // A natural exit between polling and kill is also safe to reap.
+        if let Err(error) = child.kill() {
+            if child.try_wait()?.is_none() {
+                return Err(BrowserError::Extract(format!(
+                    "cannot stop extractor: {error}"
+                )));
+            }
+        }
+        child.wait()?;
+    }
+    result
+}
+
+fn check_extracted_budget(root: &Path, max_bytes: u64, deadline: std::time::Instant) -> Result<()> {
+    check_extracted_budget_with_entries(root, max_bytes, 100_000, deadline)
+}
+
+fn check_extracted_budget_with_entries(
+    root: &Path,
+    max_bytes: u64,
+    max_entries: usize,
+    deadline: std::time::Instant,
+) -> Result<()> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut bytes = 0_u64;
+    let mut entries = 0;
+    while let Some(directory) = pending.pop() {
+        check_extraction_deadline(deadline)?;
+        crate::fs_safety::ensure_directory(&directory)?;
+        for entry in std::fs::read_dir(directory)? {
+            check_extraction_deadline(deadline)?;
+            let path = entry?.path();
+            entries += 1;
+            if entries > max_entries {
+                return Err(BrowserError::Extract(format!(
+                    "extraction exceeds the {max_entries}-entry budget"
+                )));
+            }
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.is_dir() {
+                crate::fs_safety::ensure_directory(&path)?;
+                pending.push(path);
+            } else {
+                crate::fs_safety::ensure_file(&path)?;
+                if !metadata.is_file() {
+                    return Err(BrowserError::Extract(
+                        "extractor produced a non-regular file".into(),
+                    ));
+                }
+                bytes = bytes
+                    .checked_add(metadata.len())
+                    .ok_or_else(|| BrowserError::Extract("extracted-size overflow".into()))?;
+                if bytes > max_bytes {
+                    return Err(BrowserError::Extract(format!(
+                        "extraction exceeds the {max_bytes} B budget"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_extraction_deadline(deadline: std::time::Instant) -> Result<()> {
+    if std::time::Instant::now() >= deadline {
+        Err(BrowserError::Extract("extraction deadline exceeded".into()))
+    } else {
+        Ok(())
+    }
+}
+
 /// Moves every entry of `install_dir/<subdir>/` up into `install_dir/` and
 /// removes the now-empty `<subdir>`. Used for ZIPs whose useful contents are
 /// nested inside a brand-named directory rather than at the root (e.g.
@@ -218,7 +349,9 @@ pub(crate) fn extract_nsis_with_7zip(
 /// Returns [`BrowserError::Io`] if the nested directory can be read but a
 /// move fails for a non-conflict reason.
 pub(crate) fn promote_subdir(install_dir: &Path, subdir: &str) -> Result<u32> {
+    crate::fs_safety::ensure_directory(install_dir)?;
     let nested = install_dir.join(subdir);
+    crate::fs_safety::ensure_tree(&nested)?;
     if !nested.is_dir() {
         return Ok(0);
     }
@@ -316,7 +449,7 @@ fn stage_seven_zip(base: &Path) -> Result<SevenZipTools> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    std::fs::create_dir_all(base)?;
+    crate::fs_safety::create_dir_all(base)?;
     // Unpredictable name (OS-seeded `RandomState`) so an attacker cannot
     // pre-create the staging dir with a planted `7z.dll`; `create_dir` (not
     // `create_dir_all`) then fails if the path already exists rather than
@@ -326,8 +459,8 @@ fn stage_seven_zip(base: &Path) -> Result<SevenZipTools> {
     let dir = base.join(format!("nomad-7z-{token:016x}"));
     std::fs::create_dir(&dir)?;
     let exe = dir.join("7z.exe");
-    std::fs::write(&exe, SEVENZIP_EXE)?;
-    std::fs::write(dir.join("7z.dll"), SEVENZIP_DLL)?;
+    crate::fs_safety::write(&exe, SEVENZIP_EXE)?;
+    crate::fs_safety::write(dir.join("7z.dll"), SEVENZIP_DLL)?;
     Ok(SevenZipTools {
         exe,
         _dir: TempDir(dir),
@@ -366,6 +499,8 @@ fn find_marker_dir(root: &Path, marker_exe: &str) -> Option<PathBuf> {
 /// same name. Removes `src` and any now-empty ancestors up to (but excluding)
 /// `dest` when it has finished.
 fn flatten_into(src: &Path, dest: &Path) -> Result<()> {
+    crate::fs_safety::ensure_tree(src)?;
+    crate::fs_safety::ensure_tree(dest)?;
     if src == dest {
         return Ok(());
     }
@@ -402,6 +537,225 @@ fn flatten_into(src: &Path, dest: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+
+    #[test]
+    fn embedded_7zip_matches_reviewed_manifest() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../payloads/7zip/manifest.json")).unwrap();
+        for (name, bytes) in [
+            ("7z.exe", SEVENZIP_EXE),
+            ("7z.dll", SEVENZIP_DLL),
+            (
+                "LICENSE.txt",
+                include_bytes!("../payloads/7zip/LICENSE.txt").as_slice(),
+            ),
+        ] {
+            let expected = manifest["files"][name]
+                .as_str()
+                .expect("reviewed digest is required");
+            crate::gpg::sha256::verify(bytes, expected).unwrap_or_else(|error| {
+                panic!("bundled {name} differs from the reviewed manifest: {error}")
+            });
+        }
+        assert_eq!(manifest["architecture"], "x86_64");
+        for bytes in [SEVENZIP_EXE, SEVENZIP_DLL] {
+            assert_eq!(&bytes[..2], b"MZ");
+            let offset = u32::from_le_bytes(bytes[0x3c..0x40].try_into().unwrap()) as usize;
+            assert_eq!(&bytes[offset..offset + 4], b"PE\0\0");
+            assert_eq!(
+                u16::from_le_bytes(bytes[offset + 4..offset + 6].try_into().unwrap()),
+                0x8664,
+                "the bundled extractor must match the x64 release target"
+            );
+        }
+    }
+
+    // Child runs this same inert test helper, never an installer or browser.
+    #[test]
+    fn extractor_process_fixture() {
+        let Some(output) = std::env::var_os("NOMAD_EXTRACTOR_TEST_OUTPUT") else {
+            return;
+        };
+        let mode = std::env::var("NOMAD_EXTRACTOR_TEST_MODE").unwrap();
+        if mode == "oversize" {
+            std::fs::write(Path::new(&output).join("inert.bin"), [0; 512]).unwrap();
+        }
+        if mode == "exit-oversize" {
+            std::fs::write(Path::new(&output).join("inert.bin"), [0; 512]).unwrap();
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        // Kill/reap must prevent this delayed write, even after failure returns.
+        std::fs::write(Path::new(&output).join("still-running"), b"bad").unwrap();
+    }
+
+    fn fixture_command(output: &Path, mode: &str) -> Command {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "extract::tests::extractor_process_fixture"])
+            .env("NOMAD_EXTRACTOR_TEST_OUTPUT", output)
+            .env("NOMAD_EXTRACTOR_TEST_MODE", mode);
+        command
+    }
+
+    #[test]
+    fn extractor_deadline_kills_and_reaps_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let start = std::time::Instant::now();
+        let mut command = fixture_command(dir.path(), "sleep");
+        let error = run_bounded_extractor(
+            &mut command,
+            dir.path(),
+            1024,
+            std::time::Duration::from_millis(100),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("deadline"));
+        assert!(start.elapsed() < std::time::Duration::from_secs(4));
+        assert!(!dir.path().join("still-running").exists());
+        // Removing the directory after reaping cannot race with a live writer.
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn extractor_budget_kills_and_reaps_running_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = fixture_command(dir.path(), "oversize");
+        let error = run_bounded_extractor(
+            &mut command,
+            dir.path(),
+            64,
+            std::time::Duration::from_secs(4),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("budget"));
+        assert!(!dir.path().join("still-running").exists());
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn successful_extractor_exit_still_checks_final_output_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = fixture_command(dir.path(), "exit-oversize");
+        assert!(run_bounded_extractor(
+            &mut command,
+            dir.path(),
+            64,
+            std::time::Duration::from_secs(4)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn zero_length_files_still_consume_the_entry_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("one"), b"").unwrap();
+        std::fs::write(dir.path().join("two"), b"").unwrap();
+        let error = check_extracted_budget_with_entries(
+            dir.path(),
+            1024,
+            1,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("entry budget"));
+    }
+
+    #[test]
+    fn extractor_nonzero_exit_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.arg("--not-a-test-harness-option");
+        assert!(run_bounded_extractor(
+            &mut command,
+            dir.path(),
+            1024,
+            std::time::Duration::from_secs(4)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn bundled_extraction_rejects_output_over_the_budget_before_promotion() {
+        let fixture = tempfile::tempdir().unwrap();
+        let archive = fixture.path().join("pkg.zip");
+        let output = fixture.path().join("Browser.stage");
+        let active = fixture.path().join("Browser");
+        let profile = fixture.path().join("Data");
+        std::fs::create_dir(&active).unwrap();
+        std::fs::create_dir(&profile).unwrap();
+        std::fs::write(active.join("firefox.exe"), b"working browser").unwrap();
+        std::fs::write(profile.join("sentinel"), b"user data").unwrap();
+        let mut zip = zip::ZipWriter::new(File::create(&archive).unwrap());
+        zip.start_file(
+            "bundle/firefox.exe",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(&[b'x'; 512]).unwrap();
+        zip.finish().unwrap();
+        let result = extract_nsis_with_limits(
+            &archive,
+            &output,
+            "firefox.exe",
+            64,
+            std::time::Duration::from_secs(10),
+        );
+        assert!(
+            result.is_err(),
+            "over-budget extracted output must not be promoted"
+        );
+        assert!(!output.join("firefox.exe").exists());
+        assert_eq!(
+            std::fs::read(active.join("firefox.exe")).unwrap(),
+            b"working browser"
+        );
+        assert_eq!(
+            std::fs::read(profile.join("sentinel")).unwrap(),
+            b"user data"
+        );
+    }
+
+    #[test]
+    fn archive_promotion_rejects_linked_sources_without_removing_them() {
+        let fixture = tempfile::tempdir().unwrap();
+        let dest = fixture.path().join("stage");
+        let foreign = fixture.path().join("foreign");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("file"), b"keep").unwrap();
+        let linked = dest.join("LibreWolf");
+        crate::tests::owned_directory_link(&fixture, &linked, &foreign);
+        assert!(promote_subdir(&dest, "LibreWolf").is_err());
+        assert!(flatten_into(&linked, &dest).is_err());
+        assert_eq!(std::fs::read(foreign.join("file")).unwrap(), b"keep");
+        assert!(linked.exists());
+        assert!(!dest.join("file").exists());
+    }
+
+    #[test]
+    fn zip_extraction_rejects_a_linked_output_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let stage = temp.path().join("stage");
+        let foreign = temp.path().join("foreign");
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("victim"), b"foreign data").unwrap();
+        crate::tests::owned_directory_link(&temp, &stage.join("nested"), &foreign);
+        let archive = temp.path().join("pkg.zip");
+        let mut zip = zip::ZipWriter::new(File::create(&archive).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("bundle/nested/victim", options).unwrap();
+        zip.write_all(b"replacement").unwrap();
+        zip.start_file("bundle/readme", options).unwrap();
+        zip.write_all(b"fixture").unwrap();
+        zip.finish().unwrap();
+        assert!(extract_zip(&archive, &stage).is_err());
+        assert_eq!(
+            std::fs::read(foreign.join("victim")).unwrap(),
+            b"foreign data"
+        );
+    }
 
     use super::*;
 

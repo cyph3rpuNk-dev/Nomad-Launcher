@@ -11,8 +11,8 @@ use std::process::Command;
 use serde::Deserialize;
 
 use super::{
-    github::map_network_err, read_version_marker, BrowserError, BrowserFamily, Engine, Hardening,
-    InstalledVersion, ProgressSink, Result, VersionInfo,
+    read_version_marker, BrowserError, BrowserFamily, Engine, Hardening, InstalledVersion,
+    ProgressSink, Result, VersionInfo,
 };
 use crate::config::Arch;
 use crate::extensions::{stage_chromium_ubo_from_gorhill_zip, staged_ubo_dir};
@@ -215,6 +215,10 @@ fn parse_release(release: &Release, arch: Arch) -> Result<VersionInfo> {
 }
 
 impl BrowserFamily for UngoogledChromium {
+    fn package_target(&self) -> super::PackageTarget {
+        self.arch.into()
+    }
+
     fn id(&self) -> &'static str {
         "ungoogled-chromium"
     }
@@ -227,6 +231,10 @@ impl BrowserFamily for UngoogledChromium {
         Engine::Chromium
     }
 
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::Chromium(EXECUTABLE)
+    }
+
     fn public_key(&self) -> Option<&'static [u8]> {
         None // ungoogled-chromium publishes no GPG signature.
     }
@@ -236,21 +244,8 @@ impl BrowserFamily for UngoogledChromium {
     }
 
     async fn fetch_latest_version(&self) -> Result<VersionInfo> {
-        let client = reqwest::Client::builder()
-            .user_agent("nomad-portable")
-            .redirect(crate::downloader::redirect_policy())
-            .build()
-            .map_err(|e| BrowserError::Network(e.to_string()))?;
-        let body = client
-            .get(&self.releases_url)
-            .send()
-            .await
-            .map_err(map_network_err)?
-            .error_for_status()
-            .map_err(map_network_err)?
-            .text()
-            .await
-            .map_err(map_network_err)?;
+        let client = super::github::build_client()?;
+        let body = crate::network::fetch_text(&client, &self.releases_url).await?;
         let release: Release =
             serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))?;
         parse_release(&release, self.arch)
@@ -310,39 +305,25 @@ impl BrowserFamily for UngoogledChromium {
     fn prepare_launch(
         &self,
         install_dir: &Path,
-        _hardening_config: crate::config::HardeningConfig,
+        hardening_config: crate::config::HardeningConfig,
     ) -> Result<()> {
-        // Drop `initial_preferences` next to chrome.exe so freshly created
-        // profiles start with Developer mode = ON (required for the toggle in
-        // chrome://extensions to be visibly enabled) *and* the profile-pref
-        // hardening (PREFERENCES). Chromium regenerates Default/Preferences from
-        // initial_preferences on first run, so prefs must travel through here to
-        // be active on the first launch rather than only the second.
-        let initial_prefs =
-            match crate::hardening::build_initial_preferences(INITIAL_PREFERENCES, PREFERENCES) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!(
-                        browser = self.id(),
-                        error = %e,
-                        "failed to merge profile prefs into initial_preferences; \
-                         falling back to template (first-run profile hardening will not apply)"
-                    );
-                    INITIAL_PREFERENCES.to_owned()
-                }
-            };
-        if let Err(e) =
-            crate::hardening::write_chromium_initial_preferences(install_dir, &initial_prefs)
-        {
-            tracing::warn!(
-                browser = self.id(),
-                error = %e,
-                "failed to write initial_preferences; new profiles will start with Developer mode off"
-            );
-        }
+        // Chromium regenerates new profiles from this template. Gate privacy
+        // defaults on the same toggle as the profile seed; keep Developer mode
+        // from the base template in either case. Rewrite on each preparation
+        // so disabling hardening also clears a stale hardened first-run seed.
+        let initial_prefs = if hardening_config.enabled {
+            crate::hardening::build_initial_preferences(INITIAL_PREFERENCES, PREFERENCES)?
+        } else {
+            INITIAL_PREFERENCES.to_owned()
+        };
+        crate::hardening::write_chromium_initial_preferences(install_dir, &initial_prefs)?;
         // uBO is staged in fetch_extension_updates (async, GPG-verified download
         // from gorhill/uBlock). Nothing synchronous to stage here.
         Ok(())
+    }
+
+    fn preserve_state_across_update(&self, current_install: &Path, stage_dir: &Path) -> Result<()> {
+        crate::extensions::preserve_chromium_ubo(current_install, stage_dir)
     }
 
     fn profile_dir(&self, install_dir: &Path) -> Option<std::path::PathBuf> {
@@ -505,16 +486,12 @@ struct GitTagVerification {
 ///
 /// # Trust model
 ///
-/// The GPG signature covers the release **tag/commit only** — it proves the
-/// release event is gorhill's, but GitHub release assets are mutable
-/// independently of git history, are not covered by that signature, and
-/// gorhill publishes no asset checksums (`digest` is `null`). The zip's
-/// bytes are therefore trusted to GitHub (TLS + API), with
-/// [`super::github::asset_provenance_suspect`] as tamper evidence against a
-/// post-publication asset swap. Rebuilding the zip from the signed source
-/// tree is impossible in principle: it bundles filter lists pulled from the
-/// latest `uBlockOrigin/uAssets` branches at gorhill's build time, which the
-/// signed commit does not pin.
+/// The GPG signature covers the release **tag/commit only**, not its mutable
+/// release assets. Before extraction, the ZIP bytes must also match GitHub's
+/// SHA-256 asset digest. Missing or malformed digests fail closed. The digest
+/// trusts GitHub's release metadata; it is not a publisher signature over the
+/// archive. The upload timeline provides additional evidence of an asset swap.
+/// Already-current installed files are not rehashed by this update check.
 ///
 /// `gorhill_key` is the embedded ASCII-armored GPG public key bytes. Passing
 /// it as a parameter enables tests to inject a test key.
@@ -578,9 +555,8 @@ async fn update_ubo_from_gorhill(
 
     // ── Asset provenance check ────────────────────────────────────────────────
     // The GPG signature below covers the release *tag/commit only* — GitHub
-    // release assets are mutable independently of git history and gorhill
-    // publishes no asset checksums, so the zip's upload timeline is the only
-    // tamper evidence available against a post-publication asset swap.
+    // release assets and their GitHub digests are mutable independently of
+    // git history, so retain the upload timeline as additional tamper evidence.
     if super::github::asset_provenance_suspect(asset, &release) {
         tracing::warn!(
             version = %upstream_version,
@@ -591,6 +567,18 @@ async fn update_ubo_from_gorhill(
         );
         return Ok(());
     }
+
+    // Require well-formed integrity metadata before requesting the archive.
+    let expected_sha256 = asset
+        .digest
+        .as_deref()
+        .and_then(|digest| digest.strip_prefix("sha256:"))
+        .filter(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| {
+            BrowserError::Verification(format!(
+                "gorhill uBO {upstream_version} asset has no valid SHA-256 digest"
+            ))
+        })?;
 
     // ── Resolve tag ref and GPG-verify ────────────────────────────────────────
     let verification =
@@ -611,14 +599,17 @@ async fn update_ubo_from_gorhill(
         url = asset.browser_download_url,
         "downloading gorhill uBO zip (release tag GPG-verified, asset provenance checked)"
     );
-    let zip_bytes = super::github::fetch_raw(&client, &asset.browser_download_url).await?;
+    let zip_bytes = super::github::fetch_archive(&client, &asset.browser_download_url).await?;
+    crate::gpg::sha256::verify(&zip_bytes, expected_sha256).map_err(|e| {
+        BrowserError::Verification(format!("gorhill uBO {upstream_version} ZIP: {e}"))
+    })?;
 
     stage_chromium_ubo_from_gorhill_zip(install_dir, &zip_bytes, &upstream_version)?;
     crate::version_cache::update_ubo_version(cache_path, &upstream_version);
 
     tracing::info!(
         version = %upstream_version,
-        "gorhill uBO staged (release tag GPG-verified, asset provenance checked)"
+        "gorhill uBO staged (ZIP SHA-256 verified, release tag GPG-verified, asset provenance checked)"
     );
     Ok(())
 }
@@ -633,48 +624,21 @@ async fn fetch_gorhill_tag_verification(
     tag: &str,
 ) -> Result<Option<GitTagVerification>> {
     let tag_ref_url = format!("{api_base_url}/git/refs/tags/{tag}");
-    let body = client
-        .get(&tag_ref_url)
-        .send()
-        .await
-        .map_err(super::github::map_network_err)?
-        .error_for_status()
-        .map_err(super::github::map_network_err)?
-        .text()
-        .await
-        .map_err(super::github::map_network_err)?;
+    let body = crate::network::fetch_text(client, &tag_ref_url).await?;
     let tag_ref: GitTagRef =
         serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))?;
 
     match tag_ref.object.object_type.as_str() {
         "commit" => {
             let url = format!("{api_base_url}/commits/{}", tag_ref.object.sha);
-            let body = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(super::github::map_network_err)?
-                .error_for_status()
-                .map_err(super::github::map_network_err)?
-                .text()
-                .await
-                .map_err(super::github::map_network_err)?;
+            let body = crate::network::fetch_text(client, &url).await?;
             let commit: GitCommitResponse =
                 serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))?;
             Ok(commit.commit.verification)
         }
         "tag" => {
             let url = format!("{api_base_url}/git/tags/{}", tag_ref.object.sha);
-            let body = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(super::github::map_network_err)?
-                .error_for_status()
-                .map_err(super::github::map_network_err)?
-                .text()
-                .await
-                .map_err(super::github::map_network_err)?;
+            let body = crate::network::fetch_text(client, &url).await?;
             let tag_obj: GitTagObject =
                 serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))?;
             Ok(tag_obj.verification)
@@ -827,6 +791,7 @@ mod tests {
         assert!(browser.installed_version(dir.path()).is_none());
 
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "148.0.7778.96-1.1".to_owned(),
             engine_version: "148.0.7778.96".to_owned(),
         };
@@ -1066,6 +1031,94 @@ mod tests {
     }
 
     #[test]
+    fn prepare_launch_respects_hardening_toggle_in_initial_preferences() {
+        for existing_profile in [false, true] {
+            let fixture = tempfile::tempdir().unwrap();
+            let install = fixture.path().join("Browser");
+            let profile = fixture.path().join("Data/Default/Preferences");
+            let user_prefs = br#"{"homepage":"keep","enable_do_not_track":false,"custom":[1,2]}"#;
+            if existing_profile {
+                std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+                std::fs::write(&profile, user_prefs).unwrap();
+            }
+            let browser = UngoogledChromium::new(Arch::X64);
+            // Starts unhardened, enables hardening, then removes the stale
+            // first-run privacy payload again. No real browser is launched.
+            for enabled in [false, true, false] {
+                let config = crate::config::HardeningConfig {
+                    enabled,
+                    ..Default::default()
+                };
+                browser.prepare_launch(&install, config).unwrap();
+                let initial: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(install.join("initial_preferences")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(initial["extensions"]["ui"]["developer_mode"], true);
+                if enabled {
+                    assert_eq!(initial["https_only_mode_enabled"], true);
+                    assert_eq!(initial["safebrowsing"]["enabled"], false);
+                    assert_eq!(initial["profile"]["cookie_controls_mode"], 1);
+                } else {
+                    assert_eq!(
+                        initial,
+                        serde_json::json!({"extensions":{"ui":{"developer_mode":true}}}),
+                        "disabled hardening must not seed privacy defaults"
+                    );
+                }
+                if existing_profile {
+                    let actual: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&profile).unwrap()).unwrap();
+                    let expected: serde_json::Value = serde_json::from_slice(user_prefs).unwrap();
+
+                    assert_eq!(
+                        actual, expected,
+                        "existing user settings must survive the toggle"
+                    );
+                } else {
+                    assert!(
+                        !fixture.path().join("Data").exists(),
+                        "leave new profile creation to Chromium"
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepare_launch_rejects_failed_toggle_write_and_preserves_old_seed() {
+        let fixture = tempfile::tempdir().unwrap();
+        let install = fixture.path().join("Browser");
+        let browser = UngoogledChromium::new(Arch::X64);
+        browser
+            .prepare_launch(&install, crate::config::HardeningConfig::default())
+            .unwrap();
+        let path = install.join("initial_preferences");
+        let original = std::fs::read(&path).unwrap();
+        let permissions = std::fs::metadata(&path).unwrap().permissions();
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(&path, readonly).unwrap();
+        let config = crate::config::HardeningConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let result = browser.prepare_launch(&install, config);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        assert!(
+            result.is_err(),
+            "a stale hardened template must not silently survive disabling hardening"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(
+            std::fs::read_dir(&install).unwrap().count(),
+            1,
+            "private write stage must be cleaned"
+        );
+    }
+
+    #[test]
     fn metadata_is_stable() {
         let browser = UngoogledChromium::new(Arch::X64);
         assert_eq!(browser.id(), "ungoogled-chromium");
@@ -1246,13 +1299,35 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
         commit_json: &str,
         zip_bytes: &[u8],
     ) {
+        let digest = format!("sha256:{}", crate::gpg::sha256::hex(zip_bytes));
+        mock_gorhill_commit_flow_with_digest(
+            server,
+            tag,
+            commit_sha,
+            commit_json,
+            zip_bytes,
+            Some(&digest),
+        );
+    }
+
+    fn mock_gorhill_commit_flow_with_digest(
+        server: &httpmock::MockServer,
+        tag: &str,
+        commit_sha: &str,
+        commit_json: &str,
+        zip_bytes: &[u8],
+        digest: Option<&str>,
+    ) {
         let zip_path = format!("/{tag}.zip");
         let zip_url = server.url(&zip_path);
+        let mut release: serde_json::Value =
+            serde_json::from_str(&gorhill_release_json(tag, &zip_url)).unwrap();
+        release["assets"][0]["digest"] = serde_json::json!(digest);
         server.mock(|when, then| {
             when.method(GET).path("/releases/latest");
             then.status(200)
                 .header("Content-Type", "application/json")
-                .body(gorhill_release_json(tag, &zip_url));
+                .body(release.to_string());
         });
         server.mock(|when, then| {
             when.method(GET).path(format!("/git/refs/tags/{tag}"));
@@ -1277,7 +1352,117 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
     // ── tests ─────────────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn gorhill_ubo_update_stages_on_valid_gpg_signature() {
+    async fn gorhill_ubo_update_rejects_digest_mismatch_without_changing_state() {
+        let server = MockServer::start();
+        let zip = make_ubo_zip();
+        let digest = format!("sha256:{}", "0".repeat(64));
+        let commit_json =
+            gorhill_commit_json(true, "valid", Some(TEST_GPG_PAYLOAD), Some(TEST_GPG_SIG));
+        mock_gorhill_commit_flow_with_digest(
+            &server,
+            "1.99.0",
+            "abc123",
+            &commit_json,
+            &zip,
+            Some(&digest),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        let extension = install.join("nomad-extensions/uBlock0");
+        std::fs::create_dir_all(&extension).unwrap();
+        let manifest = br#"{"version":"1.0.0"}"#;
+        std::fs::write(extension.join("manifest.json"), manifest).unwrap();
+        std::fs::write(extension.join("working.js"), b"old extension").unwrap();
+        let cache_path = dir.path().join("cache.toml");
+        crate::version_cache::update_ubo_version(&cache_path, "1.0.0");
+        let cache_before = std::fs::read(&cache_path).unwrap();
+
+        let err = update_ubo_from_gorhill(
+            &install,
+            &server.base_url(),
+            true,
+            &cache_path,
+            TEST_GPG_PUBKEY.as_bytes(),
+        )
+        .await
+        .expect_err("a signed release tag cannot authorize mismatched ZIP bytes");
+        assert!(matches!(err, BrowserError::Verification(_)), "{err:?}");
+        assert_eq!(
+            std::fs::read(extension.join("manifest.json")).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            std::fs::read(extension.join("working.js")).unwrap(),
+            b"old extension"
+        );
+        assert_eq!(std::fs::read(&cache_path).unwrap(), cache_before);
+        assert_eq!(
+            std::fs::read_dir(extension.parent().unwrap())
+                .unwrap()
+                .count(),
+            1,
+            "verification must not create staging, backup, or lock files"
+        );
+    }
+
+    #[tokio::test]
+    async fn gorhill_ubo_update_rejects_missing_or_malformed_digest_before_download() {
+        let hex = "a".repeat(64);
+        let cases = vec![
+            None,
+            Some(String::new()),
+            Some(format!("sha512:{hex}")),
+            Some(format!("sha256:{}", "a".repeat(63))),
+            Some(format!("sha256:{}", "a".repeat(65))),
+            Some(format!("sha256:{}g", "a".repeat(63))),
+            Some(format!("sha256:{hex} ")),
+            Some(format!(" sha256:{hex}")),
+        ];
+        for digest in cases {
+            let server = MockServer::start();
+            let mut release: serde_json::Value = serde_json::from_str(&gorhill_release_json(
+                "1.99.0",
+                &server.url("/extension.zip"),
+            ))
+            .unwrap();
+            release["assets"][0]["digest"] = serde_json::json!(digest);
+            server.mock(|when, then| {
+                when.method(GET).path("/releases/latest");
+                then.status(200).body(release.to_string());
+            });
+            let archive = server.mock(|when, then| {
+                when.method(GET).path("/extension.zip");
+                then.status(500);
+            });
+            let tag = server.mock(|when, then| {
+                when.method(GET).path("/git/refs/tags/1.99.0");
+                then.status(500);
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let install = dir.path().join("Browser");
+            let cache_path = dir.path().join("cache.toml");
+            let err = update_ubo_from_gorhill(
+                &install,
+                &server.base_url(),
+                true,
+                &cache_path,
+                TEST_GPG_PUBKEY.as_bytes(),
+            )
+            .await
+            .expect_err("a valid SHA-256 digest is required");
+            assert!(
+                matches!(err, BrowserError::Verification(_)),
+                "digest {digest:?}: {err:?}"
+            );
+            archive.assert_calls(0);
+            tag.assert_calls(0);
+            assert!(!install.exists());
+            assert!(!cache_path.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn gorhill_ubo_update_stages_on_valid_gpg_signature_and_digest() {
         let tag = "1.99.0";
         let zip = make_ubo_zip();
         // Use the pre-computed test key + signature (gorhill_key_armored bypasses
@@ -1387,6 +1572,34 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
     }
 
     #[tokio::test]
+    async fn gorhill_ubo_update_rejects_invalid_gpg_signature_despite_matching_digest() {
+        let server = MockServer::start();
+        let zip = make_ubo_zip();
+        let commit_json = gorhill_commit_json(
+            true,
+            "valid",
+            Some("tampered signed payload"),
+            Some(TEST_GPG_SIG),
+        );
+        mock_gorhill_commit_flow(&server, "1.99.0", "abc123", &commit_json, &zip);
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        let cache_path = dir.path().join("cache.toml");
+        let err = update_ubo_from_gorhill(
+            &install,
+            &server.base_url(),
+            true,
+            &cache_path,
+            TEST_GPG_PUBKEY.as_bytes(),
+        )
+        .await
+        .expect_err("matching digest must not bypass GPG verification");
+        assert!(matches!(err, BrowserError::Verification(_)), "{err:?}");
+        assert!(!install.exists());
+        assert!(!cache_path.exists());
+    }
+
+    #[tokio::test]
     async fn gorhill_ubo_update_rejects_missing_signature_fields() {
         let tag = "1.99.0";
         let zip = make_ubo_zip();
@@ -1431,7 +1644,7 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
                 .await
                 .expect("already-current must not error");
             assert_eq!(
-                tag_ref_mock.hits(),
+                tag_ref_mock.calls(),
                 0,
                 "no further API calls when already current and staged"
             );
@@ -1496,7 +1709,7 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
                 .await
                 .expect("deferred update must not error");
             assert_eq!(
-                tag_ref_mock.hits(),
+                tag_ref_mock.calls(),
                 0,
                 "no GPG/download when auto_download = false"
             );

@@ -21,3 +21,8 @@ rustflags = [
     # 0x800 = LOAD_LIBRARY_SEARCH_SYSTEM32 (WinBase.h).
     "-C", "link-arg=/DEPENDENTLOADFLAG:0x800",
 ]
+
+# Static CRT needs an explicit --target so build scripts/proc macros stay host-side.
+# Supported Windows releases use MSVC; non-Windows tooling keeps its native runtime.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

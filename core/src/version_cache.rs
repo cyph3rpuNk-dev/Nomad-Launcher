@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::browsers::VersionInfo;
+use crate::browsers::{PackageTarget, VersionInfo};
 
 /// Cache TTL: 6 hours. Sized to keep four checks/day across all browsers
 /// comfortably under GitHub's 60-req/hour unauthenticated cap.
@@ -20,6 +20,9 @@ const CACHE_TTL_SECS: u64 = 6 * 60 * 60;
 /// the API was last queried.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VersionCache {
+    /// Package-selection target; absent in legacy and extension-only records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<PackageTarget>,
     /// Unix timestamp (seconds) when the cache was written.
     pub fetched_at: u64,
     pub browser_version: String,
@@ -36,8 +39,9 @@ pub struct VersionCache {
 
 impl VersionCache {
     /// Creates a cache entry from a freshly fetched [`VersionInfo`].
-    pub fn from_version_info(info: &VersionInfo) -> Self {
+    pub fn from_version_info(info: &VersionInfo, target: PackageTarget) -> Self {
         Self {
+            target: Some(target),
             fetched_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -63,16 +67,20 @@ impl VersionCache {
         self
     }
 
-    /// Converts the cache entry back into a [`VersionInfo`].
-    pub fn into_version_info(self) -> VersionInfo {
-        VersionInfo {
+    /// Converts only a known, matching target back into release metadata.
+    /// Legacy/extension-only and other-target records are cache misses.
+    pub fn into_version_info(self, target: PackageTarget) -> Option<VersionInfo> {
+        if self.target != Some(target) {
+            return None;
+        }
+        Some(VersionInfo {
             browser_version: self.browser_version,
             engine_version: self.engine_version,
             download_url: self.download_url,
             signature_url: self.signature_url,
             sha256: self.sha256,
             sha512: self.sha512,
-        }
+        })
     }
 
     /// Returns `false` when `download_url` points outside the known distribution
@@ -108,6 +116,7 @@ impl VersionCache {
     /// Reads and deserialises a cache from `path`.  Returns `None` on any
     /// error (missing file, malformed TOML, etc.).
     pub fn load(path: &Path) -> Option<Self> {
+        crate::fs_safety::ensure_file(path).ok()?;
         let text = std::fs::read_to_string(path).ok()?;
         toml::from_str(&text).ok()
     }
@@ -123,12 +132,17 @@ impl VersionCache {
         // processes via the pid. Without it two writers could clobber the same
         // temp file before either rename completes.
         static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+        if crate::fs_safety::ensure_file(path).is_err() {
+            return;
+        }
 
         let Ok(text) = toml::to_string(self) else {
             return;
         };
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if crate::fs_safety::create_dir_all(parent).is_err() {
+                return;
+            }
         }
         // Write to a unique sibling temp file, then atomically replace the
         // target. `std::fs::rename` is MoveFileExW(MOVEFILE_REPLACE_EXISTING)
@@ -137,8 +151,7 @@ impl VersionCache {
         let pid = std::process::id();
         let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let tmp = path.with_extension(format!("tmp.{pid}.{seq}"));
-        if std::fs::write(&tmp, text).is_err() {
-            let _ = std::fs::remove_file(&tmp);
+        if crate::fs_safety::write_new(&tmp, text.as_bytes()).is_err() {
             return;
         }
         if std::fs::rename(&tmp, path).is_err() {
@@ -153,6 +166,7 @@ impl VersionCache {
 /// stale) so the browser-version check still runs on the next launch.
 pub fn update_ubo_version(path: &Path, version: &str) {
     let mut cache = VersionCache::load(path).unwrap_or_else(|| VersionCache {
+        target: None,
         fetched_at: 0,
         browser_version: String::new(),
         engine_version: String::new(),
@@ -172,6 +186,34 @@ pub fn update_ubo_version(path: &Path, version: &str) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn linked_cache_directory_is_not_read_or_written() {
+        let fixture = tempfile::tempdir().unwrap();
+        let foreign = fixture.path().join("foreign");
+        std::fs::create_dir_all(&foreign).unwrap();
+        let link = fixture.path().join("state");
+        crate::tests::owned_directory_link(&fixture, &link, &foreign);
+        let info = crate::browsers::VersionInfo {
+            browser_version: "1.0".into(),
+            engine_version: "1.0".into(),
+            download_url: "https://example.invalid/pkg.zip".into(),
+            signature_url: None,
+            sha256: None,
+            sha512: None,
+        };
+        let cache = VersionCache::from_version_info(&info, PackageTarget::X64);
+        let original = toml::to_string(&cache).unwrap();
+        std::fs::write(foreign.join("cache.toml"), &original).unwrap();
+        let target = link.join("cache.toml");
+        assert!(VersionCache::load(&target).is_none());
+        cache.save(&target);
+        assert_eq!(
+            std::fs::read_to_string(foreign.join("cache.toml")).unwrap(),
+            original
+        );
+        assert_eq!(std::fs::read_dir(&foreign).unwrap().count(), 1);
+    }
+
     fn fixture_info(version: &str) -> VersionInfo {
         VersionInfo {
             browser_version: version.to_owned(),
@@ -184,7 +226,49 @@ mod tests {
     }
 
     fn fixture_cache(version: &str) -> VersionCache {
-        VersionCache::from_version_info(&fixture_info(version))
+        VersionCache::from_version_info(&fixture_info(version), PackageTarget::X64)
+    }
+
+    #[test]
+    fn cache_requires_matching_known_package_target() {
+        for target in [
+            PackageTarget::X64,
+            PackageTarget::X86,
+            PackageTarget::Arm64,
+            PackageTarget::Portable,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("cache.toml");
+            let mut cache = VersionCache::from_version_info(&fixture_info("2.0"), target);
+            cache.ubo_version = Some("1.70.0".into());
+            cache.save(&path);
+            for requested in [
+                PackageTarget::X64,
+                PackageTarget::X86,
+                PackageTarget::Arm64,
+                PackageTarget::Portable,
+            ] {
+                let loaded = VersionCache::load(&path).unwrap();
+                assert_eq!(loaded.target, Some(target));
+                assert_eq!(
+                    loaded.into_version_info(requested).is_some(),
+                    requested == target
+                );
+            }
+            update_ubo_version(&path, "1.71.0");
+            assert_eq!(VersionCache::load(&path).unwrap().target, Some(target));
+            let mut legacy = VersionCache::load(&path).unwrap();
+            legacy.target = None;
+            legacy.save(&path);
+            assert_eq!(
+                VersionCache::load(&path).unwrap().ubo_version.as_deref(),
+                Some("1.71.0")
+            );
+            assert!(VersionCache::load(&path)
+                .unwrap()
+                .into_version_info(target)
+                .is_none());
+        }
     }
 
     #[test]
@@ -193,7 +277,7 @@ mod tests {
         let path = dir.path().join("nomad-version-cache.toml");
 
         let info = fixture_info("1.2.3");
-        VersionCache::from_version_info(&info).save(&path);
+        VersionCache::from_version_info(&info, PackageTarget::X64).save(&path);
 
         let loaded = VersionCache::load(&path).expect("cache must be readable");
         assert_eq!(loaded.browser_version, "1.2.3");
@@ -203,8 +287,8 @@ mod tests {
     #[test]
     fn into_version_info_preserves_all_fields() {
         let info = fixture_info("2.0.0");
-        let cached = VersionCache::from_version_info(&info);
-        let roundtripped = cached.into_version_info();
+        let cached = VersionCache::from_version_info(&info, PackageTarget::X64);
+        let roundtripped = cached.into_version_info(PackageTarget::X64).unwrap();
         assert_eq!(roundtripped.browser_version, info.browser_version);
         assert_eq!(roundtripped.download_url, info.download_url);
         assert_eq!(roundtripped.sha256, info.sha256);
@@ -213,6 +297,7 @@ mod tests {
     #[test]
     fn fresh_cache_is_fresh() {
         let cache = VersionCache {
+            target: None,
             fetched_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -231,6 +316,7 @@ mod tests {
     #[test]
     fn expired_cache_is_stale() {
         let cache = VersionCache {
+            target: None,
             fetched_at: 0, // Unix epoch — always expired
             browser_version: "1.0".to_owned(),
             engine_version: "1.0".to_owned(),
@@ -255,6 +341,7 @@ mod tests {
     #[test]
     fn plausible_url_passes_host_check() {
         let mut cache = VersionCache {
+            target: None,
             fetched_at: 0,
             browser_version: "1.0".to_owned(),
             engine_version: "1.0".to_owned(),
@@ -396,7 +483,7 @@ mod tests {
                         // A racing reader must always see a complete file (or
                         // none yet) — never a half-written one.
                         if let Some(c) = VersionCache::load(&p) {
-                            assert!(!c.browser_version.is_empty());
+                            assert_ne!(c.browser_version, "");
                         }
                     }
                 })

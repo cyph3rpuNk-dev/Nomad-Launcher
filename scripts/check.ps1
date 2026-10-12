@@ -25,15 +25,33 @@ try {
         }
     }
 
+    # --target separates Windows static-CRT target crates from host proc macros.
+    $targetArgs = @()
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $targetArgs = @('--target', 'x86_64-pc-windows-msvc') }
     if (-not $AuditOnly) {
+        Invoke-GateStep 'Artifact guard regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-artifact-guard.ps1')
+        }
+        Invoke-GateStep 'Audit gate regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-audit-gate.ps1')
+        }
+        Invoke-GateStep 'Release publishing regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-release-publish.ps1')
+        }
+        Invoke-GateStep 'Build safeguard regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-build-safeguards.ps1')
+        }
+        Invoke-GateStep 'CI safeguard regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-ci-safeguards.ps1')
+        }
         Invoke-GateStep 'Formatting' {
             cargo fmt --all -- --check
         }
         Invoke-GateStep 'Clippy' {
-            cargo clippy --workspace --all-targets -- -D warnings
+            cargo clippy --workspace --all-targets --locked @targetArgs -- -D warnings
         }
         Invoke-GateStep 'Tests' {
-            cargo test --workspace
+            cargo test --workspace --locked @targetArgs
         }
     }
 
@@ -43,10 +61,9 @@ try {
             throw 'cargo-audit is required. Install it with: cargo install cargo-audit --locked'
         }
         Invoke-GateStep 'Dependency advisories' {
-            cargo audit `
-                --ignore RUSTSEC-2023-0071 `
-                --ignore RUSTSEC-2026-0194 `
-                --ignore RUSTSEC-2026-0195
+            # RSA is used only for public-key signature verification. The
+            # unfixed private-key timing advisory is documented in SECURITY.md.
+            cargo audit --deny warnings --ignore RUSTSEC-2023-0071
         }
     }
 

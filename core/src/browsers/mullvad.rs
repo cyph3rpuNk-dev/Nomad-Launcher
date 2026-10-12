@@ -21,9 +21,9 @@
 //!
 //! ## Profile layout
 //!
-//! Like Tor Browser, Mullvad stores its profile inside the installation tree
-//! (no `%APPDATA%` writes), so the entire `Browser/` + `Data/` tree is
-//! portable to a USB drive without modification.
+//! Nomad selects `Data/Profile` beside the installation directory via
+//! `--profile`. The profile stays outside the replaceable browser bundle,
+//! so an update can replace `Browser/` while preserving profile data.
 
 use std::path::Path;
 use std::process::Command;
@@ -98,6 +98,10 @@ fn arch_asset_name(arch: Arch, version: &str) -> Result<String> {
 }
 
 impl BrowserFamily for Mullvad {
+    fn package_target(&self) -> super::PackageTarget {
+        self.arch.into()
+    }
+
     fn id(&self) -> &'static str {
         "mullvad"
     }
@@ -108,6 +112,10 @@ impl BrowserFamily for Mullvad {
 
     fn engine(&self) -> Engine {
         Engine::Gecko
+    }
+
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::Gecko(EXECUTABLE)
     }
 
     fn public_key(&self) -> Option<&'static [u8]> {
@@ -367,6 +375,7 @@ mod tests {
         let browser = Mullvad::new(Arch::X64);
         assert!(browser.installed_version(dir.path()).is_none());
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "15.0.14".to_owned(),
             engine_version: "15.0.14".to_owned(),
         };
@@ -455,22 +464,37 @@ mod tests {
     }
 
     #[test]
+    fn embedded_key_verifies_current_signed_checksum_fixture() {
+        crate::gpg::verify_bytes(
+            include_bytes!("../../tests/fixtures/mullvad-15.0.24-sha256sums.txt"),
+            include_bytes!("../../tests/fixtures/mullvad-15.0.24-sha256sums.txt.asc"),
+            MULLVAD_KEY,
+        )
+        .expect("the embedded key must cover the Mullvad 15.0.24 signing subkey");
+    }
+
+    #[test]
     fn embedded_key_matches_expected_fingerprint() {
         use pgp::composed::Deserializable;
         use pgp::types::KeyDetails;
         let cursor = std::io::Cursor::new(MULLVAD_KEY);
-        let (iter, _) = pgp::composed::SignedPublicKey::from_armor_many(cursor).unwrap();
-        let mut found = false;
-        for key in iter.flatten() {
-            let fp = hex::encode_upper(key.primary_key.fingerprint().as_bytes());
-            if fp.eq_ignore_ascii_case(MULLVAD_KEY_FINGERPRINT) {
-                found = true;
-                break;
-            }
-        }
-        assert!(
-            found,
-            "embedded mullvad.asc must contain key with fingerprint {MULLVAD_KEY_FINGERPRINT}"
+        let (key, _) = pgp::composed::SignedPublicKey::from_armor_single(cursor).unwrap();
+        assert_eq!(
+            hex::encode_upper(key.primary_key.fingerprint().as_bytes()),
+            MULLVAD_KEY_FINGERPRINT
         );
+        key.verify_bindings()
+            .expect("embedded key identities and subkeys must have valid bindings");
+        let current = key
+            .public_subkeys
+            .iter()
+            .find(|subkey| {
+                hex::encode_upper(subkey.key.fingerprint().as_bytes())
+                    == "022DA248432D2A0E0F54E65E316C1FACD62D07D9"
+            })
+            .expect("the current Mullvad signing subkey must be present");
+        current
+            .verify_bindings(&key.primary_key)
+            .expect("the signing subkey must be bound to the pinned primary");
     }
 }

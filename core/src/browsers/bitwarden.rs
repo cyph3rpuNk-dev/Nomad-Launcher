@@ -173,8 +173,10 @@ fn portable_asset(release: &github::Release) -> Result<&github::ReleaseAsset> {
 /// Returns [`BrowserError::Extract`] / [`BrowserError::Io`] if the executable
 /// cannot be staged.
 fn stage_executable(package: &Path, install_dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(install_dir)?;
+    crate::fs_safety::create_dir_all(install_dir)?;
     let dest = install_dir.join(EXECUTABLE);
+    crate::fs_safety::ensure_file(package)?;
+    crate::fs_safety::ensure_file(&dest)?;
     // Same directory, so rename is atomic and avoids copying ~350 MB; fall back
     // to copy if rename is unavailable for any reason.
     if std::fs::rename(package, &dest).is_err() {
@@ -189,7 +191,7 @@ fn stage_executable(package: &Path, install_dir: &Path) -> Result<()> {
 /// and any nested directories. Used to carry the vault (`Data`) across an
 /// update swap.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
+    crate::fs_safety::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let from = entry.path();
@@ -197,6 +199,8 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         if entry.file_type()?.is_dir() {
             copy_dir_recursive(&from, &to)?;
         } else {
+            crate::fs_safety::ensure_file(&from)?;
+            crate::fs_safety::ensure_file(&to)?;
             std::fs::copy(&from, &to)?;
         }
     }
@@ -204,6 +208,10 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 }
 
 impl BrowserFamily for Bitwarden {
+    fn package_target(&self) -> super::PackageTarget {
+        super::PackageTarget::Portable
+    }
+
     fn id(&self) -> &'static str {
         "bitwarden"
     }
@@ -223,6 +231,10 @@ impl BrowserFamily for Bitwarden {
 
     fn engine(&self) -> Engine {
         Engine::Electron
+    }
+
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::PortableExecutable(EXECUTABLE)
     }
 
     fn public_key(&self) -> Option<&'static [u8]> {
@@ -307,10 +319,12 @@ impl BrowserFamily for Bitwarden {
         // intact. On a fresh install the
         // source does not exist yet, which is a no-op.
         let src = current_install.join(DATA_DIRNAME);
+        crate::fs_safety::ensure_tree(&src)?;
         if !src.exists() {
             return Ok(());
         }
         let dst = stage_dir.join(DATA_DIRNAME);
+        crate::fs_safety::ensure_tree(&dst)?;
         if dst.exists() {
             std::fs::remove_dir_all(&dst)?;
         }
@@ -490,6 +504,27 @@ mod tests {
     }
 
     #[test]
+    fn vault_preservation_rejects_a_linked_source_before_copying() {
+        let temp = tempfile::tempdir().unwrap();
+        let current = temp.path().join("App");
+        let stage = temp.path().join("App.stage");
+        let foreign = temp.path().join("foreign");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("data.json"), b"foreign vault").unwrap();
+        crate::tests::owned_directory_link(&temp, &current.join("Data"), &foreign);
+        assert!(Bitwarden::new(Arch::X64)
+            .preserve_state_across_update(&current, &stage)
+            .is_err());
+        assert!(!stage.join("Data").exists());
+        assert_eq!(
+            std::fs::read(foreign.join("data.json")).unwrap(),
+            b"foreign vault"
+        );
+    }
+
+    #[test]
     fn default_config_parses_and_targets_app_dir() {
         // The trimmed default must parse under the strict (deny_unknown_fields)
         // config structs and select the App install dir.
@@ -651,6 +686,7 @@ mod tests {
         let bw = Bitwarden::new(Arch::X64);
         assert!(bw.installed_version(dir.path()).is_none());
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "2026.5.0".to_owned(),
             engine_version: "2026.5.0".to_owned(),
         };

@@ -40,7 +40,7 @@ check_on_launch = true       # false = skip the update check, launch immediately
 auto_download = true         # false = prompt in the status window before downloading
 
 [launch]
-language = \"en-US\"           # passed as --lang to browsers that accept it
+language = \"en-US\"           # Chromium/Helium UI language; omit or leave blank for browser default
 extra_args = []              # additional command-line arguments
 incognito = false            # true = launch Chromium browsers in --incognito mode
 
@@ -119,11 +119,67 @@ impl Arch {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserConfig {
-    /// Install directory, resolved relative to the launcher's directory.
+    /// One Windows-safe folder name beside the launcher, excluding Data/Nomad.
+    #[serde(deserialize_with = "deserialize_install_dir")]
     pub install_dir: PathBuf,
     /// Build architecture to download.
     #[serde(default)]
     pub arch: Arch,
+}
+
+/// Validate at deserialization, before any caller can join the configured path
+/// to the launcher directory. Windows naming rules apply on every test host.
+fn deserialize_install_dir<'de, D>(deserializer: D) -> Result<PathBuf, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let name = String::deserialize(deserializer)?;
+    if !valid_install_dir_name(&name) {
+        return Err(serde::de::Error::custom(format!(
+            "install_dir {name:?} must be one Windows-safe folder name beside the launcher \
+             (for example Browser or App); paths, Data/Nomad, device names, invalid \
+             characters, and trailing dots/spaces are not allowed"
+        )));
+    }
+    Ok(PathBuf::from(name))
+}
+
+// Reject Win32 trailing-dot/space aliases rather than rewriting a supplied
+// name: normalization can otherwise turn an install into Data or Nomad.
+pub(crate) fn valid_install_dir_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    let single_folder = matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none();
+    let invalid_character = name.chars().any(|c| {
+        c <= '\u{1f}' || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+    });
+    single_folder
+        && !invalid_character
+        && !name.ends_with(['.', ' '])
+        && !name.eq_ignore_ascii_case("Data")
+        && !name.eq_ignore_ascii_case(NOMAD_SUBDIR)
+        && !windows_device_name(name)
+}
+
+fn windows_device_name(name: &str) -> bool {
+    // Device names remain reserved with extensions (e.g. NUL.txt). Windows
+    // also recognizes the superscript digits 1, 2, and 3 for COM/LPT devices.
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ');
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || upper
+            .strip_prefix("COM")
+            .or_else(|| upper.strip_prefix("LPT"))
+            .is_some_and(|suffix| {
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
 }
 
 /// The `[update]` section.
@@ -151,7 +207,9 @@ impl Default for UpdateConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LaunchConfig {
-    /// UI language passed to browsers that accept `--lang`.
+    /// Chromium/Helium UI language passed as `--lang=<value>` before `extra_args`.
+    /// Surrounding whitespace is trimmed; unset/blank adds no switch.
+    /// Independent of hardening; ignored for Gecko and Electron apps.
     #[serde(default)]
     pub language: Option<String>,
     /// Extra command-line arguments appended to the browser invocation.
@@ -307,16 +365,24 @@ impl Config {
     pub fn load_or_init(launcher_dir: &Path, default_config: &str) -> Result<Self, ConfigError> {
         let dir = nomad_subdir(launcher_dir);
         let path = dir.join(CONFIG_FILE_NAME);
+        crate::fs_safety::ensure_file(&path).map_err(|source| ConfigError::Read {
+            path: path.clone(),
+            source,
+        })?;
         let contents = match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::create_dir_all(&dir).map_err(|source| ConfigError::Write {
+                // Refuse an invalid first-run default before writing any state.
+                Self::parse(default_config)?;
+                crate::fs_safety::create_dir_all(&dir).map_err(|source| ConfigError::Write {
                     path: dir.clone(),
                     source,
                 })?;
-                std::fs::write(&path, default_config).map_err(|source| ConfigError::Write {
-                    path: path.clone(),
-                    source,
+                crate::fs_safety::write(&path, default_config).map_err(|source| {
+                    ConfigError::Write {
+                        path: path.clone(),
+                        source,
+                    }
                 })?;
                 default_config.to_owned()
             }
@@ -335,6 +401,200 @@ mod tests {
     use super::*;
 
     #[test]
+    fn config_init_rejects_linked_state_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("instance");
+        let foreign = temp.path().join("foreign");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        crate::tests::owned_directory_link(&temp, &base.join("Nomad"), &foreign);
+        assert!(Config::load_or_init(&base, DEFAULT_NOMAD_TOML).is_err());
+        assert_eq!(std::fs::read_dir(&foreign).unwrap().count(), 0);
+    }
+
+    fn config_with_install_dir(name: &str) -> String {
+        format!(
+            "[browser]\ninstall_dir = {}\n",
+            serde_json::to_string(name).unwrap()
+        )
+    }
+
+    fn assert_invalid_install_dirs(names: &[&str]) {
+        for name in names {
+            let parsed = Config::parse(&config_with_install_dir(name));
+            assert!(
+                parsed.is_err(),
+                "unsafe install_dir {name:?} must be rejected"
+            );
+            let error = parsed.unwrap_err();
+            assert!(matches!(error, ConfigError::Parse(_)));
+            assert!(error.to_string().contains("install_dir"), "{error}");
+        }
+    }
+
+    #[test]
+    fn rejects_reserved_install_dir_names() {
+        assert_invalid_install_dirs(&["Data", "data", "dAtA", "Nomad", "nomad", "nOMAD"]);
+    }
+
+    #[test]
+    fn rejects_install_dir_paths_and_normalized_aliases() {
+        assert_invalid_install_dirs(&[
+            "",
+            ".",
+            "..",
+            "../Browser",
+            "Browser/..",
+            "./Browser",
+            "Browser/.",
+            "Browser/",
+            "Browser\\",
+            "Apps/Browser",
+            "Apps\\Browser",
+            "/Browser",
+            "\\Users\\other",
+            "C:Browser",
+            "C:\\Browser",
+            "C:/Browser",
+            "\\\\server\\share\\Browser",
+            "\\\\?\\C:\\Browser",
+            "\\\\.\\Browser",
+            "Data.",
+            "Data ",
+            "Nomad.",
+            "Nomad ",
+            "Browser.",
+            "Browser ",
+            " ",
+            "...",
+        ]);
+    }
+
+    #[test]
+    fn rejects_install_dir_windows_characters_and_devices() {
+        assert_invalid_install_dirs(&[
+            "Browser:stream",
+            "Bad<Name",
+            "Bad>Name",
+            "Bad\"Name",
+            "Bad|Name",
+            "Bad?Name",
+            "Bad*Name",
+            "Bad\tName",
+            "Bad\nName",
+            "Bad\0Name",
+            "CON",
+            "con.txt",
+            "PRN",
+            "AUX",
+            "NUL",
+            "nul.tar.gz",
+            "COM1",
+            "com9.exe",
+            "LPT1",
+            "lpt9.log",
+            "COM¹",
+            "COM².txt",
+            "COM³",
+            "LPT¹",
+            "LPT².txt",
+            "LPT³",
+        ]);
+    }
+
+    #[test]
+    fn accepts_single_install_dir_names_without_rewriting() {
+        for name in [
+            "Browser",
+            "browser",
+            "App",
+            "Custom Browser",
+            "Browser.stable",
+            ".browser",
+            "DataBrowser",
+            "Nomadic",
+            "User's Browser",
+            "浏览器",
+            "COM10",
+            "LPT10",
+        ] {
+            let parsed = Config::parse(&config_with_install_dir(name)).unwrap();
+            assert_eq!(parsed.browser.install_dir, PathBuf::from(name));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_install_dir_when_deserializing_config_directly() {
+        let parsed = toml::from_str::<Config>(&config_with_install_dir("Data"));
+        assert!(
+            parsed.is_err(),
+            "direct deserialization must enforce the same rule"
+        );
+    }
+
+    #[test]
+    fn invalid_install_dir_load_preserves_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let nomad = nomad_subdir(dir.path());
+        std::fs::create_dir_all(&nomad).unwrap();
+        let config_file = nomad.join(CONFIG_FILE_NAME);
+        let protected = [
+            "Data/profile",
+            "Nomad/instance.toml",
+            "Browser/browser.exe",
+            "Browser.stage/staged",
+            "Browser.backup/backup",
+            "Data.stage/staged",
+            "Nomad.backup/backup",
+        ];
+        for relative in protected {
+            let path = dir.path().join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, relative.as_bytes()).unwrap();
+        }
+        for name in [
+            "Data",
+            "Nomad",
+            "Apps/Browser",
+            ".",
+            "C:Browser",
+            "\\Users\\other",
+        ] {
+            let original = config_with_install_dir(name);
+            std::fs::write(&config_file, &original).unwrap();
+            assert!(Config::load_or_init(dir.path(), DEFAULT_NOMAD_TOML).is_err());
+            assert_eq!(std::fs::read_to_string(&config_file).unwrap(), original);
+            for relative in protected {
+                assert_eq!(
+                    std::fs::read(dir.path().join(relative)).unwrap(),
+                    relative.as_bytes()
+                );
+            }
+            assert!(!dir.path().join("Apps").exists());
+        }
+    }
+
+    #[test]
+    fn invalid_install_dir_default_is_rejected_before_creating_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "Data",
+            "Nomad",
+            "Apps/Browser",
+            ".",
+            "C:Browser",
+            "\\Users\\other",
+        ] {
+            assert!(Config::load_or_init(dir.path(), &config_with_install_dir(name)).is_err());
+            assert_eq!(
+                std::fs::read_dir(dir.path()).unwrap().count(),
+                0,
+                "invalid defaults must not create Nomad or config files"
+            );
+        }
+    }
+
+    #[test]
     fn parses_a_complete_config() {
         let cfg = Config::parse(DEFAULT_NOMAD_TOML).expect("default config must parse");
         assert_eq!(cfg.browser.install_dir, PathBuf::from("Browser"));
@@ -342,7 +602,7 @@ mod tests {
         assert!(cfg.update.check_on_launch);
         assert!(cfg.update.auto_download);
         assert_eq!(cfg.launch.language.as_deref(), Some("en-US"));
-        assert!(cfg.launch.extra_args.is_empty());
+        assert_eq!(cfg.launch.extra_args, Vec::<String>::new());
         assert!(!cfg.launch.incognito);
         assert!(cfg.hardening.enabled);
         assert!(cfg.hardening.sanitize_on_shutdown);
@@ -493,10 +753,10 @@ mod tests {
 
     #[test]
     fn preserves_relative_install_dir() {
-        let cfg =
-            Config::parse("[browser]\ninstall_dir = \"sub/browser\"\n").expect("config must parse");
+        let cfg = Config::parse("[browser]\ninstall_dir = \"Custom Browser\"\n")
+            .expect("config must parse");
         assert!(cfg.browser.install_dir.is_relative());
-        assert_eq!(cfg.browser.install_dir, PathBuf::from("sub/browser"));
+        assert_eq!(cfg.browser.install_dir, PathBuf::from("Custom Browser"));
     }
 
     #[test]

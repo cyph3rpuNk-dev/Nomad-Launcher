@@ -1,9 +1,9 @@
 //! Chromium uBO extension staging from gorhill's release archives.
 //!
-//! Downloads gorhill's `uBlock0_X.X.X.chromium.zip` (GPG-authenticated via
-//! the release tag's signature), extracts it under a Nomad-managed subdir of
-//! the install directory, and exposes the resulting path so the launcher
-//! can append it to `--load-extension=` at launch.
+//! Extracts gorhill's `uBlock0_X.X.X.chromium.zip` under a Nomad-managed
+//! subdirectory and exposes its path for `--load-extension=`. The caller verifies
+//! the ZIP's GitHub SHA-256 digest, the release tag's GPG signature, and the asset
+//! upload timeline before staging. The tag signature does not cover ZIP bytes.
 //!
 //! gorhill's `manifest.json` carries the `key` field that deterministically
 //! derives the canonical CWS extension ID `cjpalhdlnbpafiamejdnhcphjbkeiagm`,
@@ -31,8 +31,8 @@ use crate::browsers::{BrowserError, Result};
 
 /// Subdirectory under `<install-dir>/` that holds Nomad-managed unpacked
 /// extensions passed to `--load-extension=`. Lives inside the Browser/
-/// install so a browser update wipes and re-stages it cleanly on the next
-/// launch (the version check then re-fetches gorhill's zip).
+/// install. The browser-update preserve-state hook carries the working copy
+/// into the new bundle before swapping, including when the network is offline.
 const NOMAD_EXTENSIONS_SUBDIR: &str = "nomad-extensions";
 
 /// Subdirectory of `nomad-extensions/` where uBO is staged.
@@ -43,7 +43,10 @@ const UBO_SUBDIR: &str = "uBlock0";
 /// failure, or after a browser update before `fetch_extension_updates` runs).
 pub(crate) fn staged_ubo_dir(install_dir: &Path) -> Option<PathBuf> {
     let dir = install_dir.join(NOMAD_EXTENSIONS_SUBDIR).join(UBO_SUBDIR);
-    dir.join("manifest.json").is_file().then_some(dir)
+    let backup = dir.with_file_name("uBlock0.backup");
+    [dir, backup]
+        .into_iter()
+        .find(|path| validate_extension(path).is_ok())
 }
 
 /// Extracts gorhill's `uBlock0_X.X.X.chromium.zip` into
@@ -64,11 +67,150 @@ pub(crate) fn stage_chromium_ubo_from_gorhill_zip(
 ) -> Result<()> {
     let ext_dir = install_dir.join(NOMAD_EXTENSIONS_SUBDIR).join(UBO_SUBDIR);
 
-    if ext_dir.exists() {
-        std::fs::remove_dir_all(&ext_dir)?;
+    let _lock = lock_extension_root(install_dir)?;
+    let stage = ext_dir.with_file_name("uBlock0.stage");
+    let backup = ext_dir.with_file_name("uBlock0.backup");
+    recover_extension(&ext_dir, &stage, &backup)?;
+    std::fs::create_dir(&stage)?;
+    let result = (|| {
+        extract_zip_into(zip_bytes, &stage)?;
+        validate_extension(&stage)?;
+        swap_extension(&ext_dir, &stage, &backup)
+    })();
+    if result.is_err() && stage.exists() {
+        let _ = std::fs::remove_dir_all(&stage);
     }
-    std::fs::create_dir_all(&ext_dir)?;
-    extract_zip_into(zip_bytes, &ext_dir)?;
+    result
+}
+
+fn lock_extension_root(install_dir: &Path) -> Result<std::fs::File> {
+    let root = install_dir.join(NOMAD_EXTENSIONS_SUBDIR);
+    crate::fs_safety::create_dir_all(&root)?;
+    let path = root.join(".update.lock");
+    crate::fs_safety::ensure_file(&path)?;
+    let mut options = std::fs::File::options();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(
+            windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
+                | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
+        );
+    }
+    let file = options.open(path)?;
+    file.try_lock().map_err(std::io::Error::from)?;
+    Ok(file)
+}
+
+fn validate_extension(root: &Path) -> Result<()> {
+    crate::fs_safety::ensure_tree(root)?;
+    let path = root.join("manifest.json");
+    crate::fs_safety::ensure_file(&path)?;
+    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)
+        .map_err(|e| BrowserError::Extract(format!("invalid extension manifest: {e}")))?;
+    if !manifest.is_object()
+        || manifest
+            .get("version")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|version| version.trim().is_empty())
+    {
+        return Err(BrowserError::Extract(
+            "extension manifest must contain a nonempty version".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn recover_extension(current: &Path, stage: &Path, backup: &Path) -> Result<()> {
+    for path in [current, stage, backup] {
+        crate::fs_safety::ensure_directory(path)?;
+    }
+    if backup.try_exists()? {
+        crate::fs_safety::ensure_tree(backup)?;
+        if current.try_exists()? {
+            validate_extension(current)?;
+            std::fs::remove_dir_all(backup)?;
+        } else {
+            validate_extension(backup)?;
+            std::fs::rename(backup, current)?;
+        }
+    }
+    if stage.try_exists()? {
+        crate::fs_safety::ensure_tree(stage)?;
+        std::fs::remove_dir_all(stage)?;
+    }
+    Ok(())
+}
+
+fn swap_extension(current: &Path, stage: &Path, backup: &Path) -> Result<()> {
+    if backup.try_exists()? {
+        return Err(BrowserError::Extract(
+            "unrecovered extension backup exists".into(),
+        ));
+    }
+    crate::fs_safety::ensure_tree(current)?;
+    if current.try_exists()? {
+        std::fs::rename(current, backup)?;
+    }
+    if let Err(error) = std::fs::rename(stage, current) {
+        if backup.exists() {
+            if let Err(rollback) = std::fs::rename(backup, current) {
+                tracing::error!(error = %rollback, ?backup, "extension rollback failed; backup retained");
+            }
+        }
+        return Err(error.into());
+    }
+    if backup.exists() {
+        if let Err(error) = std::fs::remove_dir_all(backup) {
+            tracing::warn!(error = %error, "extension backup retained for next recovery");
+        }
+    }
+    Ok(())
+}
+
+/// Preserve an existing managed extension through a browser-bundle update so
+/// a later offline extension check can still launch the last working copy.
+pub(crate) fn preserve_chromium_ubo(current_install: &Path, staged_install: &Path) -> Result<()> {
+    let root = current_install.join(NOMAD_EXTENSIONS_SUBDIR);
+    crate::fs_safety::ensure_directory(&root)?;
+    if !root.try_exists()? {
+        return Ok(());
+    }
+    let _lock = lock_extension_root(current_install)?;
+    let current = current_install
+        .join(NOMAD_EXTENSIONS_SUBDIR)
+        .join(UBO_SUBDIR);
+    let backup = current.with_file_name("uBlock0.backup");
+    let stage = current.with_file_name("uBlock0.stage");
+    recover_extension(&current, &stage, &backup)?;
+    if !current.try_exists()? {
+        return Ok(());
+    }
+    validate_extension(&current)?;
+    let target = staged_install
+        .join(NOMAD_EXTENSIONS_SUBDIR)
+        .join(UBO_SUBDIR);
+    crate::fs_safety::ensure_tree(&target)?;
+    if target.exists() {
+        std::fs::remove_dir_all(&target)?;
+    }
+    let mut pending = vec![(current, target)];
+    while let Some((source, destination)) = pending.pop() {
+        crate::fs_safety::create_dir_all(&destination)?;
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            let source = entry.path();
+            let destination = destination.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                pending.push((source, destination));
+            } else {
+                crate::fs_safety::ensure_file(&source)?;
+                crate::fs_safety::ensure_file(&destination)?;
+                std::fs::copy(source, destination)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -117,11 +259,12 @@ fn extract_zip_into_with_budget(zip_bytes: &[u8], dest: &Path, budget: u64) -> R
         }
         let out = dest.join(stripped);
         if entry.is_dir() || stripped.ends_with('/') {
-            std::fs::create_dir_all(&out)?;
+            crate::fs_safety::create_dir_all(&out)?;
         } else {
             if let Some(parent) = out.parent() {
-                std::fs::create_dir_all(parent)?;
+                crate::fs_safety::create_dir_all(parent)?;
             }
+            crate::fs_safety::ensure_file(&out)?;
             let mut out_file = std::fs::File::create(&out)?;
             crate::extract::copy_entry_capped(&mut entry, &mut out_file, &mut remaining)?;
         }
@@ -174,10 +317,144 @@ mod tests {
         buf
     }
 
+    fn working_extension(path: &Path) {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(path.join("manifest.json"), br#"{"version":"1.0.0"}"#).unwrap();
+        std::fs::write(path.join("working.js"), b"known good").unwrap();
+    }
+
+    #[test]
+    fn extension_swap_rolls_back_and_interrupted_swaps_restore_backups() {
+        let fixture = tempfile::tempdir().unwrap();
+        let current = fixture.path().join("nomad-extensions/uBlock0");
+        let stage = current.with_file_name("uBlock0.stage");
+        let backup = current.with_file_name("uBlock0.backup");
+        working_extension(&current);
+        assert!(swap_extension(&current, &stage, &backup).is_err());
+        assert_eq!(
+            std::fs::read(current.join("working.js")).unwrap(),
+            b"known good"
+        );
+        assert!(!backup.exists());
+        std::fs::rename(&current, &backup).unwrap();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("partial"), b"incomplete").unwrap();
+        assert_eq!(staged_ubo_dir(fixture.path()), Some(backup.clone()));
+        recover_extension(&current, &stage, &backup).unwrap();
+        assert_eq!(
+            std::fs::read(current.join("working.js")).unwrap(),
+            b"known good"
+        );
+        assert!(!stage.exists() && !backup.exists());
+    }
+
+    #[test]
+    fn extension_recovery_never_discards_backup_for_an_invalid_active_copy() {
+        let fixture = tempfile::tempdir().unwrap();
+        let current = fixture.path().join("uBlock0");
+        let stage = current.with_file_name("uBlock0.stage");
+        let backup = current.with_file_name("uBlock0.backup");
+        working_extension(&backup);
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("manifest.json"), b"invalid").unwrap();
+        assert!(recover_extension(&current, &stage, &backup).is_err());
+        assert_eq!(
+            std::fs::read(backup.join("working.js")).unwrap(),
+            b"known good"
+        );
+    }
+
+    #[test]
+    fn extension_transaction_lock_prevents_competing_staging() {
+        let fixture = tempfile::tempdir().unwrap();
+        let current = fixture.path().join("nomad-extensions/uBlock0");
+        working_extension(&current);
+        let _lock = lock_extension_root(fixture.path()).unwrap();
+        let zip = make_zip(&[("manifest.json", br#"{"version":"2.0.0"}"#)]);
+        let result = stage_chromium_ubo_from_gorhill_zip(fixture.path(), &zip, "2.0.0");
+        assert!(
+            matches!(result, Err(BrowserError::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        assert_eq!(
+            std::fs::read(current.join("working.js")).unwrap(),
+            b"known good"
+        );
+    }
+
+    #[test]
+    fn managed_extension_survives_browser_update_and_fresh_install_stays_staged() {
+        let fixture = tempfile::tempdir().unwrap();
+        let current = fixture.path().join("Browser");
+        let stage = fixture.path().join("Browser.stage");
+        preserve_chromium_ubo(&current, &stage).unwrap();
+        assert!(!current.exists() && !stage.exists());
+        let source = current.join("nomad-extensions/uBlock0");
+        working_extension(&source);
+        preserve_chromium_ubo(&current, &stage).unwrap();
+        assert_eq!(
+            std::fs::read(stage.join("nomad-extensions/uBlock0/working.js")).unwrap(),
+            b"known good"
+        );
+        assert_eq!(
+            std::fs::read(source.join("working.js")).unwrap(),
+            b"known good"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn locked_extension_directory_preserves_old_copy_when_swap_fails() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let fixture = tempfile::tempdir().unwrap();
+        let current = fixture.path().join("nomad-extensions/uBlock0");
+        working_extension(&current);
+        let handle = std::fs::File::options()
+            .read(true)
+            .share_mode(0)
+            .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&current)
+            .unwrap();
+        let zip = make_zip(&[("manifest.json", br#"{"version":"2.0.0"}"#)]);
+        assert!(stage_chromium_ubo_from_gorhill_zip(fixture.path(), &zip, "2.0.0").is_err());
+        drop(handle);
+        assert_eq!(
+            std::fs::read(current.join("working.js")).unwrap(),
+            b"known good"
+        );
+        assert!(!current.with_file_name("uBlock0.stage").exists());
+    }
+
+    #[test]
+    fn malformed_extension_updates_preserve_the_working_copy() {
+        for malformed in [
+            b"not a zip".to_vec(),
+            make_zip(&[("background.js", b"incomplete")]),
+            make_zip(&[("manifest.json", b"not JSON")]),
+        ] {
+            let fixture = tempfile::tempdir().unwrap();
+            let current = fixture.path().join("nomad-extensions/uBlock0");
+            std::fs::create_dir_all(&current).unwrap();
+            let manifest = br#"{"version":"1.0.0"}"#;
+            std::fs::write(current.join("manifest.json"), manifest).unwrap();
+            std::fs::write(current.join("working.js"), b"known good").unwrap();
+            assert!(
+                stage_chromium_ubo_from_gorhill_zip(fixture.path(), &malformed, "2.0.0").is_err()
+            );
+            assert_eq!(
+                std::fs::read(current.join("manifest.json")).unwrap(),
+                manifest
+            );
+            assert_eq!(
+                std::fs::read(current.join("working.js")).unwrap(),
+                b"known good"
+            );
+        }
+    }
+
     #[test]
     fn extract_zip_into_rejects_an_over_budget_extension_zip() {
-        // The gorhill zip is the one runtime-fetched artifact without a hash
-        // pin, so the decompressed budget is its only bomb protection.
+        // A matching archive digest does not bound decompressed output.
+        // Enforce the extraction budget independently of download verification.
         let dir = tempfile::tempdir().unwrap();
         let zip = make_zip(&[("payload.bin", &[0u8; 1024][..])]);
         let err = extract_zip_into_with_budget(&zip, dir.path(), 64)

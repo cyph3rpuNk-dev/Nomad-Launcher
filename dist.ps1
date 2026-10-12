@@ -1,75 +1,126 @@
+#requires -Version 5.1
+[CmdletBinding()]
+param([string]$ArtifactDirectory = (Join-Path $PSScriptRoot 'target/release'))
+$ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Continue'
-
-Write-Host "Building release binaries..."
-cargo build --release --workspace
-if ($LASTEXITCODE -ne 0) { exit 1 }
-
-$relDir = Join-Path $PSScriptRoot "target\release"
-$exes = Get-ChildItem $relDir -Filter "Nomad-*.exe" | Sort-Object Name
-Write-Host "Done. $($exes.Count) launcher(s) in target\release\"
-
-# --- Authenticode: sign every launcher (set NOMAD_SIGN_CERT to enable) ---
-# Drop-in config (Phase 3): set NOMAD_SIGN_CERT to either
-#   * a .pfx file path   -> also set NOMAD_SIGN_PASS to its password, or
-#   * a 40-hex SHA-1 thumbprint of a cert already in your certificate store.
-# Optional overrides: NOMAD_SIGNTOOL (path to signtool.exe), NOMAD_SIGN_TS
-# (RFC3161 timestamp URL; default below). Signing runs BEFORE SHA256SUMS so the
-# checksums — and the GPG signature over them — cover the signed bytes.
-$cert = $env:NOMAD_SIGN_CERT
-if ($cert) {
-    # Resolve signtool.exe: NOMAD_SIGNTOOL override -> PATH -> newest x64 under
-    # the Windows 10 Kit (signtool is rarely on PATH even when installed).
-    $signtool = $null
-    if ($env:NOMAD_SIGNTOOL -and (Test-Path $env:NOMAD_SIGNTOOL)) { $signtool = $env:NOMAD_SIGNTOOL }
-    if (-not $signtool) { $c = Get-Command signtool.exe -ErrorAction SilentlyContinue; if ($c) { $signtool = $c.Source } }
-    if (-not $signtool) {
-        $kit = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
-        if (Test-Path $kit) {
-            $signtool = Get-ChildItem $kit -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -match '\\x64\\' } |
-                Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-        }
+$targetRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'target'))
+$sourceDir=Join-Path $targetRoot 'x86_64-pc-windows-msvc/release'
+if ($ArtifactDirectory -match '(^|[\\/])\.\.([\\/]|$)' -or $ArtifactDirectory -match '^[A-Za-z]:[^\\/]') {throw 'ArtifactDirectory must not use parent or drive-relative paths.'}
+if (-not [IO.Path]::IsPathRooted($ArtifactDirectory)) {$ArtifactDirectory=Join-Path $PSScriptRoot $ArtifactDirectory}
+$artifactDir=[IO.Path]::GetFullPath($ArtifactDirectory)
+$programFilesX86=[Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+$expectedNames=@('Nomad-Bitwarden.exe','Nomad-Chromium.exe','Nomad-Firefox.exe','Nomad-Firefox-ESR.exe','Nomad-Floorp.exe','Nomad-Helium.exe','Nomad-LibreWolf.exe','Nomad-Mullvad.exe','Nomad-Waterfox.exe')
+function Assert-OrdinaryPath([string]$Path) {
+    $cursor=[IO.Path]::GetFullPath($Path)
+    while ($cursor) {
+        try {
+            $attributes=[IO.File]::GetAttributes($cursor)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {throw 'Distribution paths must not contain links or reparse points.'}
+        } catch [IO.FileNotFoundException] {} catch [IO.DirectoryNotFoundException] {}
+        $parent=[IO.Path]::GetDirectoryName($cursor); if ($parent -eq $cursor) {break}; $cursor=$parent
     }
-    if (-not $signtool) {
-        Write-Warning "signtool.exe not found (install the Windows SDK or set NOMAD_SIGNTOOL); launchers are left UNSIGNED"
-    } else {
-        $ts = if ($env:NOMAD_SIGN_TS) { $env:NOMAD_SIGN_TS } else { "http://timestamp.digicert.com" }
-        # Thumbprint (40 hex) -> select from store with /sha1; otherwise treat as a .pfx path.
-        if ($cert -match '^[0-9A-Fa-f]{40}$') {
-            $certArgs = @("/sha1", $cert)
-        } else {
-            $certArgs = @("/f", $cert)
-            if ($env:NOMAD_SIGN_PASS) { $certArgs += @("/p", $env:NOMAD_SIGN_PASS) }
-        }
-        $signed = 0
-        foreach ($e in $exes) {
-            & $signtool sign @certArgs /fd SHA256 /tr $ts /td SHA256 /d "Nomad Launcher" $e.FullName
-            if ($LASTEXITCODE -eq 0) { $signed++ }
-            else { Write-Warning "signtool failed on $($e.Name) (exit $LASTEXITCODE)" }
-        }
-        Write-Host "Authenticode-signed $signed/$($exes.Count) launcher(s)"
-    }
-} else {
-    Write-Warning "NOMAD_SIGN_CERT not set; skipping Authenticode signing (launchers are UNSIGNED)"
 }
-
-# --- License bundling: third-party notices must ship beside the binaries ---
-# The OFL (font) and LGPL (7-Zip) require their license text to travel with the
-# distributed artifact; stage them plus Nomad's MIT license into licenses\.
-$licDir = Join-Path $relDir "licenses"
-New-Item -ItemType Directory -Force -Path $licDir | Out-Null
-$licenseFiles = @(
-    @{ Src = "LICENSE-MIT";                    Dst = "Nomad-LICENSE-MIT.txt" },
-    @{ Src = "core\payloads\fonts\OFL.txt";    Dst = "AtkinsonHyperlegible-OFL.txt" },
-    @{ Src = "core\payloads\7zip\LICENSE.txt"; Dst = "7-Zip-LICENSE.txt" }
-    @{ Src = "core\payloads\chromium\logos\LICENSE"; Dst = "Chromium-logo-LICENSE.txt" }
+function Assert-File([string]$Path) {
+    Assert-OrdinaryPath $Path
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or (Get-Item -LiteralPath $Path).Length -eq 0) {throw "Required nonempty distribution input/artifact missing: $Path"}
+}
+function Resolve-Tool([string]$Override,[string]$Name,[string[]]$Fallbacks) {
+    if ($Override) {Assert-File $Override; return Get-Command -Name $Override -ErrorAction Stop}
+    $command=Get-Command -Name $Name -ErrorAction SilentlyContinue
+    if ($command) {return $command}
+    foreach ($candidate in $Fallbacks) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {Assert-File $candidate; return Get-Command -Name $candidate -ErrorAction Stop}
+    }
+    throw "Requested signing tool unavailable: $Name"
+}
+function Clear-Manifests([string]$Directory) {
+    foreach ($name in @('SHA256SUMS','SHA256SUMS.asc')) {
+        $path=Join-Path $Directory $name; Assert-OrdinaryPath $path
+        if (Test-Path -LiteralPath $path) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {throw 'Distribution manifest path is not a file.'}
+            Remove-Item -LiteralPath $path -Force
+        }
+    }
+}
+function Assert-LauncherSet([string]$Directory) {
+    Assert-OrdinaryPath $Directory
+    foreach ($name in $expectedNames) {
+        $file=Join-Path $Directory $name; Assert-File $file; Assert-NomadArtifact $file
+    }
+    foreach ($file in @(Get-ChildItem -LiteralPath $Directory -Filter 'Nomad-*.exe')) {
+        if ($expectedNames -cnotcontains $file.Name) {throw 'Unexpected launcher artifact; review stale build outputs.'}
+    }
+}
+# Validate every prerequisite before building, signing or invalidating manifests.
+if (-not $artifactDir.StartsWith($targetRoot+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) {throw 'ArtifactDirectory must be inside this checkout target directory.'}
+foreach ($path in @($targetRoot,$sourceDir,$artifactDir)) {Assert-OrdinaryPath $path}
+foreach ($directory in @($sourceDir,$artifactDir)) {
+    foreach ($name in $expectedNames) {
+        $output=Join-Path $directory $name; Assert-OrdinaryPath $output
+        if (Test-Path -LiteralPath $output -PathType Container) {throw 'Launcher output path is not a file.'}
+    }
+}
+Assert-File (Join-Path $PSScriptRoot 'Cargo.lock')
+Assert-File (Join-Path $PSScriptRoot '.cargo/config.toml')
+$artifactGuard=Join-Path $PSScriptRoot 'scripts/artifact-guard.ps1'; Assert-File $artifactGuard
+$licenses=@(
+    @{Source='LICENSE-MIT'; Destination='Nomad-LICENSE-MIT.txt'},
+    @{Source='core/payloads/fonts/OFL.txt'; Destination='AtkinsonHyperlegible-OFL.txt'},
+    @{Source='core/payloads/7zip/LICENSE.txt'; Destination='7-Zip-LICENSE.txt'},
+    @{Source='core/payloads/chromium/logos/LICENSE'; Destination='Chromium-logo-LICENSE.txt'}
 )
-foreach ($f in $licenseFiles) {
-    $src = Join-Path $PSScriptRoot $f.Src
-    if (Test-Path $src) { Copy-Item $src (Join-Path $licDir $f.Dst) -Force }
-    else { Write-Warning "license file missing: $($f.Src)" }
+foreach ($entry in $licenses) {Assert-File (Join-Path $PSScriptRoot $entry.Source)}
+Assert-File (Join-Path $PSScriptRoot 'TRADEMARKS.md')
+if ($env:NOMAD_SIGN_PASS) {throw 'NOMAD_SIGN_PASS is unsupported: use certificate-store signing by thumbprint; passwords must not enter child processes.'}
+$cert=$env:NOMAD_SIGN_CERT; $key=$env:NOMAD_SIGNING_KEY
+$signtool=$null; $gpg=$null; $certArgs=@(); $timestamp='http://timestamp.digicert.com'
+if ($cert) {
+    if ($cert -match '^[0-9a-fA-F]{40}$') {$certArgs=@('/sha1',$cert)}
+    else {Assert-File $cert; $certArgs=@('/f',[IO.Path]::GetFullPath($cert))}
+    $candidates=@()
+    if (-not $env:NOMAD_SIGNTOOL -and -not (Get-Command signtool -ErrorAction SilentlyContinue) -and $programFilesX86) {
+        $sdk=Join-Path $programFilesX86 'Windows Kits/10/bin'
+        if (Test-Path -LiteralPath $sdk) {$candidates=@(Get-ChildItem -LiteralPath $sdk -Recurse -Filter signtool.exe | Where-Object {$_.FullName -match '\\x64\\'} | Sort-Object FullName -Descending | ForEach-Object {$_.FullName})}
+    }
+    $signtool=Resolve-Tool $env:NOMAD_SIGNTOOL 'signtool' $candidates
+    if ($env:NOMAD_SIGN_TS) {$timestamp=$env:NOMAD_SIGN_TS}
+    $uri=$null
+    if (-not [Uri]::TryCreate($timestamp,[UriKind]::Absolute,[ref]$uri) -or $uri.Scheme -notin @('http','https') -or $uri.UserInfo) {throw 'Invalid signing timestamp URL.'}
 }
+if ($key) {$gpg=Resolve-Tool $env:NOMAD_GPG 'gpg' @("$env:ProgramFiles/GnuPG/bin/gpg.exe","$programFilesX86/GnuPG/bin/gpg.exe","$env:ProgramFiles/Git/usr/bin/gpg.exe")}
+$stage=$null; $ownedStage=$false; $success=$false; $buildStarted=$false; $buildLock=$null
+Push-Location -LiteralPath $PSScriptRoot
+try {
+    New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null
+    $lockPath=Join-Path $targetRoot '.nomad-dist.lock'; Assert-OrdinaryPath $lockPath
+    $buildLock=[IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
+    Clear-Manifests $artifactDir
+    if ($sourceDir -ne $artifactDir) {Clear-Manifests $sourceDir}
+    $buildStarted=$true
+    Write-Host 'Building locked Windows x64 release binaries...'
+    cargo build --release --workspace --locked --target x86_64-pc-windows-msvc --target-dir $targetRoot
+    if ($LASTEXITCODE -ne 0) {throw 'Release build failed; distribution incomplete.'}
+    . $artifactGuard
+    Assert-LauncherSet $sourceDir
+    $stage=Join-Path $targetRoot ('.nomad-dist-'+[Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $stage | Out-Null; $ownedStage=$true
+    foreach ($name in $expectedNames) {Copy-Item -LiteralPath (Join-Path $sourceDir $name) -Destination (Join-Path $stage $name)}
+    if ($cert) {
+        foreach ($name in $expectedNames) {
+            $file=Join-Path $stage $name
+            & $signtool sign @certArgs /fd SHA256 /tr $timestamp /td SHA256 /d 'Nomad Launcher' $file
+            if ($LASTEXITCODE -ne 0) {throw 'Requested Authenticode signing failed.'}
+            & $signtool verify /pa /all $file
+            if ($LASTEXITCODE -ne 0) {throw 'Requested Authenticode signature verification failed.'}
+        }
+    } else {Write-Warning 'Authenticode signing not requested.'}
+    Assert-LauncherSet $stage
+    $licenseDir=Join-Path $stage 'licenses'; New-Item -ItemType Directory -Path $licenseDir | Out-Null
+    foreach ($entry in $licenses) {
+        $source=Join-Path $PSScriptRoot $entry.Source; Assert-File $source
+        Copy-Item -LiteralPath $source -Destination (Join-Path $licenseDir $entry.Destination)
+    }
 $notices = @'
 Nomad Launcher - Third-Party Notices
 ====================================
@@ -94,66 +145,57 @@ Bitwarden) are fetched from their official sources at launch and remain under
 their own licenses and trademarks. Nomad is an independent project and is not
 affiliated with, endorsed by, or sponsored by any of them. See TRADEMARKS.md.
 '@
-Set-Content -Path (Join-Path $relDir "THIRD-PARTY-NOTICES.txt") -Value $notices -Encoding ascii
-# THIRD-PARTY-NOTICES points readers at TRADEMARKS.md — ship it beside the binaries.
-Copy-Item (Join-Path $PSScriptRoot "TRADEMARKS.md") (Join-Path $relDir "TRADEMARKS.md") -Force
-Write-Host "Staged license bundle (licenses\ + THIRD-PARTY-NOTICES.txt + TRADEMARKS.md)"
-
-# --- Integrity: SHA256SUMS over the launcher binaries (sha256sum -c format) ---
-$sumsPath = Join-Path $relDir "SHA256SUMS"
-$lines = foreach ($e in $exes) {
-    $h = (Get-FileHash $e.FullName -Algorithm SHA256).Hash.ToLower()
-    "$h  $($e.Name)"
-}
-# ASCII, no BOM, LF line endings. Set-Content would write CRLF, and GNU
-# sha256sum treats the \r as part of the filename ("no file was verified" —
-# the v1.0.2 manifest shipped with this bug).
-[IO.File]::WriteAllText($sumsPath, (($lines -join "`n") + "`n"), [Text.Encoding]::ASCII)
-Write-Host "Wrote SHA256SUMS ($($exes.Count) entries)"
-
-# A signature from an earlier run does not cover the manifest just written, so
-# drop it here — unconditionally, before the signing block. Deleting it only on
-# the path that re-signs left a stale .asc beside a fresh SHA256SUMS whenever
-# signing was skipped: NOMAD_SIGNING_KEY unset (how CI always runs), gpg not
-# found, or a failed signing run. The pair verifies BAD, and nothing local says
-# so — the failure surfaces at whoever downloads the release.
-$sig = "$sumsPath.asc"
-if (Test-Path $sig) {
-    Remove-Item $sig -Force
-    Write-Host "Removed stale SHA256SUMS.asc (did not cover the new manifest)"
-}
-
-# --- Authenticity: detached GPG signature of SHA256SUMS ---
-# Set NOMAD_SIGNING_KEY to the Nomad release key's fingerprint (or uid/email)
-# to sign. Users verify with: gpg --verify SHA256SUMS.asc SHA256SUMS
-$key = $env:NOMAD_SIGNING_KEY
-if ($key) {
-    # Resolve gpg: $env:NOMAD_GPG override -> PATH -> common install locations
-    # (Gpg4win / GnuPG / Git's bundled gpg). gpg is often not on the PowerShell
-    # PATH even when installed, so probe explicitly rather than fail silently.
-    $gpg = $null
-    if ($env:NOMAD_GPG -and (Test-Path $env:NOMAD_GPG)) { $gpg = $env:NOMAD_GPG }
-    if (-not $gpg) { $c = Get-Command gpg -ErrorAction SilentlyContinue; if ($c) { $gpg = $c.Source } }
-    if (-not $gpg) {
-        foreach ($p in @(
-                "$env:ProgramFiles\GnuPG\bin\gpg.exe",
-                "${env:ProgramFiles(x86)}\GnuPG\bin\gpg.exe",
-                "$env:ProgramFiles\Git\usr\bin\gpg.exe")) {
-            if (Test-Path $p) { $gpg = $p; break }
-        }
+    [IO.File]::WriteAllText((Join-Path $stage 'THIRD-PARTY-NOTICES.txt'),$notices,[Text.Encoding]::ASCII)
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'TRADEMARKS.md') -Destination (Join-Path $stage 'TRADEMARKS.md')
+    $sums=Join-Path $stage 'SHA256SUMS'
+    $lines=foreach ($name in $expectedNames) {
+        $hash=(Get-FileHash -LiteralPath (Join-Path $stage $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$hash  $name"
     }
-    if (-not $gpg) {
-        Write-Warning "gpg not found (set NOMAD_GPG to gpg.exe's path); SHA256SUMS is left UNSIGNED"
-    } else {
-        # $sig was defined and any stale file removed right after SHA256SUMS
-        # was written, so this only has to produce the new signature.
-        & $gpg --batch --yes --local-user $key --armor --detach-sign --output $sig $sumsPath
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Signed SHA256SUMS -> SHA256SUMS.asc (key: $key)"
-        } else {
-            Write-Warning "GPG signing failed (exit $LASTEXITCODE); SHA256SUMS is left UNSIGNED"
-        }
+    [IO.File]::WriteAllText($sums,($lines -join [char]10)+[char]10,[Text.Encoding]::ASCII)
+    $signature="$sums.asc"
+    if ($key) {
+        & $gpg --batch --yes "--local-user=$key" --armor --detach-sign --output $signature -- $sums
+        if ($LASTEXITCODE -ne 0) {throw 'Requested manifest signing failed.'}
+        Assert-File $signature
+        & $gpg --batch --verify $signature $sums
+        if ($LASTEXITCODE -ne 0) {throw 'Requested manifest signature verification failed.'}
+    } else {Write-Warning 'Manifest signing not requested; this is not a published signed release.'}
+    # Promote only validated files; manifests are final completion artifacts.
+    foreach ($name in $expectedNames) {
+        $dest=Join-Path $artifactDir $name; Assert-OrdinaryPath $dest
+        if (Test-Path -LiteralPath $dest -PathType Container) {throw 'Launcher destination is a directory.'}
+        Copy-Item -LiteralPath (Join-Path $stage $name) -Destination $dest -Force
     }
-} else {
-    Write-Warning "NOMAD_SIGNING_KEY not set; skipping GPG signature (SHA256SUMS is UNSIGNED)"
+    $finalLicenses=Join-Path $artifactDir 'licenses'; Assert-OrdinaryPath $finalLicenses
+    New-Item -ItemType Directory -Path $finalLicenses -Force | Out-Null
+    foreach ($entry in $licenses) {
+        $dest=Join-Path $finalLicenses $entry.Destination; Assert-OrdinaryPath $dest
+        Copy-Item -LiteralPath (Join-Path $licenseDir $entry.Destination) -Destination $dest -Force
+    }
+    foreach ($name in @('THIRD-PARTY-NOTICES.txt','TRADEMARKS.md')) {
+        $dest=Join-Path $artifactDir $name; Assert-OrdinaryPath $dest
+        Copy-Item -LiteralPath (Join-Path $stage $name) -Destination $dest -Force
+    }
+    Assert-LauncherSet $artifactDir
+    foreach ($line in $lines) {
+        $expectedHash,$name=$line -split '  ',2
+        if ((Get-FileHash -LiteralPath (Join-Path $artifactDir $name) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedHash) {throw 'Promoted launcher bytes do not match the staged manifest.'}
+    }
+    Move-Item -LiteralPath $sums -Destination (Join-Path $artifactDir 'SHA256SUMS')
+    if ($key) {Move-Item -LiteralPath $signature -Destination (Join-Path $artifactDir 'SHA256SUMS.asc')}
+    $success=$true
+    Write-Host "Distribution complete: $($expectedNames.Count) launchers in $artifactDir"
+}
+finally {
+    try {
+        if ($buildStarted -and -not $success) {Clear-Manifests $artifactDir}
+        if ($ownedStage) {
+            $resolved=[IO.Path]::GetFullPath($stage)
+            if ((Split-Path -Parent $resolved) -cne $targetRoot -or (Split-Path -Leaf $resolved) -notmatch '^\.nomad-dist-[0-9a-f]{32}$') {throw 'Refusing unowned stage cleanup.'}
+            Assert-OrdinaryPath $resolved
+            Get-ChildItem -LiteralPath $resolved -Recurse -Force | ForEach-Object {Assert-OrdinaryPath $_.FullName}
+            Remove-Item -LiteralPath $resolved -Recurse -Force
+        }
+    } finally {if ($buildLock) {$buildLock.Dispose()}; Pop-Location}
 }

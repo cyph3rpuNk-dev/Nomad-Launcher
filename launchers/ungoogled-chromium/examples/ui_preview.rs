@@ -1,7 +1,7 @@
 //! Visual preview of the Nomad status window with a static `LauncherView`.
 //!
 //! Run with:
-//!   cargo run -p nomad-ungoogled-chromium --example ui_preview
+//!   cargo run -p nomad-ungoogled-chromium --locked --target x86_64-pc-windows-msvc --example ui_preview
 
 static ICON: &[u8] = include_bytes!("../assets/icon.ico");
 
