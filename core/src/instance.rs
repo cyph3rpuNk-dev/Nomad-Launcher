@@ -39,6 +39,7 @@ pub(crate) fn ensure(base: &Path, browser_id: &str, claim_if_missing: bool) -> R
 
     let nomad_dir = crate::config::nomad_subdir(base);
     let marker = nomad_dir.join(FILE_NAME);
+    crate::fs_safety::ensure_file(&marker)?;
     if marker.exists() {
         return validate_existing(&marker, browser_id);
     }
@@ -49,7 +50,7 @@ pub(crate) fn ensure(base: &Path, browser_id: &str, claim_if_missing: bool) -> R
         ));
     }
 
-    std::fs::create_dir_all(&nomad_dir)?;
+    crate::fs_safety::create_dir_all(&nomad_dir)?;
     let identity = InstanceIdentity {
         schema_version: SCHEMA_VERSION,
         browser_id: browser_id.to_owned(),
@@ -124,6 +125,18 @@ fn valid_browser_id(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::ensure;
+
+    #[test]
+    fn ownership_claim_rejects_linked_state_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("instance");
+        let foreign = temp.path().join("foreign");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        crate::tests::owned_directory_link(&temp, &base.join("Nomad"), &foreign);
+        assert!(ensure(&base, "firefox", true).is_err());
+        assert_eq!(std::fs::read_dir(&foreign).unwrap().count(), 0);
+    }
 
     #[test]
     fn first_launcher_claims_folder_and_same_launcher_is_idempotent() {

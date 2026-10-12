@@ -55,31 +55,48 @@ pub(crate) fn redirect_policy() -> reqwest::redirect::Policy {
 /// non-success status, and [`BrowserError::Io`] if the file cannot be
 /// written or renamed.
 pub async fn download(url: &str, dest: &Path, progress: &ProgressSink) -> Result<()> {
+    let client = crate::network::build_client(crate::network::DOWNLOAD_TIMEOUT)?;
+    download_with_client(&client, url, dest, progress).await
+}
+
+async fn download_with_client(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    progress: &ProgressSink,
+) -> Result<()> {
+    let tmp = tmp_path(dest);
+    crate::fs_safety::ensure_file(dest)?;
+    crate::fs_safety::ensure_file(&tmp)?;
     if let Some(parent) = dest.parent() {
         if !parent.as_os_str().is_empty() {
-            tokio::fs::create_dir_all(parent).await?;
+            crate::fs_safety::create_dir_all(parent)?;
         }
     }
 
-    let client = reqwest::Client::builder()
-        .user_agent("nomad-portable")
-        .redirect(redirect_policy())
-        .build()
-        .map_err(|e| BrowserError::Network(e.to_string()))?;
-
-    let tmp = tmp_path(dest);
-    match download_to_tmp(&client, url, &tmp, progress, MAX_DOWNLOAD_BYTES).await {
-        Ok(()) => {
-            tokio::fs::rename(&tmp, dest).await?;
-            tracing::debug!(url, ?dest, "download installed");
-            Ok(())
-        }
-        Err(e) => {
-            let _ = tokio::fs::remove_file(&tmp).await;
-            tracing::debug!(url, error = %e, "download failed; temporary file removed");
-            Err(e)
-        }
+    let mut owns_tmp = false;
+    let result = match download_to_tmp(
+        client,
+        url,
+        &tmp,
+        progress,
+        MAX_DOWNLOAD_BYTES,
+        &mut owns_tmp,
+    )
+    .await
+    {
+        Ok(()) => match crate::fs_safety::ensure_file(dest) {
+            Ok(()) => tokio::fs::rename(&tmp, dest)
+                .await
+                .map_err(BrowserError::from),
+            Err(error) => Err(error.into()),
+        },
+        Err(e) => Err(e),
+    };
+    if result.is_err() && owns_tmp {
+        let _ = tokio::fs::remove_file(&tmp).await;
     }
+    result
 }
 
 /// Downloads `url` into the temporary file `tmp`, streaming chunk by chunk.
@@ -90,13 +107,14 @@ async fn download_to_tmp(
     tmp: &Path,
     progress: &ProgressSink,
     max_bytes: u64,
+    owns_tmp: &mut bool,
 ) -> Result<()> {
     tracing::debug!(url, "GET");
     let mut response = client
         .get(url)
         .send()
         .await
-        .map_err(|e| BrowserError::Network(e.to_string()))?;
+        .map_err(crate::network::map_network_err)?;
 
     let status = response.status();
     if !status.is_success() {
@@ -112,13 +130,19 @@ async fn download_to_tmp(
             )));
         }
     }
-    let mut file = tokio::fs::File::create(tmp).await?;
+    crate::fs_safety::ensure_file(tmp)?;
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(tmp)
+        .await?;
+    *owns_tmp = true;
     let mut downloaded: u64 = 0;
 
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|e| BrowserError::Network(e.to_string()))?
+        .map_err(crate::network::map_network_err)?
     {
         downloaded += chunk.len() as u64;
         // Enforce the cap for chunked / undeclared-length responses too.
@@ -153,6 +177,136 @@ fn tmp_path(dest: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn timeout_preserves_destination_and_removes_owned_partial_download() {
+        let (url, server) = crate::network::tests::socket_fixture(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\npart",
+            b"done",
+            std::time::Duration::from_millis(250),
+        );
+        let fixture = tempfile::tempdir().unwrap();
+        let dest = fixture.path().join("pkg.zip");
+        std::fs::write(&dest, b"working package").unwrap();
+        let client = crate::network::build_client(std::time::Duration::from_millis(80)).unwrap();
+        let (progress, _) = tokio::sync::watch::channel(0.0);
+        let result = download_with_client(&client, &url, &dest, &progress).await;
+        assert!(matches!(result, Err(BrowserError::Offline(_))));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"working package");
+        assert!(!tmp_path(&dest).exists());
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_download_preserves_a_preexisting_temporary_file() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/missing");
+                then.status(404);
+            })
+            .await;
+        let fixture = tempfile::tempdir().unwrap();
+        let dest = fixture.path().join("pkg.zip");
+        let tmp = tmp_path(&dest);
+        std::fs::write(&tmp, b"someone else's temporary data").unwrap();
+        let (progress, _rx) = tokio::sync::watch::channel(0.0);
+        assert!(download(&server.url("/missing"), &dest, &progress)
+            .await
+            .is_err());
+        assert_eq!(
+            std::fs::read(tmp).unwrap(),
+            b"someone else's temporary data"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_rejects_a_linked_destination_before_network_or_writes() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        let request = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/pkg");
+                then.status(200).body("replacement");
+            })
+            .await;
+        let fixture = tempfile::tempdir().unwrap();
+        let base = fixture.path().join("instance");
+        let foreign = fixture.path().join("foreign");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("pkg.zip"), b"foreign data").unwrap();
+        crate::tests::owned_directory_link(&fixture, &base.join("stage"), &foreign);
+        let (progress, _rx) = tokio::sync::watch::channel(0.0);
+        assert!(
+            download(&server.url("/pkg"), &base.join("stage/pkg.zip"), &progress)
+                .await
+                .is_err()
+        );
+        request.assert_calls_async(0).await;
+        assert_eq!(
+            std::fs::read(foreign.join("pkg.zip")).unwrap(),
+            b"foreign data"
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_response_cannot_overwrite_a_preexisting_temp_file() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/pkg");
+                then.status(200).body("replacement");
+            })
+            .await;
+        let fixture = tempfile::tempdir().unwrap();
+        let dest = fixture.path().join("pkg.zip");
+        let tmp = tmp_path(&dest);
+        std::fs::write(&dest, b"current").unwrap();
+        std::fs::write(&tmp, b"other writer").unwrap();
+        let (progress, _rx) = tokio::sync::watch::channel(0.0);
+        assert!(download(&server.url("/pkg"), &dest, &progress)
+            .await
+            .is_err());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"current");
+        assert_eq!(std::fs::read(&tmp).unwrap(), b"other writer");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn failed_download_promotion_removes_only_its_owned_temporary_file() {
+        use httpmock::prelude::*;
+        use std::os::windows::fs::OpenOptionsExt;
+        let server = MockServer::start_async().await;
+        let request = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/pkg");
+                then.status(200).body("replacement");
+            })
+            .await;
+        let fixture = tempfile::tempdir().unwrap();
+        let dest = fixture.path().join("pkg.zip");
+        std::fs::write(&dest, b"current").unwrap();
+        // Allow ordinary reads/stat but deny replacement of this fixture file.
+        let handle = std::fs::File::options()
+            .read(true)
+            .share_mode(
+                windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
+                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
+            )
+            .open(&dest)
+            .unwrap();
+        let (progress, _rx) = tokio::sync::watch::channel(0.0);
+        assert!(download(&server.url("/pkg"), &dest, &progress)
+            .await
+            .is_err());
+        request.assert_calls_async(1).await;
+        drop(handle);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"current");
+        assert!(!tmp_path(&dest).exists());
+    }
 
     #[test]
     fn tmp_path_appends_tmp_suffix() {
@@ -222,7 +376,7 @@ mod tests {
         let (tx, _rx) = tokio::sync::watch::channel(0.0_f32);
 
         // Cap of 10 bytes against a 100-byte body: the transfer must be refused.
-        let err = download_to_tmp(&client, &server.url("/big"), &tmp, &tx, 10)
+        let err = download_to_tmp(&client, &server.url("/big"), &tmp, &tx, 10, &mut false)
             .await
             .expect_err("a body larger than the cap must error");
         mock.assert_async().await;

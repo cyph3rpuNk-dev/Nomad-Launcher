@@ -192,7 +192,8 @@ struct NomadWindow {
 }
 
 impl eframe::App for NomadWindow {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         // Snapshot state without holding the lock during rendering.
         let (phase, view) = {
             let (lock, _) = &*self.state;
@@ -248,7 +249,7 @@ impl eframe::App for NomadWindow {
                     .fill(theme::BG)
                     .inner_margin(egui::Margin::same(8)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.set_min_width(340.0);
 
                 identity::identity_card(ui, &view, self.logo.as_ref());
@@ -264,7 +265,7 @@ impl eframe::App for NomadWindow {
                         message,
                         has_fallback,
                     } => {
-                        self.render_error(ui, ctx, message, *has_fallback);
+                        self.render_error(ui, &ctx, message, *has_fallback);
                     }
                     _ => {
                         footer(
@@ -572,6 +573,40 @@ fn setup_visuals(ctx: &egui::Context, accent: egui::Color32) {
 
 // ── Entry points ──────────────────────────────────────────────────────────────
 
+// Keep Windows rendering on stock OS components, even if WGPU_* variables request
+// another backend, an external DXC compiler, Agility SDK or a debug-layer SDK.
+#[cfg(windows)]
+fn windows_wgpu_config() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::{egui_wgpu, wgpu};
+    let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+    setup.instance_descriptor.backends = wgpu::Backends::DX12;
+    setup.instance_descriptor.flags = wgpu::InstanceFlags::empty();
+    setup.instance_descriptor.backend_options = wgpu::BackendOptions::default();
+    setup
+        .instance_descriptor
+        .backend_options
+        .dx12
+        .shader_compiler = wgpu::Dx12Compiler::Fxc;
+    setup.power_preference = wgpu::PowerPreference::LowPower;
+    egui_wgpu::WgpuConfiguration {
+        wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),
+        ..Default::default()
+    }
+}
+
+fn native_options(viewport: egui::ViewportBuilder) -> eframe::NativeOptions {
+    eframe::NativeOptions {
+        viewport,
+        #[cfg(windows)]
+        renderer: eframe::Renderer::Wgpu,
+        #[cfg(windows)]
+        wgpu_options: windows_wgpu_config(),
+        #[cfg(not(windows))]
+        renderer: eframe::Renderer::Glow,
+        ..Default::default()
+    }
+}
+
 /// Opens the Nomad status window with a static [`LauncherView`] and blocks
 /// until the user closes it.
 ///
@@ -623,15 +658,14 @@ where
         Condvar::new(),
     ));
 
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+    let options = native_options(
+        egui::ViewportBuilder::default()
             .with_title(title)
             .with_inner_size([460.0, 380.0])
             .with_resizable(false)
             .with_maximize_button(false)
             .with_icon(icon),
-        ..Default::default()
-    };
+    );
 
     eframe::run_native(
         "Nomad Launcher",
@@ -659,6 +693,74 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_renderer_requires_only_dx12_and_the_system_shader_compiler() {
+        let options = native_options(egui::ViewportBuilder::default());
+        assert_eq!(options.renderer, eframe::Renderer::Wgpu);
+        let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = options.wgpu_options.wgpu_setup else {
+            panic!("expected a new system-backed graphics instance");
+        };
+        assert_eq!(
+            setup.instance_descriptor.backends,
+            eframe::wgpu::Backends::DX12
+        );
+        assert!(setup.instance_descriptor.flags.is_empty());
+        assert!(matches!(
+            setup
+                .instance_descriptor
+                .backend_options
+                .dx12
+                .shader_compiler,
+            eframe::wgpu::Dx12Compiler::Fxc
+        ));
+        assert!(setup
+            .instance_descriptor
+            .backend_options
+            .dx12
+            .agility_sdk
+            .is_none());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_tooling_keeps_the_glow_renderer() {
+        assert_eq!(
+            native_options(egui::ViewportBuilder::default()).renderer,
+            eframe::Renderer::Glow
+        );
+    }
+
+    #[test]
+    fn bundled_font_renders_with_the_updated_font_backend() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        setup_visuals(&ctx, theme::ACCENT);
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for font in [
+                egui::FontId::proportional(15.0),
+                egui::FontId::monospace(15.0),
+            ] {
+                let galley = ui.painter().layout_no_wrap(
+                    "Nomad Launcher 1.0.8 — Firefox".to_owned(),
+                    font,
+                    theme::TEXT_PRIMARY,
+                );
+                assert!(galley.size().x > 0.0 && galley.size().y > 0.0);
+                ui.painter()
+                    .galley(egui::Pos2::ZERO, galley, theme::TEXT_PRIMARY);
+            }
+        });
+        let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+        assert!(
+            primitives.iter().any(|primitive| matches!(
+                &primitive.primitive,
+                egui::epaint::Primitive::Mesh(mesh) if !mesh.vertices.is_empty()
+            )),
+            "the bundled font must produce drawable glyph geometry without a GPU"
+        );
+    }
 
     #[test]
     fn embedded_nomad_emblem_decodes() {

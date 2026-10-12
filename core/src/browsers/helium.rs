@@ -151,6 +151,10 @@ fn arch_token(arch: Arch) -> &'static str {
 }
 
 impl BrowserFamily for Helium {
+    fn package_target(&self) -> super::PackageTarget {
+        self.arch.into()
+    }
+
     fn id(&self) -> &'static str {
         "helium"
     }
@@ -161,6 +165,10 @@ impl BrowserFamily for Helium {
 
     fn engine(&self) -> Engine {
         Engine::Chromium
+    }
+
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::Chromium(EXECUTABLE)
     }
 
     fn public_key(&self) -> Option<&'static [u8]> {
@@ -233,37 +241,28 @@ impl BrowserFamily for Helium {
     fn prepare_launch(
         &self,
         install_dir: &Path,
-        _hardening_config: crate::config::HardeningConfig,
+        hardening_config: crate::config::HardeningConfig,
     ) -> Result<()> {
-        // Drop `initial_preferences` next to chrome.exe so freshly created
-        // profiles start with Developer mode = ON *and* the profile-pref
-        // hardening (PREFERENCES). Chromium regenerates Default/Preferences from
-        // initial_preferences on first run, so prefs must travel through here to
-        // be active on the first launch rather than only the second. Chromium
-        // consults this file only when `Default/Preferences` does not yet exist,
-        // so existing profiles are not disturbed.
-        let initial_prefs =
-            match crate::hardening::build_initial_preferences(INITIAL_PREFERENCES, PREFERENCES) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!(
-                        browser = self.id(),
-                        error = %e,
-                        "failed to merge profile prefs into initial_preferences; \
-                         falling back to template (first-run profile hardening will not apply)"
-                    );
-                    INITIAL_PREFERENCES.to_owned()
-                }
-            };
-        if let Err(e) =
-            crate::hardening::write_chromium_initial_preferences(install_dir, &initial_prefs)
-        {
-            tracing::warn!(
-                browser = self.id(),
-                error = %e,
-                "failed to write initial_preferences; new profiles will start with Developer mode off"
-            );
-        }
+        // This is a portability invariant, independent of privacy hardening.
+        // Helium's WinSparkle updater can run a per-user installer outside the
+        // portable tree. Disable it in both first-run and established profiles.
+        let initial_prefs = if hardening_config.enabled {
+            crate::hardening::build_initial_preferences(INITIAL_PREFERENCES, PREFERENCES)?
+        } else {
+            INITIAL_PREFERENCES.to_owned()
+        };
+        let mut initial: serde_json::Value = serde_json::from_str(&initial_prefs)
+            .map_err(|e| BrowserError::Parse(format!("invalid Helium initial preferences: {e}")))?;
+        disable_browser_updates(&mut initial)?;
+        let initial = serde_json::to_string(&initial).map_err(|e| {
+            BrowserError::Parse(format!("could not serialize Helium preferences: {e}"))
+        })?;
+        crate::hardening::write_chromium_initial_preferences(install_dir, &initial)?;
+
+        let profile = self
+            .profile_dir(install_dir)
+            .unwrap_or_else(|| install_dir.join("profile"));
+        disable_existing_profile_updates(&profile)?;
         // Helium ships its own uBlock fork built into the browser.
         Ok(())
     }
@@ -314,6 +313,63 @@ impl BrowserFamily for Helium {
     }
 }
 
+/// Force only the updater preference; reject malformed containers rather than
+/// replacing unrelated user data or silently leaving the updater enabled.
+fn disable_browser_updates(prefs: &mut serde_json::Value) -> Result<()> {
+    let mut current = prefs;
+    for key in ["helium", "services"] {
+        let object = current.as_object_mut().ok_or_else(|| {
+            BrowserError::Parse("Helium preferences must contain JSON objects".to_owned())
+        })?;
+        current = object.entry(key).or_insert_with(|| serde_json::json!({}));
+    }
+    let services = current.as_object_mut().ok_or_else(|| {
+        BrowserError::Parse("Helium services preferences must be a JSON object".to_owned())
+    })?;
+    services.insert("browser_updates".to_owned(), false.into());
+    Ok(())
+}
+
+fn disable_existing_profile_updates(profile: &Path) -> Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let path = profile.join("Default").join("Preferences");
+    crate::fs_safety::ensure_file(&path)?;
+    let original = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        // Leave fresh profile creation to Chromium's initial_preferences path.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut prefs: serde_json::Value = serde_json::from_slice(&original)
+        .map_err(|e| BrowserError::Parse(format!("invalid Helium profile preferences: {e}")))?;
+    if prefs["helium"]["services"]["browser_updates"] == false {
+        return Ok(());
+    }
+    disable_browser_updates(&mut prefs)?;
+    let bytes = serde_json::to_vec(&prefs)
+        .map_err(|e| BrowserError::Parse(format!("could not serialize Helium preferences: {e}")))?;
+
+    // A failed write must not truncate the user's existing profile preferences.
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("nomad-updates.{}.{}.tmp", std::process::id(), seq));
+    crate::fs_safety::ensure_file(&tmp)?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)?;
+    let written = file.write_all(&bytes).and_then(|()| file.sync_all());
+    drop(file);
+    let result = written.and_then(|()| std::fs::rename(&tmp, &path));
+    if result.is_err() {
+        // create_new succeeded, so this exact sibling temp file is ours.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map_err(BrowserError::from)
+}
+
 /// Returns `true` once Helium has finished processing the `BrowserDefaultApp`
 /// extensions in `<install-dir>/default_apps/`. Gate for `--no-first-run`:
 /// while `default_apps_install_state` is anything other than `3`
@@ -341,6 +397,311 @@ mod tests {
 
     use super::super::{write_version_marker, BrowserError, InstalledVersion};
     use super::*;
+
+    #[tokio::test]
+    async fn authenticated_incomplete_archive_preserves_working_install() {
+        use std::io::Write;
+        let server = MockServer::start_async().await;
+        let mut archive = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut archive);
+            zip.start_file(
+                "helium/README.txt",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(b"authenticated archive with no browser")
+                .unwrap();
+            zip.finish().unwrap();
+        }
+        let bytes = archive.into_inner();
+        let digest = crate::gpg::sha256::hex(&bytes);
+        let package = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/helium.zip");
+                then.status(200).body(&bytes);
+            })
+            .await;
+        let release = serde_json::json!({
+            "tag_name": "2.0", "assets": [{
+                "name": "helium-2.0-windows-x64.zip",
+                "browser_download_url": server.url("/helium.zip"),
+                "digest": format!("sha256:{digest}")
+            }]
+        });
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/latest");
+                then.status(200).body(release.to_string());
+            })
+            .await;
+        let temp = tempfile::tempdir().unwrap();
+        let install = temp.path().join("Browser");
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::create_dir_all(temp.path().join("Data")).unwrap();
+        std::fs::write(install.join("chrome.exe"), b"working browser").unwrap();
+        write_version_marker(
+            &install,
+            &InstalledVersion {
+                target: Some(crate::browsers::PackageTarget::X64),
+                browser_version: "1.0".into(),
+                engine_version: "1.0".into(),
+            },
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("Data/profile"), b"user data").unwrap();
+        let browser = browser_for_server(&server, Arch::X64);
+        let result = crate::updater::update(
+            &browser,
+            &install,
+            crate::updater::UpdateOptions {
+                check_on_launch: true,
+                auto_download: true,
+            },
+        )
+        .await;
+        assert!(
+            matches!(result, Err(BrowserError::Compatibility(_))),
+            "got {result:?}"
+        );
+        assert_eq!(
+            std::fs::read(install.join("chrome.exe")).unwrap(),
+            b"working browser"
+        );
+        assert_eq!(
+            browser.installed_version(&install).unwrap().browser_version,
+            "1.0"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("Data/profile")).unwrap(),
+            b"user data"
+        );
+        assert!(!crate::install::backup_dir(&install).exists());
+        assert!(!crate::install::stage_dir(&install)
+            .join(".nomad-version")
+            .exists());
+        package.assert_calls_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_complete_archive_installs_without_launching() {
+        use std::io::Write;
+        let server = MockServer::start_async().await;
+        let mut archive = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut archive);
+            for name in [
+                "chrome.exe",
+                "chrome.dll",
+                "resources.pak",
+                "icudtl.dat",
+                "chrome_100_percent.pak",
+                "chrome_200_percent.pak",
+            ] {
+                zip.start_file(
+                    format!("helium/{name}"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+                zip.write_all(b"inert fixture; never executed").unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let bytes = archive.into_inner();
+        let digest = crate::gpg::sha256::hex(&bytes);
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/helium.zip");
+                then.status(200).body(&bytes);
+            })
+            .await;
+        let release = serde_json::json!({ "tag_name": "2.0", "assets": [{
+            "name": "helium-2.0-windows-x64.zip", "browser_download_url": server.url("/helium.zip"),
+            "digest": format!("sha256:{digest}")
+        }]});
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/latest");
+                then.status(200).body(release.to_string());
+            })
+            .await;
+        let temp = tempfile::tempdir().unwrap();
+        let install = temp.path().join("Browser");
+        let browser = browser_for_server(&server, Arch::X64);
+        let result = crate::updater::update(
+            &browser,
+            &install,
+            crate::updater::UpdateOptions {
+                check_on_launch: true,
+                auto_download: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, crate::updater::UpdateOutcome::Updated("2.0".into()));
+        assert_eq!(
+            std::fs::read(install.join("chrome.exe")).unwrap(),
+            b"inert fixture; never executed"
+        );
+        assert_eq!(
+            browser.installed_version(&install).unwrap().browser_version,
+            "2.0"
+        );
+        assert!(!temp.path().join("Data").exists());
+        assert!(!crate::install::stage_dir(&install).exists());
+        assert!(!crate::install::backup_dir(&install).exists());
+    }
+
+    fn prepared_preferences(enabled: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        let prefs_path = dir.path().join("Data/Default/Preferences");
+        std::fs::create_dir_all(prefs_path.parent().unwrap()).unwrap();
+        let original = serde_json::json!({
+            "helium": {"services": {
+                "browser_updates": true,
+                "user_consented": true,
+                "bangs": false
+            }},
+            "extensions": {"ui": {"developer_mode": false}},
+            "homepage": "https://example.invalid/",
+            "custom": [1, "preserved", {"nested": true}]
+        });
+        std::fs::write(&prefs_path, serde_json::to_vec(&original).unwrap()).unwrap();
+        let cfg = crate::config::HardeningConfig {
+            enabled,
+            ..Default::default()
+        };
+        Helium::new(Arch::X64)
+            .prepare_launch(&install, cfg)
+            .unwrap();
+        let actual: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&prefs_path).unwrap()).unwrap();
+        assert_eq!(actual["helium"]["services"]["browser_updates"], false);
+        let mut expected = original;
+        expected["helium"]["services"]["browser_updates"] = false.into();
+        assert_eq!(actual, expected, "unrelated user preferences must survive");
+        let initial: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(install.join("initial_preferences")).unwrap())
+                .unwrap();
+        assert_eq!(initial["helium"]["services"]["browser_updates"], false);
+        assert_eq!(initial["extensions"]["ui"]["developer_mode"], true);
+    }
+
+    #[test]
+    fn prepare_launch_disables_browser_updates_in_existing_profile() {
+        prepared_preferences(true);
+    }
+
+    #[test]
+    fn prepare_launch_disables_browser_updates_without_hardening() {
+        prepared_preferences(false);
+    }
+
+    #[test]
+    fn prepare_launch_disables_browser_updates_for_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        Helium::new(Arch::X64)
+            .prepare_launch(&install, crate::config::HardeningConfig::default())
+            .unwrap();
+        let initial: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(install.join("initial_preferences")).unwrap())
+                .unwrap();
+        assert_eq!(initial["helium"]["services"]["browser_updates"], false);
+        assert!(
+            !dir.path().join("Data").exists(),
+            "keep first-run profile creation in Chromium"
+        );
+    }
+
+    #[test]
+    fn prepare_launch_reapplies_browser_updates_override_each_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        let prefs = dir.path().join("Data/Default/Preferences");
+        std::fs::create_dir_all(prefs.parent().unwrap()).unwrap();
+        let browser = Helium::new(Arch::X64);
+        for original in [
+            r#"{"homepage":"keep"}"#,
+            r#"{"helium":{"services":{"browser_updates":true}},"homepage":"keep"}"#,
+        ] {
+            std::fs::write(&prefs, original).unwrap();
+            browser
+                .prepare_launch(&install, crate::config::HardeningConfig::default())
+                .unwrap();
+            let actual: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&prefs).unwrap()).unwrap();
+            assert_eq!(actual["helium"]["services"]["browser_updates"], false);
+            assert_eq!(actual["homepage"], "keep");
+        }
+    }
+
+    #[test]
+    fn prepare_launch_rejects_malformed_preferences_without_overwriting() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        let prefs = dir.path().join("Data/Default/Preferences");
+        std::fs::create_dir_all(prefs.parent().unwrap()).unwrap();
+        for original in [
+            "{broken",
+            "[]",
+            r#"{"helium":null}"#,
+            r#"{"helium":{"services":false}}"#,
+        ] {
+            std::fs::write(&prefs, original).unwrap();
+            assert!(Helium::new(Arch::X64)
+                .prepare_launch(&install, crate::config::HardeningConfig::default())
+                .is_err());
+            assert_eq!(std::fs::read_to_string(&prefs).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn prepare_launch_rejects_unreadable_preferences() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        let prefs = dir.path().join("Data/Default/Preferences");
+        std::fs::create_dir_all(&prefs).unwrap();
+        assert!(Helium::new(Arch::X64)
+            .prepare_launch(&install, crate::config::HardeningConfig::default())
+            .is_err());
+        assert!(prefs.is_dir());
+    }
+
+    #[test]
+    fn prepare_launch_rejects_initial_preferences_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        std::fs::create_dir_all(install.join("initial_preferences")).unwrap();
+        assert!(Helium::new(Arch::X64)
+            .prepare_launch(&install, crate::config::HardeningConfig::default())
+            .is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepare_launch_failed_profile_replace_keeps_original_and_cleans_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Browser");
+        let prefs = dir.path().join("Data/Default/Preferences");
+        std::fs::create_dir_all(prefs.parent().unwrap()).unwrap();
+        let original = r#"{"helium":{"services":{"browser_updates":true}}}"#;
+        std::fs::write(&prefs, original).unwrap();
+        let permissions = std::fs::metadata(&prefs).unwrap().permissions();
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(&prefs, readonly).unwrap();
+        let result = Helium::new(Arch::X64)
+            .prepare_launch(&install, crate::config::HardeningConfig::default());
+        std::fs::set_permissions(&prefs, permissions).unwrap();
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&prefs).unwrap(), original);
+        assert_eq!(
+            std::fs::read_dir(prefs.parent().unwrap()).unwrap().count(),
+            1
+        );
+    }
 
     fn fixture_release(tag: &str, arch: &str, with_sig: bool) -> String {
         let zip_name = format!("helium-{tag}-windows-{arch}.zip");
@@ -447,6 +808,7 @@ mod tests {
         let browser = Helium::new(Arch::X64);
         assert!(browser.installed_version(dir.path()).is_none());
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "0.12.3.1".to_owned(),
             engine_version: "0.12.3.1".to_owned(),
         };
@@ -549,6 +911,95 @@ mod tests {
         assert_eq!(
             v["profile"]["cookie_controls_mode"], 1,
             "first-run profile must block third-party cookies"
+        );
+    }
+
+    #[test]
+    fn prepare_launch_respects_hardening_toggle_in_initial_preferences() {
+        for existing_profile in [false, true] {
+            let fixture = tempfile::tempdir().unwrap();
+            let install = fixture.path().join("Browser");
+            let profile = fixture.path().join("Data/Default/Preferences");
+            let user_prefs = br#"{"homepage":"keep","enable_do_not_track":false,"custom":[1,2]}"#;
+            if existing_profile {
+                std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+                std::fs::write(&profile, user_prefs).unwrap();
+            }
+            let browser = Helium::new(Arch::X64);
+            // Starts unhardened, enables hardening, then removes the stale
+            // first-run privacy payload again. No real browser is launched.
+            for enabled in [false, true, false] {
+                let config = crate::config::HardeningConfig {
+                    enabled,
+                    ..Default::default()
+                };
+                browser.prepare_launch(&install, config).unwrap();
+                let initial: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(install.join("initial_preferences")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(initial["extensions"]["ui"]["developer_mode"], true);
+                if enabled {
+                    assert_eq!(initial["https_only_mode_enabled"], true);
+                    assert_eq!(initial["safebrowsing"]["enabled"], false);
+                    assert_eq!(initial["profile"]["cookie_controls_mode"], 1);
+                } else {
+                    assert_eq!(
+                        initial,
+                        serde_json::json!({"extensions":{"ui":{"developer_mode":true}},"helium":{"services":{"browser_updates":false}}}),
+                        "disabled hardening must not seed privacy defaults"
+                    );
+                }
+                if existing_profile {
+                    let actual: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&profile).unwrap()).unwrap();
+                    let mut expected: serde_json::Value =
+                        serde_json::from_slice(user_prefs).unwrap();
+                    expected["helium"] = serde_json::json!({"services":{"browser_updates":false}});
+                    assert_eq!(
+                        actual, expected,
+                        "existing user settings must survive the toggle"
+                    );
+                } else {
+                    assert!(
+                        !fixture.path().join("Data").exists(),
+                        "leave new profile creation to Chromium"
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepare_launch_rejects_failed_toggle_write_and_preserves_old_seed() {
+        let fixture = tempfile::tempdir().unwrap();
+        let install = fixture.path().join("Browser");
+        let browser = Helium::new(Arch::X64);
+        browser
+            .prepare_launch(&install, crate::config::HardeningConfig::default())
+            .unwrap();
+        let path = install.join("initial_preferences");
+        let original = std::fs::read(&path).unwrap();
+        let permissions = std::fs::metadata(&path).unwrap().permissions();
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(&path, readonly).unwrap();
+        let config = crate::config::HardeningConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let result = browser.prepare_launch(&install, config);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        assert!(
+            result.is_err(),
+            "a stale hardened template must not silently survive disabling hardening"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(
+            std::fs::read_dir(&install).unwrap().count(),
+            1,
+            "private write stage must be cleaned"
         );
     }
 

@@ -85,16 +85,7 @@ impl Waterfox {
 /// The file may be a bare 128-character hex string or a standard checksum
 /// line (`<hash>  <filename>`); we take the first whitespace-delimited token.
 async fn fetch_sha512(client: &reqwest::Client, url: &str) -> Option<String> {
-    let text = client
-        .get(url)
-        .send()
-        .await
-        .ok()?
-        .error_for_status()
-        .ok()?
-        .text()
-        .await
-        .ok()?;
+    let text = crate::network::fetch_text(client, url).await.ok()?;
     let hash = text.split_whitespace().next()?.to_ascii_lowercase();
     // A SHA-512 hex digest is exactly 128 characters.
     if hash.len() == 128 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -108,6 +99,10 @@ async fn fetch_sha512(client: &reqwest::Client, url: &str) -> Option<String> {
 // ── BrowserFamily impl ────────────────────────────────────────────────────────
 
 impl BrowserFamily for Waterfox {
+    fn package_target(&self) -> super::PackageTarget {
+        self.arch.into()
+    }
+
     fn id(&self) -> &'static str {
         "waterfox"
     }
@@ -118,6 +113,10 @@ impl BrowserFamily for Waterfox {
 
     fn engine(&self) -> Engine {
         Engine::Gecko
+    }
+
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::Gecko(EXECUTABLE)
     }
 
     fn public_key(&self) -> Option<&'static [u8]> {
@@ -240,7 +239,7 @@ mod tests {
         // Serve the SHA-512 checksum file from the mock CDN.
         server.mock(|when, then| {
             when.method(GET)
-                .path_contains("Waterfox%20Setup%206.0.20.exe.sha512");
+                .path_includes("Waterfox%20Setup%206.0.20.exe.sha512");
             then.status(200)
                 .header("Content-Type", "text/plain")
                 .body(FIXTURE_SHA512);
@@ -372,6 +371,7 @@ mod tests {
         let browser = Waterfox::new(Arch::X64);
         assert!(browser.installed_version(dir.path()).is_none());
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "G6.0.20".to_owned(),
             engine_version: "G6.0.20".to_owned(),
         };
