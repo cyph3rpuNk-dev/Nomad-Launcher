@@ -91,8 +91,7 @@ fn require_verification_material<B: BrowserFamily + ?Sized>(
 /// A detached GPG signature is required whenever the adapter exposes a package
 /// signing key. A missing, unreadable or invalid signature cannot fall back to
 /// a hash. The SHA-256/512 hash is also checked whenever published. Adapters
-/// without a package signing key still require verifiable integrity material;
-/// Firefox authenticates its checksum manifest earlier in release resolution.
+/// without a package signing key still require verifiable integrity material.
 ///
 /// # Errors
 /// Returns [`BrowserError::Verification`] if the signature or hash does not
@@ -412,7 +411,6 @@ mod tests {
         // only in updater::update, which nothing but the integration tests
         // call — so a real Bitwarden update permanently deleted the vault at
         // Data/.
-        use crate::browsers::bitwarden::Bitwarden;
 
         let dir = tempfile::tempdir().unwrap();
         let install_dir = dir.path().join("App");
@@ -423,13 +421,16 @@ mod tests {
         std::fs::create_dir_all(install_dir.join("Data")).unwrap();
         std::fs::write(install_dir.join("Data").join("data.json"), b"vault").unwrap();
         std::fs::create_dir_all(&stage_dir).unwrap();
-        std::fs::write(stage_dir.join("Bitwarden-Portable.exe"), b"new binary").unwrap();
+        std::fs::write(stage_dir.join("app.exe"), b"new binary").unwrap();
 
-        let browser = Bitwarden::new(Arch::X64);
+        let browser = StateFixture {
+            validation_called: std::sync::atomic::AtomicBool::new(false),
+            remove_executable: false,
+        };
         let latest = VersionInfo {
             browser_version: "2026.6.0".to_owned(),
             engine_version: "2026.6.0".to_owned(),
-            download_url: "https://example.invalid/Bitwarden-Portable-2026.6.0.exe".to_owned(),
+            download_url: "https://example.invalid/app.exe".to_owned(),
             signature_url: None,
             sha256: None,
             sha512: None,
@@ -453,7 +454,7 @@ mod tests {
             "the vault must survive the stage swap"
         );
         assert_eq!(
-            std::fs::read(install_dir.join("Bitwarden-Portable.exe")).unwrap(),
+            std::fs::read(install_dir.join("app.exe")).unwrap(),
             b"new binary",
             "the staged new version must be in place after the swap"
         );
@@ -567,12 +568,9 @@ mod tests {
     #[test]
     fn incomplete_gecko_stages_preserve_install_and_profile() {
         use crate::browsers::{
-            firefox::Firefox, floorp::Floorp, librewolf::Librewolf, mullvad::Mullvad,
-            waterfox::Waterfox,
+            floorp::Floorp, librewolf::Librewolf, mullvad::Mullvad, waterfox::Waterfox,
         };
         let runtime = &["xul.dll", "application.ini", "omni.ja", "browser/omni.ja"];
-        incomplete_stages_preserve_install(&Firefox::new(Arch::X64), "firefox.exe", runtime);
-        incomplete_stages_preserve_install(&Firefox::new_esr(Arch::X64), "firefox.exe", runtime);
         incomplete_stages_preserve_install(&Floorp::new(Arch::X64), "floorp.exe", runtime);
         incomplete_stages_preserve_install(&Librewolf::new(Arch::X64), "librewolf.exe", runtime);
         incomplete_stages_preserve_install(&Mullvad::new(Arch::X64), "mullvadbrowser.exe", runtime);
@@ -580,17 +578,23 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_bitwarden_stage_preserves_vault() {
+    fn incomplete_portable_stage_preserves_state() {
         incomplete_stages_preserve_install(
-            &crate::browsers::bitwarden::Bitwarden::new(Arch::X64),
-            "Bitwarden-Portable.exe",
+            &StateFixture {
+                validation_called: std::sync::atomic::AtomicBool::new(false),
+                remove_executable: false,
+            },
+            "app.exe",
             &[],
         );
     }
 
-    struct RemovesExecutable(std::sync::atomic::AtomicBool);
+    struct StateFixture {
+        validation_called: std::sync::atomic::AtomicBool,
+        remove_executable: bool,
+    }
 
-    impl BrowserFamily for RemovesExecutable {
+    impl BrowserFamily for StateFixture {
         fn package_target(&self) -> crate::browsers::PackageTarget {
             crate::browsers::PackageTarget::X64
         }
@@ -645,8 +649,19 @@ mod tests {
             "https://example.invalid"
         }
         fn validate_staged_install(&self, stage: &Path) -> Result<()> {
-            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
-            std::fs::remove_file(stage.join("app.exe"))?;
+            self.validation_called
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            if self.remove_executable {
+                std::fs::remove_file(stage.join("app.exe"))?;
+            }
+            Ok(())
+        }
+        fn preserve_state_across_update(&self, current: &Path, stage: &Path) -> Result<()> {
+            let source = current.join("Data");
+            if source.exists() {
+                std::fs::create_dir_all(stage.join("Data"))?;
+                std::fs::copy(source.join("data.json"), stage.join("Data/data.json"))?;
+            }
             Ok(())
         }
     }
@@ -664,7 +679,10 @@ mod tests {
             if initially_complete {
                 std::fs::write(stage.join("app.exe"), b"new copy").unwrap();
             }
-            let browser = RemovesExecutable(std::sync::atomic::AtomicBool::new(false));
+            let browser = StateFixture {
+                validation_called: std::sync::atomic::AtomicBool::new(false),
+                remove_executable: true,
+            };
             let lock = crate::install::InstanceLock::acquire(&install).unwrap();
             let result = finalize_install(
                 &browser,
@@ -681,7 +699,9 @@ mod tests {
                 "got {result:?}"
             );
             assert_eq!(
-                browser.0.load(std::sync::atomic::Ordering::Relaxed),
+                browser
+                    .validation_called
+                    .load(std::sync::atomic::Ordering::Relaxed),
                 initially_complete
             );
             assert_eq!(
@@ -695,15 +715,15 @@ mod tests {
 
     #[test]
     fn complete_gecko_stage_is_prepared_and_swapped_without_launching() {
-        use crate::browsers::firefox::Firefox;
+        use crate::browsers::floorp::Floorp;
         let temp = tempfile::tempdir().unwrap();
         let install = temp.path().join("Browser");
         let stage = crate::install::stage_dir(&install);
         let backup = crate::install::backup_dir(&install);
         std::fs::create_dir_all(&install).unwrap();
-        std::fs::write(install.join("firefox.exe"), b"old browser").unwrap();
+        std::fs::write(install.join("floorp.exe"), b"old browser").unwrap();
         for name in [
-            "firefox.exe",
+            "floorp.exe",
             "xul.dll",
             "application.ini",
             "omni.ja",
@@ -713,7 +733,7 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, b"new file").unwrap();
         }
-        let browser = Firefox::new(Arch::X64);
+        let browser = Floorp::new(Arch::X64);
         let lock = crate::install::InstanceLock::acquire(&install).unwrap();
         finalize_install(
             &browser,
@@ -731,7 +751,7 @@ mod tests {
             "2.0"
         );
         assert_eq!(
-            std::fs::read(install.join("firefox.exe")).unwrap(),
+            std::fs::read(install.join("floorp.exe")).unwrap(),
             b"new file"
         );
         assert!(install.join("distribution/policies.json").is_file());
@@ -779,7 +799,7 @@ mod tests {
             let stage = crate::install::stage_dir(&install);
             let backup = crate::install::backup_dir(&install);
             for name in [
-                "firefox.exe",
+                "floorp.exe",
                 "xul.dll",
                 "application.ini",
                 "omni.ja",
@@ -789,7 +809,7 @@ mod tests {
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(path, b"inert verified-layout fixture").unwrap();
             }
-            let browser = crate::browsers::firefox::Firefox::new(arch);
+            let browser = crate::browsers::floorp::Floorp::new(arch);
             let lock = crate::install::InstanceLock::acquire(&install).unwrap();
             finalize_install(
                 &browser,
@@ -1292,7 +1312,10 @@ mod tests {
         std::fs::create_dir_all(&stage).unwrap();
         std::fs::write(stage.join("sentinel"), b"other writer").unwrap();
         let lock = crate::install::InstanceLock::acquire(&install).unwrap();
-        let browser = RemovesExecutable(std::sync::atomic::AtomicBool::new(false));
+        let browser = StateFixture {
+            validation_called: std::sync::atomic::AtomicBool::new(false),
+            remove_executable: true,
+        };
         let (progress, _rx) = watch::channel(0.0);
         let mut started = false;
         let result = download_and_install(

@@ -2935,14 +2935,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nomad-bitwarden"
-version = "1.0.9"
-dependencies = [
- "nomad-core",
- "winresource",
-]
-
-[[package]]
 name = "nomad-core"
 version = "1.0.9"
 dependencies = [
@@ -2968,22 +2960,6 @@ dependencies = [
  "windows-sys 0.61.2",
  "winreg",
  "zip",
-]
-
-[[package]]
-name = "nomad-firefox"
-version = "1.0.9"
-dependencies = [
- "nomad-core",
- "winresource",
-]
-
-[[package]]
-name = "nomad-firefox-esr"
-version = "1.0.9"
-dependencies = [
- "nomad-core",
- "winresource",
 ]
 
 [[package]]

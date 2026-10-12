@@ -14,7 +14,8 @@
 # 827E658608679618CD349F93678E455D76767AA3, and Nomad's snapshot predated it, so
 # Nomad-Firefox.exe and Nomad-Firefox-ESR.exe could not install or update at
 # all. Nothing in the repository could detect it: the only signal was a user
-# reporting that the launcher failed.
+# reporting that the launcher failed. Those launchers and the Mozilla key have
+# since been removed; the same failure mode applies to every key still embedded.
 #
 # The check fetches the signature upstream is publishing now (a few hundred
 # bytes, never the package itself), reads the issuer key id out of it, and
@@ -96,30 +97,6 @@ check() {
         fail=1
     fi
 }
-
-echo "== Mozilla (Firefox, Firefox ESR) =="
-if fetch https://product-details.mozilla.org/1.0/firefox_versions.json \
-    -o "$tmp/firefox_versions.json"; then
-    for field in LATEST_FIREFOX_VERSION FIREFOX_ESR; do
-        version="$(json "d['$field']" < "$tmp/firefox_versions.json")"
-        if [ -z "$version" ]; then
-            echo "::error::Mozilla: could not resolve ${field} from product-details"
-            fail=1
-            continue
-        fi
-        sig="$tmp/mozilla-${field}.asc"
-        if fetch \
-            "https://ftp.mozilla.org/pub/firefox/releases/${version}/SHA256SUMS.asc" -o "$sig"; then
-            check "Firefox ${version}" "$repo_root/core/keys/firefox.asc" "$sig"
-        else
-            echo "::error::Firefox ${version}: SHA256SUMS.asc could not be fetched"
-            fail=1
-        fi
-    done
-else
-    echo "::error::Mozilla: product-details could not be fetched"
-    fail=1
-fi
 
 echo "== Mullvad Browser =="
 if fetch \
