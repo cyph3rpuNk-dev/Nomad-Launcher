@@ -16,13 +16,13 @@ use crate::config::Arch;
 /// Curated safe user.js payload for Waterfox (ESR 115 Gecko engine).
 const USER_JS: &str = include_str!("../../payloads/waterfox/user.js");
 
-/// Distribution-level policies.json — shared with Firefox (LibreWolf-derived, MPL-2.0).
+/// Distribution-level policies.json — shared Gecko payload (LibreWolf-derived, MPL-2.0).
 const POLICIES_JSON: &str = include_str!("../../payloads/firefox/policies.json");
 
-/// Autoconfig pointer — shared with Firefox.
+/// Autoconfig pointer — shared Gecko payload.
 const AUTOCONFIG_JS: &str = include_str!("../../payloads/firefox/autoconfig.js");
 
-/// Main `lockPref()` payload — shared with Firefox.
+/// Main `lockPref()` payload — shared Gecko payload.
 const NOMAD_CFG: &str = include_str!("../../payloads/firefox/nomad.cfg");
 
 // Waterfox GitHub repo (BrowserWorks org; no binary assets on GitHub —

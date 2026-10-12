@@ -13,8 +13,6 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
-pub mod bitwarden;
-pub mod firefox;
 pub mod floorp;
 mod github;
 mod staged;
@@ -58,7 +56,7 @@ pub(crate) const CHROMIUM_PORTABILITY_FLAGS: &[&str] = &[
 ];
 
 /// AMO add-on metadata binds the current version, download URL, and digest.
-/// AMO supplies the Mozilla-signed XPI required by Firefox stable and ESR.
+/// AMO supplies the Mozilla-signed XPI that Gecko release builds require.
 pub(crate) const UBLOCK_RELEASES_URL: &str =
     "https://addons.mozilla.org/api/v5/addons/addon/ublock-origin/";
 
@@ -220,7 +218,7 @@ pub enum Engine {
     Chromium,
     /// Gecko-based, Firefox-family browsers (Firefox, Floorp, Pale Moon, …).
     Gecko,
-    /// Electron-based desktop apps wrapped as portable launchers (Bitwarden).
+    /// Non-browser desktop applications.
     /// Not a rendering engine in the browser sense; the variant exists so the
     /// Chromium/Gecko-gated launch-flag injection in `build_launch_args` never
     /// applies to a non-browser app (it would feed browser switches the app's
@@ -241,8 +239,8 @@ impl Engine {
     }
 }
 
-/// Package selection identity. `Portable` denotes Bitwarden's single artifact,
-/// not a claim that its executable is architecture-neutral.
+/// Package selection identity. `Portable` supports legacy single-artifact records;
+/// it does not claim that an executable is architecture-neutral.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PackageTarget {
@@ -343,7 +341,7 @@ pub enum Hardening {
     /// `ublock_xpi_releases_url`: AMO add-on metadata API URL used to
     /// provision the Mozilla-signed uBlock XPI locally so policies.json can
     /// reference it with a `file://` URL — this avoids a per-launch phone-home
-    /// to AMO while still installing an XPI Firefox stable will accept.
+    /// to AMO while still installing an XPI a Gecko release build will accept.
     /// `None` for browsers that already bundle uBlock (e.g. `Mullvad`).
     GeckoProfile {
         user_js: &'static str,
@@ -407,9 +405,8 @@ pub trait BrowserFamily: Send + Sync {
     fn display_name(&self) -> &'static str;
 
     /// Full default `nomad.toml` written on first run. Browsers use the shared
-    /// browser template; non-browser apps override this to ship a config that
-    /// lists only the keys that affect them (e.g. Bitwarden, an Electron app,
-    /// drops the Chromium/Gecko-only privacy keys). Only consulted when no
+    /// browser template; adapters can override it for their supported keys.
+    /// Only consulted when no
     /// config file exists yet; an existing `nomad.toml` always wins.
     fn default_config(&self) -> &'static str {
         crate::config::DEFAULT_NOMAD_TOML
@@ -425,8 +422,7 @@ pub trait BrowserFamily: Send + Sync {
 
     /// Embedded ASCII-armored package-signing key. `Some` requires a detached
     /// package signature; missing signatures must never fall back to a hash.
-    /// `None` uses the adapter's hash/other verification path (Firefox verifies
-    /// a signed checksum manifest before returning release metadata).
+    /// `None` uses the adapter's hash/other verification path.
     fn public_key(&self) -> Option<&'static [u8]>;
 
     /// Reads the version metadata of the installation in `install_dir`,
@@ -501,11 +497,8 @@ pub trait BrowserFamily: Send + Sync {
     /// install with it.
     ///
     /// The default is a no-op: every browser keeps its profile *outside*
-    /// `install_dir`, so the wholesale swap is harmless. Bitwarden is the
-    /// exception — its vault lives *inside* `install_dir` (`<install_dir>/Data`),
-    /// so without this the swap would wipe the user's vault on every
-    /// Nomad-driven update. Bitwarden overrides this to copy that directory
-    /// from `current_install` into `stage_dir`.
+    /// `install_dir`. Adapters with in-bundle state must copy it from
+    /// `current_install` into `stage_dir` before replacement.
     ///
     /// On a fresh install `current_install` does not yet exist; implementors
     /// must treat that as a no-op.
@@ -674,8 +667,6 @@ mod tests {
             crate::config::Arch::Arm64,
         ] {
             let expected: PackageTarget = arch.into();
-            assert_eq!(firefox::Firefox::new(arch).package_target(), expected);
-            assert_eq!(firefox::Firefox::new_esr(arch).package_target(), expected);
             assert_eq!(floorp::Floorp::new(arch).package_target(), expected);
             assert_eq!(helium::Helium::new(arch).package_target(), expected);
             assert_eq!(librewolf::Librewolf::new(arch).package_target(), expected);
@@ -685,10 +676,6 @@ mod tests {
                 expected
             );
             assert_eq!(waterfox::Waterfox::new(arch).package_target(), expected);
-            assert_eq!(
-                bitwarden::Bitwarden::new(arch).package_target(),
-                PackageTarget::Portable
-            );
         }
     }
 

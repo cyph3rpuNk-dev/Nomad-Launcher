@@ -20,6 +20,13 @@ problems. It includes the changes merged in PR #68 and a workspace version updat
 
 ## Upgrading
 
+Firefox, Firefox ESR, and Bitwarden launchers have been removed from the project.
+Chromium, Helium, Floorp, Waterfox, LibreWolf, and Mullvad remain supported. This
+release builds six launchers. Existing Firefox, Firefox ESR, and Bitwarden
+installations, profiles, vaults, and Windows registrations are not
+removed or migrated. Keep their old launcher for any needed unregistration;
+do not place a different launcher in an existing owned folder.
+
 Close the browser and launcher, back up the portable folder, and replace only the
 matching Nomad launcher executable. Keep Browser, Data, and Nomad state together;
 do not mix launcher brands in one folder. Use Nomad's documented registration
@@ -34,7 +41,8 @@ profile; cross-machine sign-in persistence is not established by these tests.
 
 The merged implementation passed all main-branch CI checks, Rust 1.92 checks,
 Actions static analysis, and Chromium archive/layout/overlay verification. CI
-built and validated all nine launcher artifacts. Local validation passed 492
+built and validated the previous nine-launcher set before these removals.
+That earlier local validation passed 492
 Rust tests and the artifact, build, and release safeguard fixtures.
 
 Windows Sandbox testing covered Chromium profile/extension persistence,
@@ -50,6 +58,9 @@ protocol refusal, and the historical Helium cross-machine sign-in report retain
 coverage gaps. Download-failure recovery does not prove post-replacement rollback.
 
 The version-only release preparation also passed the local canonical gate and
-Rust 1.92 checks. Release-branch CI and the tagged release build remain pending.
+Rust 1.92 checks. The launcher-removal changes also passed the local canonical
+gate (466 Rust tests, including retained updater safety coverage), 36 build
+safeguard cases, and Rust 1.92 workspace/all-target checking. Their CI and the
+tagged release build remain pending.
 Downloaded release artifacts must be verified against the signed
 SHA256SUMS manifest and GitHub build provenance as described in README.md.

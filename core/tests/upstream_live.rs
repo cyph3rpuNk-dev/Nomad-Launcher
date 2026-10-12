@@ -27,8 +27,8 @@
 //!   cargo test -p nomad-core --test upstream_live --locked --target x86_64-pc-windows-msvc -- --ignored --nocapture
 
 use nomad_core::{
-    Arch, Bitwarden, BrowserFamily, Firefox, Floorp, Helium, Librewolf, Mullvad, UngoogledChromium,
-    VersionInfo, Waterfox,
+    Arch, BrowserFamily, Floorp, Helium, Librewolf, Mullvad, UngoogledChromium, VersionInfo,
+    Waterfox,
 };
 
 /// Resolves the current upstream release and checks its verification metadata.
@@ -77,18 +77,6 @@ async fn assert_verifiable<B: BrowserFamily>(browser: &B) {
 
 #[tokio::test]
 #[ignore = "hits the network; run via the weekly upstream-drift job"]
-async fn firefox_release_is_verifiable() {
-    assert_verifiable(&Firefox::new(Arch::X64)).await;
-}
-
-#[tokio::test]
-#[ignore = "hits the network; run via the weekly upstream-drift job"]
-async fn firefox_esr_release_is_verifiable() {
-    assert_verifiable(&Firefox::new_esr(Arch::X64)).await;
-}
-
-#[tokio::test]
-#[ignore = "hits the network; run via the weekly upstream-drift job"]
 async fn floorp_release_is_verifiable() {
     assert_verifiable(&Floorp::new(Arch::X64)).await;
 }
@@ -121,12 +109,6 @@ async fn ungoogled_chromium_release_is_verifiable() {
 #[ignore = "hits the network; run via the weekly upstream-drift job"]
 async fn helium_release_is_verifiable() {
     assert_verifiable(&Helium::new(Arch::X64)).await;
-}
-
-#[tokio::test]
-#[ignore = "hits the network; run via the weekly upstream-drift job"]
-async fn bitwarden_release_is_verifiable() {
-    assert_verifiable(&Bitwarden::new(Arch::X64)).await;
 }
 
 fn assert_verification_metadata<B: BrowserFamily>(browser: &B, info: &VersionInfo) {

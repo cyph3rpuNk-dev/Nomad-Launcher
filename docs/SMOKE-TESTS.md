@@ -46,17 +46,17 @@ handoff. Do not rerun them in the normal user account to diagnose a failure.
 
 ## Build and create disposable instances
 
-Start with Firefox and Ungoogled Chromium to exercise Gecko and Chromium. This
-is representative coverage, not coverage of all nine launchers. Builds below
+Start with Floorp and Ungoogled Chromium to exercise Gecko and Chromium. This
+is representative coverage, not coverage of all six launchers. Builds below
 are unsigned local test artifacts, not published release packages.
 
 ```powershell
-cargo build --release --locked --target x86_64-pc-windows-msvc -p nomad-firefox -p nomad-ungoogled-chromium
+cargo build --release --locked --target x86_64-pc-windows-msvc -p nomad-floorp -p nomad-ungoogled-chromium
 if ($LASTEXITCODE -ne 0) { throw 'Smoke-test build failed' }
 $artifactRoot = Join-Path $PWD 'target/x86_64-pc-windows-msvc/release'
 $smokeRoot = Join-Path $env:TEMP ('Nomad-Smoke-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $smokeRoot -ErrorAction Stop | Out-Null
-foreach ($family in @('Firefox', 'Chromium')) {
+foreach ($family in @('Floorp', 'Chromium')) {
     $instancePath = Join-Path $smokeRoot $family
     New-Item -ItemType Directory -Path $instancePath -ErrorAction Stop | Out-Null
     $sourcePath = Join-Path $artifactRoot ("Nomad-$family.exe")
@@ -78,7 +78,7 @@ For each instance, record pass/fail/not run and evidence for every row:
 | Check | Action and expected observation |
 |---|---|
 | Fresh install | Run the launcher directly while online. It resolves, verifies and installs the browser, then opens it. Record version and launch errors. |
-| Portable profile | Inspect `about:support` (Firefox) or `chrome://version` (Chromium). The profile must be under the disposable instance's `Data/`, not a host profile. Add a disposable bookmark as a sentinel. |
+| Portable profile | Inspect `about:support` (Gecko) or `chrome://version` (Chromium). The profile must be under the disposable instance's `Data/`, not a host profile. Add a disposable bookmark as a sentinel. |
 | Relaunch | Close the browser fully, relaunch, and confirm the same profile and bookmark. A remaining background process can invalidate this check. |
 | Hardening toggle | Close fully; set `hardening.enabled = false` in `Nomad/nomad.toml`, relaunch, then repeat with `true`. The bookmark and installed extension state must persist. |
 | Language | On Chromium, set `launch.language = "fr"`, fully restart, and record the command line and UI locale. Repeat with `extra_args = ["--lang=de"]`, then with the language key omitted and no override. Locale availability/fallback is a browser result, not guaranteed by argument tests. Gecko should receive no generated `--lang` flag. |
@@ -87,10 +87,9 @@ For each instance, record pass/fail/not run and evidence for every row:
 | Update/preservation | Requires an authentic older browser package and a newer supported release. Keep both within a separate disposable instance and use the normal verified updater. Confirm the bookmark, extension state and version marker afterward. If no suitable older fixture is available, mark not run. Never falsify an installed-version marker to claim update coverage. |
 | Failure/retry | In a VM, interrupt networking during a disposable update download. The working installation/profile must remain usable; restore networking and retry. This exercises download failure, not every rollback path. Never bypass verification or corrupt the user's installation. |
 
-Extend coverage to Firefox ESR, Floorp, Waterfox, LibreWolf, Mullvad, Helium and
-Bitwarden before claiming all-launcher validation. Mullvad uses `Data/Profile`;
-Bitwarden keeps its vault under its install directory and needs separate state
-preservation checks. Use no real vault or sign-in credentials. Helium's historical
+Extend coverage to Waterfox, LibreWolf, Mullvad, and Helium
+before claiming all-launcher validation. Mullvad uses `Data/Profile`; verify its
+profile preservation separately. Use no real sign-in credentials. Helium's historical
 cross-machine cookie report requires a separate controlled two-machine test.
 
 ## Default-browser picker and URL/file handoff

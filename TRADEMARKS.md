@@ -2,10 +2,10 @@
 
 Nomad Launcher is an independent open-source project. It is **not** affiliated
 with, endorsed by, or sponsored by any of the projects or companies whose
-software it downloads, verifies, and launches — including Mozilla (Firefox,
-Firefox ESR), Mullvad VPN AB and the Tor Project (Mullvad Browser), the
+software it downloads, verifies, and launches — including Mozilla (Firefox),
+Mullvad VPN AB and the Tor Project (Mullvad Browser), the
 ungoogled-chromium project, imput (Helium), Ablaze (Floorp), BrowserWorks
-(Waterfox), the LibreWolf community, Bitwarden Inc., Raymond Hill (uBlock
+(Waterfox), the LibreWolf community, Raymond Hill (uBlock
 Origin), and Igor Pavlov (7-Zip).
 
 All product names, logos, and brands that appear in Nomad's documentation,

@@ -517,3 +517,39 @@ tests and nine live-upstream tests remain intentionally ignored in the local
 gate; the earlier Sandbox and merged-main CI evidence is recorded separately.
 Logs: `target/release-prep-v1.0.9-gate.log` and
 `target/release-prep-v1.0.9-msrv.log`. Release-branch CI has not run yet.
+
+## Supported launcher removals (2026-10-12)
+
+The owner merged release preparation in PR #69 as `4cb30b7`. Release work is
+paused for the requested removal of Bitwarden, standard Firefox, and Firefox ESR.
+The workspace and distribution now contain six launchers: Chromium, Floorp,
+Helium, LibreWolf, Mullvad, and Waterfox. The removed launcher crates and the
+Bitwarden and Firefox adapters are gone, together with the embedded Mozilla key
+`core/keys/firefox.asc` and its signing-key coverage check; no remaining adapter
+used that key. The shared Gecko payloads under `core/payloads/firefox/` remain
+because Floorp, Waterfox, and LibreWolf use them. Documentation and signing-key
+checks reflect this supported set. Historical Sandbox evidence above remains a
+record of the Firefox versions tested, not coverage of a supported launcher.
+
+Distribution regression fixtures reject stale standard Firefox, Firefox ESR, and
+Bitwarden binaries. Shared updater state-preservation and invalid-stage
+regressions remain covered with an inert adapter. Gecko staging, hardening
+withdrawal, and target-recording regressions that used the Firefox adapter now
+use Floorp, and the shared-payload assertions moved to the Floorp adapter test.
+The 12 tests of the Firefox adapter itself were removed with it. Existing
+portable installations, profiles, vaults, and registration records are not
+deleted or migrated by this source change.
+
+Local validation passed: the canonical gate completed with 466 Rust tests,
+formatting, Clippy, artifact guards, 36 build safeguard cases, release/CI
+safeguards, and dependency auditing with the documented RSA exception. Rust 1.92
+workspace/all-target checking passed. Four native HKCU tests, six live-upstream
+tests, and two upstream extraction tests remain intentionally ignored. No fresh
+live-browser or Sandbox checks were run for this removal, and
+`scripts/check-signing-keys.sh` was not rerun against the network.
+
+Logs: `target/remove-firefox-esr-gate.log` and `target/remove-firefox-esr-msrv.log`.
+The earlier seven-launcher run is in `target/remove-launchers-gate.log` and
+`target/remove-launchers-msrv.log`.
+These changes are local on `cleanup/remove-launchers`; commit, push, PR checks,
+release tagging, signing, and publication remain pending.
