@@ -62,6 +62,7 @@ Rust 1.92 checks. The launcher-removal changes also passed the local canonical
 gate (466 Rust tests, including retained updater safety coverage), 36 build
 safeguard cases, and Rust 1.92 workspace/all-target checking. PR #70 merged after
 its checks passed; the subsequent main Chromium Compatibility run exposed a
-socket-fixture race. Its follow-up fix and the tagged release build remain pending.
+socket-fixture race, corrected in PR #71; all main checks then passed. The tagged
+release build remains pending.
 Downloaded release artifacts must be verified against the signed
 SHA256SUMS manifest and GitHub build provenance as described in README.md.
