@@ -389,7 +389,7 @@ Likewise, a green local gate does not close unrun end-to-end validation.
 | Work | Evidence needed / scope |
 |---|---|
 | Windows registration and URL handoff | Experimental Firefox baseline passed registration/default selection, open/closed HTTPS/local HTML handoff, unclaimed-instance refusal, separate picker entries and both unregister checks. Supported Chromium also passed registration/default selection, open/closed HTTPS/HTML handoff and unregistration. Other supported-build/family cases and claimed-but-uninstalled refusal remain unrun. |
-| Portable browser smoke tests | Firefox portable profile, enabled uBlock, relaunch, hardening off/on and offline launch are exercised in the experimental build. Supported-build Firefox verification/startup and Chromium verification/startup, version 155.0.8059.39, portable paths and language/load-extension arguments are confirmed. Chromium uBlock Origin 1.75.0 acceptance/enabled state is now screenshot-confirmed; full exit/relaunch preservation is now confirmed. Other browser families, authentic older-to-newer updates, download failure/retry and rollback coverage remain pending. Offline bookmark observation and extension blocking behavior were not captured; supported Firefox debug authentication evidence and Chromium hash/startup evidence are now collected. |
+| Portable browser smoke tests | Firefox portable profile, enabled uBlock, relaunch, hardening off/on and offline launch are exercised in the experimental build. Supported-build Firefox verification/startup and Chromium verification/startup, version 155.0.8059.39, portable paths and language/load-extension arguments are confirmed. Chromium uBlock Origin 1.75.0 acceptance/enabled state is now screenshot-confirmed; full exit/relaunch preservation is now confirmed. Authentic Chromium 154-to-155 update, mid-download failure/preservation, fallback and successful retry now pass. Other browser families and post-swap rollback coverage remain pending. Chromium offline bookmark preservation was user-confirmed; extension blocking behavior was not captured; supported Firefox debug authentication evidence and Chromium hash/startup evidence are now collected. |
 | Historical Helium cross-machine sign-in report | Still needs reproduction. The handoff references issue #54, but current GitHub status and root cause were not checked here. Portability flags alone do not prove cookie portability. Use a disposable account/profile and a controlled move between machines. |
 | Historical local artifacts | The handoff reports a nested Mullvad browser tree, stale associations and a stray LibreWolf host profile. These were not re-inspected or removed; they are historical reports, not current verified state. Cleanup needs a separate inventory and user approval. |
 | Review, CI and release | Obtain approval for push/PR creation, run GitHub CI, review/merge within authorized scope, build and verify release artifacts, and obtain approval for publishing/deployment. None follows automatically from a local commit. |
@@ -407,9 +407,30 @@ Initially on 2026-10-11, no isolated environment was available and the user
 requested preparation only. The user subsequently authorized Windows Sandbox
 setup and executed the four native HKCU tests there, as recorded above.
 
-Recommended next step: prepare authentic browser-update/failure fixtures. The supported
-Chromium registration/handoff/removal sequence is complete; retain the existing
-Sandbox session while guest logs and fixtures have not been exported. Static runtime and renderer implementation, the canonical
+Authentic Chromium 154.0.8037.97-1.1 is now installed in the separate
+`Production\UpdateChromium` fixture. Screenshot `Screenshot 2026-10-11 233851.png`
+confirms the verified installation, generated version marker and actual portable
+browser/profile paths; the user confirms the test bookmark and enabled uBlock.
+Screenshot `Screenshot 2026-10-11 235249.png` confirms interruption after 32,768
+partial package bytes, guest adapter re-enablement, the expected pipeline network
+error, removal of the partial download, and unchanged older-browser/profile/
+configuration hashes. Controlled download failure and preservation pass.
+Screenshot `Screenshot 2026-10-11 235552.png` shows fallback Chromium still at
+154.0.8037.97 in the same UpdateChromium portable profile; the user confirms the
+test bookmark and enabled uBlock Origin. Fallback launch/preservation passes.
+Screenshot `Screenshot 2026-10-12 000401.png` confirms retry exit code 0, package
+SHA-256 verification, a changed browser binary and the generated 155.0.8059.39-1.1
+marker. `chrome://version` shows engine 155.0.8059.39 in the same UpdateChromium
+portable profile. The helper confirms retained bookmark name/URL, uBlock manifest
+1.75.0, unchanged configuration/identity and absent stage/backup folders; the user
+confirms the bookmark and enabled uBlock Origin. Authentic 154-to-155 update,
+interrupted-download preservation, fallback launch and successful retry pass.
+This pre-swap failure does not exercise rollback after a bundle replacement.
+
+Recommended next step: preserve the guest evidence before ending the Sandbox
+session, then select remaining coverage from the follow-up table. The supported
+Chromium registration/handoff/removal and exercised update/failure sequences are
+complete. Guest logs and fixtures have not been exported. Static runtime and renderer implementation, the canonical
 gate, MSRV and artifact checks are complete locally; broader guest checks and
 GitHub CI remain separate.
 Defer the optional module split until behavior validation.

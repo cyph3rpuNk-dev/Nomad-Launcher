@@ -554,3 +554,83 @@ folder was deleted. Supported Chromium registration, manual default selection,
 open/closed HTTPS/HTML handoff and unregistration are complete. This does not
 establish that Windows selected a replacement default after removal, nor that
 guest logs have been exported. The Sandbox session should be retained for now.
+
+## Authentic Chromium update fixture (after commit 4d29106)
+
+Prepared `update-start.ps1` in the Sandbox input bundle to install authentic
+upstream Chromium 154.0.8037.97-1.1 in a fresh Production\UpdateChromium folder.
+The helper verifies tagged GitHub asset metadata against its pinned SHA-256,
+then seeds matching metadata into the normal version cache. The supported
+launcher downloads and verifies the older package through its normal updater;
+no installed-version marker is fabricated. The tagged newer fixture is
+155.0.8059.39-1.1, with GitHub asset SHA-256
+`7ab1bac653c531ea06cd4f08a59120e129d53f73f2cf7a00ae52a43276849f11`.
+
+Screenshot `Screenshot 2026-10-11 233851.png` confirms older-fixture launcher
+exit code 0, a version-cache hit for 154.0.8037.97-1.1, package SHA-256 verification,
+and browser launch. The generated marker records target x64, browser
+154.0.8037.97-1.1 and engine 154.0.8037.97. `chrome://version` independently shows
+Chromium 154.0.8037.97, the UpdateChromium browser executable and Data\Default
+profile. The user confirms creation of the requested bookmark and enabled uBlock
+Origin. This establishes the older baseline; an older-to-newer update has not
+occurred yet.
+
+Prepared `update-failure.ps1` to verify that baseline, seed pinned newer-release
+metadata, detect nonzero partial package bytes, disable only the recorded guest
+adapter, wait for the launcher's pipeline error, and restore networking in a
+finally block. It records before/after hashes for the older executable, version
+marker, extension manifest, Bookmarks, Preferences, configuration and instance
+identity. It refuses reused evidence and existing staging/backup paths. No
+failure pass is claimed if interruption or the pipeline error is not observed.
+Prepared `update-network-restore.ps1` for recovery using the saved guest adapter
+identity. Both helpers passed Windows PowerShell 5.1 syntax parsing; positive
+and negative bookmark fixtures passed. These checks performed no network or
+browser actions. Guest download failure, fallback launch, successful retry and
+actual swap/rollback observations remain pending.
+
+Screenshot `Screenshot 2026-10-11 235249.png` confirms the live newer-package
+interruption after observing 32,768 partial bytes. The guest Ethernet adapter
+was re-enabled, and the launcher reported `network error: error decoding response
+body` through its pipeline error state. The helper reports all older-browser,
+profile and configuration hashes unchanged and the partial download absent.
+The error window remains open with Retry, Launch anyway and Close available.
+Controlled mid-download failure and preservation pass. No fallback launch or
+successful update is inferred yet. This failure occurred before verification,
+extraction and replacement; it does not exercise post-swap rollback.
+
+Screenshot `Screenshot 2026-10-11 235552.png`, supplied after Launch anyway,
+shows Chromium 154.0.8037.97 and the same UpdateChromium executable and
+Data\Default profile paths. The user explicitly confirms Nomad update test
+remains and uBlock Origin is enabled. Fallback launch and preservation pass;
+no independent fallback exit-code or fresh fallback log capture was supplied.
+
+Prepared `update-retry.ps1` to require stopped Chromium and the preserved older
+installation/failure evidence, refresh the authentic pinned newer metadata in
+the cache, and invoke the same supported launcher with networking connected.
+The normal updater handles stale staging recovery, verification and replacement.
+The helper records the retry log, generated version marker, changed browser
+binary, retained bookmark name/URL, extension manifest version and unchanged
+configuration/instance identity. Windows PowerShell 5.1 syntax checks and
+positive/negative bookmark fixtures passed without browser/network actions.
+Live successful-update/version/profile/extension observations remain pending.
+
+## Successful authentic-update retry (2026-10-12)
+
+Screenshot `Screenshot 2026-10-12 000401.png` confirms `update-retry.ps1`
+completed with launcher exit code 0. The retry log shows a cache hit for authentic
+155.0.8059.39-1.1 metadata, package SHA-256 verification and browser launch PID
+5280. The normal updater-generated marker records x64, browser 155.0.8059.39-1.1
+and engine 155.0.8059.39. The helper reports the browser binary changed, bookmark
+name/URL retained, uBlock manifest version 1.75.0, configuration and instance
+identity retained, and stage/backup folders absent.
+
+`chrome://version` independently shows Chromium 155.0.8059.39 with the same
+Production\UpdateChromium executable and Data\Default profile paths. The user
+explicitly confirms the bookmark remains and uBlock Origin is enabled. Authentic
+older-to-newer update and preservation after a controlled download failure and
+fallback launch pass. Retry here means a new direct launcher invocation after
+fallback and full browser exit; the error-window Retry button was not separately
+exercised. No package verification or installed-version checks were bypassed.
+The interruption happened before bundle replacement, so post-swap rollback
+remains separate coverage. Guest fixture files and logs remain in the current
+Sandbox; this screenshot does not establish their export to the host.
