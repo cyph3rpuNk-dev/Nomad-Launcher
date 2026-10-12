@@ -491,3 +491,29 @@ The fixture correction and this record are local and await commit/push approval.
 PR #68 remains draft with failed checks on `f1b9ec2`; CI has not run on the
 fixture correction. Live Chromium archive/build steps were not reached in those
 failed workflows.
+
+## Merge validation and v1.0.9 preparation (2026-10-12)
+
+The junction-fixture correction above was committed and pushed as `36eda10`.
+All nine PR checks passed. The owner merged PR #68 into main as
+`70f044c77f55080b84f2e71c8f727bfcf5b61db3`. Main-branch CI, Rust 1.92,
+dependency audit, Chromium Compatibility, Actions static analysis, and Scorecard
+all passed. These results supersede the earlier pending/failed CI status.
+
+[Chromium Compatibility on the merge](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/actions/runs/38216758798)
+verified the live archive/layout/overlays and built the validated launcher artifact.
+The artifact is for review; it is not a tagged, attested release.
+
+Release preparation is on `release/v1.0.9`: workspace and lockfile package versions
+are advanced together, with release notes in `RELEASE-NOTES-v1.0.9.md`. Upstream
+dependency versions are unchanged. Commit/push, release tagging, the attested draft
+build, the owner's offline manifest signature, and publication remain pending.
+The remaining live-platform/browser/recovery coverage gaps above remain open.
+
+Local validation of the v1.0.9 preparation passed: 492 Rust tests, formatting,
+Clippy, safeguard fixtures, and dependency auditing with the documented RSA
+exception. Rust 1.92 workspace/all-target checking also passed. Four native HKCU
+tests and nine live-upstream tests remain intentionally ignored in the local
+gate; the earlier Sandbox and merged-main CI evidence is recorded separately.
+Logs: `target/release-prep-v1.0.9-gate.log` and
+`target/release-prep-v1.0.9-msrv.log`. Release-branch CI has not run yet.
