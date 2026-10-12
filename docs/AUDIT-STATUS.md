@@ -30,7 +30,8 @@ has been measured.
 
 Code fixes and documentation cleanup are local commits; the live-check results
 are committed as `a83ef02`; the isolated smoke-test runbook is committed as
-`6f51fe5`. New Sandbox results and documentation updates are uncommitted.
+`6f51fe5`. Runtime/renderer fixes and their Sandbox records are committed as
+`4d29106`; the Chromium update/failure/recovery records are committed as `d73e353`.
 This work has not been pushed, merged,
 published or copied into the user's portable installations. At the baseline review,
 `origin/main..HEAD` contained 24 commits using the local tracking ref. No remote
@@ -367,7 +368,8 @@ rendering is not selected in this run either. Supported Firefox's actual profile
 path has not yet been confirmed separately.
 Only the Windows x64 target is installed locally;
 non-Windows compile/graphics and live Windows 10 checks were unavailable/unrun.
-GitHub CI has not run. Changes and validation records remain uncommitted.
+GitHub CI has not run. Runtime/renderer changes and validation records were
+subsequently committed as `4d29106`, with update/recovery results in `d73e353`.
 
 Supported-build Firefox SHA-256:
 `79E64AD13B338F80719A0D38B8B68356AE845B0371698B994A3D65B455AE0C6B`.
@@ -427,10 +429,20 @@ confirms the bookmark and enabled uBlock Origin. Authentic 154-to-155 update,
 interrupted-download preservation, fallback launch and successful retry pass.
 This pre-swap failure does not exercise rollback after a bundle replacement.
 
-Recommended next step: preserve the guest evidence before ending the Sandbox
-session, then select remaining coverage from the follow-up table. The supported
-Chromium registration/handoff/removal and exercised update/failure sequences are
-complete. Guest logs and fixtures have not been exported. Static runtime and renderer implementation, the canonical
+Guest evidence is now preserved under the host Documents folder at
+`Nomad-Launcher-Evidence\2026-10-11-12-5accfcf6`. The 266,609-byte archive contains
+56 evidence files and 14 hash-only references. Its SHA-256 matches the guest
+console screenshot, and every exported file checksum and archive path passed
+independent host verification. Four available screenshots, helper scripts and
+audit documents are also retained; 40 earlier referenced screenshots were not
+found at their recorded source paths and are listed in the host manifest.
+Browser/profile contents are excluded; this is evidence preservation, not a
+backup of the disposable installations. The temporary receiver was stopped.
+
+Recommended next step: select remaining validation coverage or proceed with
+separately authorized push/CI/review. The supported Chromium registration/handoff/
+removal and exercised update/failure sequences are complete, and their guest
+logs/test metadata have been exported. Static runtime and renderer implementation, the canonical
 gate, MSRV and artifact checks are complete locally; broader guest checks and
 GitHub CI remain separate.
 Defer the optional module split until behavior validation.
