@@ -634,3 +634,38 @@ exercised. No package verification or installed-version checks were bypassed.
 The interruption happened before bundle replacement, so post-swap rollback
 remains separate coverage. Guest fixture files and logs remain in the current
 Sandbox; this screenshot does not establish their export to the host.
+
+## Host evidence preservation (2026-10-12)
+
+Prepared a bounded metadata/log exporter and temporary receiver on the host's
+Sandbox virtual-network address. Windows Sandbox's CLI did not enumerate the
+existing legacy session, so no dynamic folder share or restart was used. The
+local transport fixture verified byte count, hash acknowledgement and receiver
+exit. Windows PowerShell 5.1 exporter fixtures verified evidence selection,
+profile/binary exclusion and source containment. The receiver did not require
+host firewall changes, and no external upload service was used.
+
+Screenshot `Screenshot 2026-10-12 003115.png` confirms guest collection of 56
+evidence files and 14 hash-only references, producing a 266,609-byte archive.
+The receiver saved it completely but returned HTTP 400 when its Get-FileHash
+command was unavailable during acknowledgement generation. Independent host
+verification found the archive SHA-256 exactly matches the guest console:
+`A06B97E0BDDA2351EBE7F3D805770A916123E9914B8117FA8EA63D520BC79538`.
+Every declared file size/hash and archive path was then validated without
+executing or extracting guest code. Total expanded entry bytes: 3,281,261.
+The update failure/retry JSON records and retry log are present in the archive.
+
+Host destination:
+`C:\Users\CXLVII\Documents\Nomad-Launcher-Evidence\2026-10-11-12-5accfcf6`.
+Retained files include sandbox-evidence.zip, SHA256SUMS, receipt.json,
+guest-manifest.json, host-manifest.json, README.txt and the receiver error record.
+The host bundle also contains helper scripts, artifact/configuration metadata,
+audit documents and four available screenshots. Forty earlier referenced
+screenshots were unavailable at their recorded paths; the manifest lists them.
+
+The archive contains logs, test records, launcher configuration, ownership/
+registration metadata and installed-version markers. Browser executables and
+profile contents are excluded; the 14 reference hashes are not profile backups.
+The temporary receiver was stopped after verification. Sandbox was left running;
+closing it would still discard browser/profile contents that this export does
+not back up. Curated test evidence is now independently preserved on the host.
