@@ -174,6 +174,17 @@ pub struct NomadState {
 ///   the phase so the other side can wake up immediately.
 pub type StateHandle = Arc<(Mutex<NomadState>, Condvar)>;
 
+/// Inner size of the status window, in points. The window is not resizable,
+/// so every state must lay out inside it.
+const WINDOW_SIZE: [f32; 2] = [460.0, 380.0];
+
+/// Frame of the panel that holds the window body.
+fn body_frame() -> egui::Frame {
+    egui::Frame::NONE
+        .fill(theme::BG)
+        .inner_margin(egui::Margin::same(8))
+}
+
 // ── eframe App ────────────────────────────────────────────────────────────────
 
 /// The eframe application for the Nomad status window.
@@ -244,43 +255,52 @@ impl eframe::App for NomadWindow {
         }
 
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(theme::BG)
-                    .inner_margin(egui::Margin::same(8)),
-            )
+            .frame(body_frame())
             .show_inside(ui, |ui| {
-                ui.set_min_width(340.0);
-
-                identity::identity_card(ui, &view, self.logo.as_ref());
-                ui.add_space(theme::space::MD);
-                runtime_details_card(ui, &view);
-                ui.add_space(theme::space::MD);
-
-                match &phase {
-                    WindowPhase::UpdatePrompt { new_version } => {
-                        self.render_update_prompt(ui, new_version);
-                    }
-                    WindowPhase::Error {
-                        message,
-                        has_fallback,
-                    } => {
-                        self.render_error(ui, &ctx, message, *has_fallback);
-                    }
-                    _ => {
-                        footer(
-                            ui,
-                            &view.upstream_url,
-                            view.accent,
-                            self.nomad_logo.as_ref(),
-                        );
-                    }
-                }
+                self.body(ui, &ctx, &phase, &view);
             });
     }
 }
 
 impl NomadWindow {
+    /// Lays out the window contents for `phase`. In the error state, returns
+    /// the rectangle of the action buttons so layout tests can check that they
+    /// stay inside the fixed-size window.
+    fn body(
+        &self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        phase: &WindowPhase,
+        view: &LauncherView,
+    ) -> Option<egui::Rect> {
+        ui.set_min_width(340.0);
+
+        identity::identity_card(ui, view, self.logo.as_ref());
+        ui.add_space(theme::space::MD);
+        runtime_details_card(ui, view);
+        ui.add_space(theme::space::MD);
+
+        match phase {
+            WindowPhase::UpdatePrompt { new_version } => {
+                self.render_update_prompt(ui, new_version);
+                None
+            }
+            WindowPhase::Error {
+                message,
+                has_fallback,
+            } => Some(self.render_error(ui, ctx, message, *has_fallback)),
+            _ => {
+                footer(
+                    ui,
+                    &view.upstream_url,
+                    view.accent,
+                    self.nomad_logo.as_ref(),
+                );
+                None
+            }
+        }
+    }
+
     /// Renders the *Update available* prompt with Update / Launch-current buttons.
     fn render_update_prompt(&self, ui: &mut egui::Ui, new_version: &str) {
         ui.add_space(theme::space::SM);
@@ -301,19 +321,32 @@ impl NomadWindow {
     }
 
     /// Renders the error state with the error message and Retry / Launch-anyway / Close buttons.
+    ///
+    /// The window cannot grow, so the button row is reserved first and a
+    /// message too long for the remaining space scrolls instead of pushing the
+    /// buttons out of reach. Returns the rectangle of the button row.
     fn render_error(
         &self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         message: &str,
         has_fallback: bool,
-    ) {
+    ) -> egui::Rect {
         ui.add_space(theme::space::SM);
-        ui.label(
-            egui::RichText::new(message)
-                .size(theme::text::BODY)
-                .color(theme::TEXT_SECONDARY),
-        );
+        let spacing = ui.spacing();
+        let button_row = spacing.interact_size.y + theme::space::SM + 2.0 * spacing.item_spacing.y;
+        let room = (ui.available_height() - button_row).max(0.0);
+        egui::ScrollArea::vertical()
+            .max_height(room)
+            .min_scrolled_height(0.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(message)
+                        .size(theme::text::BODY)
+                        .color(theme::TEXT_SECONDARY),
+                );
+            });
         ui.add_space(theme::space::SM);
         ui.horizontal(|ui| {
             if ui.button("Retry").clicked() {
@@ -325,7 +358,9 @@ impl NomadWindow {
             if ui.button("Close").clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-        });
+        })
+        .response
+        .rect
     }
 
     /// Signals an `UpdateDecided` phase and wakes the pipeline.
@@ -661,7 +696,7 @@ where
     let options = native_options(
         egui::ViewportBuilder::default()
             .with_title(title)
-            .with_inner_size([460.0, 380.0])
+            .with_inner_size(WINDOW_SIZE)
             .with_resizable(false)
             .with_maximize_button(false)
             .with_icon(icon),
@@ -730,6 +765,108 @@ mod tests {
             native_options(egui::ViewportBuilder::default()).renderer,
             eframe::Renderer::Glow
         );
+    }
+
+    /// Lays out the error state headlessly at the real window size and
+    /// returns the body bounds and the rectangle of the action buttons.
+    fn error_layout(message: &str) -> (egui::Rect, egui::Rect) {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        setup_visuals(&ctx, theme::ACCENT);
+        let view = LauncherView {
+            display_name: "Floorp".to_owned(),
+            id: "floorp".to_owned(),
+            arch: "x64".to_owned(),
+            browser_version: Some("12.20.1".to_owned()),
+            engine_name: "Firefox".to_owned(),
+            engine_version: Some("12.20.1".to_owned()),
+            build_date: None,
+            upstream_url: "https://example.invalid".to_owned(),
+            status: StatusLines::new("Launching\u{2026}"),
+            progress: ProgressState::Hidden,
+            icon_bytes: None,
+            accent: theme::ACCENT,
+        };
+        let phase = WindowPhase::Error {
+            message: message.to_owned(),
+            has_fallback: true,
+        };
+        let window = NomadWindow {
+            state: Arc::new((
+                Mutex::new(NomadState {
+                    view: view.clone(),
+                    phase: phase.clone(),
+                }),
+                Condvar::new(),
+            )),
+            logo: None,
+            nomad_logo: None,
+            taskbar: crate::taskbar::TaskbarProgress::inert(),
+            hwnd: None,
+        };
+        let mut layout = None;
+        // A few frames let wrapped text and the scroll area settle.
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    WINDOW_SIZE.into(),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                egui::CentralPanel::default()
+                    .frame(body_frame())
+                    .show_inside(ui, |ui| {
+                        let bounds = ui.max_rect();
+                        let buttons = window
+                            .body(ui, &ctx, &phase, &view)
+                            .expect("the error state has action buttons");
+                        layout = Some((bounds, buttons));
+                    });
+            });
+        }
+        layout.expect("the window body was laid out")
+    }
+
+    fn assert_buttons_in_reach(message: &str) {
+        let (bounds, buttons) = error_layout(message);
+        assert!(
+            buttons.height() > 10.0 && buttons.width() > 100.0,
+            "the button row must be laid out: {buttons:?}"
+        );
+        assert!(
+            buttons.top() >= bounds.top() && buttons.bottom() <= bounds.bottom() + 0.5,
+            "Retry / Launch anyway / Close must stay inside the window: \
+             buttons {buttons:?}, window body {bounds:?}, message length {}",
+            message.len()
+        );
+    }
+
+    /// Regression: the three-line missing-runtime message pushed the buttons
+    /// below the bottom edge of the fixed-size window.
+    #[test]
+    fn error_buttons_stay_in_reach_however_long_the_message_is() {
+        assert_buttons_in_reach("offline or rate-limited: error sending request");
+        assert_buttons_in_reach(
+            "the browser did not start: Windows could not find a system file the browser needs \
+             (STATUS_DLL_NOT_FOUND, 0xC0000135). This usually means the Microsoft Visual C++ \
+             Redistributable (x64) is not installed.",
+        );
+        assert_buttons_in_reach(&"verification failed: a very long diagnostic. ".repeat(40));
+    }
+
+    #[test]
+    fn the_missing_runtime_message_keeps_the_buttons_in_reach() {
+        let reason = crate::startup_failure_reason(0xC000_0135_u32.cast_signed())
+            .expect("a missing DLL is a failed start");
+        for message in [
+            crate::BrowserError::Startup(reason.clone()).to_string(),
+            format!("Could not start the browser: {reason}"),
+        ] {
+            assert_buttons_in_reach(&message);
+        }
     }
 
     #[test]
