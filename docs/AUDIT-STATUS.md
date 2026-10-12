@@ -667,3 +667,52 @@ Evidence is preserved outside the repository at
 machine: 16 screenshots, the guest helper scripts and Sandbox configuration, the
 launcher manifest, a results README and a checksum list. No release tag, signing
 or publication has been performed.
+
+## Start-up failure reporting (2026-10-12)
+
+The Floorp documentation merged as PR #72; main is `c5a252e`. The owner chose to
+correct the launcher's false launch report and to document Floorp's runtime
+requirement before v1.0.9.
+
+`do_launch` and the "Launch anyway" fallback treated successful process creation
+as a launch. Both now start the browser through `spawn_browser`, which polls the
+new process for one second. A process that ends in that window with a Windows
+NTSTATUS error (`0xC0000000`-`0xCFFFFFFF`) is returned as the new
+`BrowserError::Startup`: the error screen stays open, "browser launched" is not
+logged and the cleanup watcher is not started. `0xC0000135` names the Visual C++
+Redistributable as the usual cause. Ordinary exit codes remain a successful
+launch, because a browser's first process may exit immediately after handing
+over to a running instance or to a child. Verification, update, ownership and
+registry behavior are unchanged, and no browser is installed or modified.
+
+Five tests cover this with inert `cmd.exe` and `ping.exe` children in place of a
+browser: loader-failure and crash codes are refused, ordinary exit codes and a
+still-running process count as launched, only the NTSTATUS error range is
+classified as a failure, and the fallback path keeps the error visible without
+starting post-launch work. With the watch temporarily bypassed, the two
+regression tests and the watch-length test failed; the change was then restored
+byte-for-byte. `do_launch` itself is not called by a test, because its
+preparation step runs the HKCU self-registration repair; its use of
+`spawn_browser` is a one-line substitution reviewed by reading.
+
+Limits. The watch is one second, so a browser that fails later is not detected.
+The Sandbox helper started the launcher from Windows PowerShell with shell
+execution disabled, and Floorp then exited silently within 26 ms; started
+directly with `Start-Process`, the same `floorp.exe` instead showed Windows'
+missing-DLL dialog and stayed alive until it was dismissed. The silent exit may
+therefore depend on an error mode inherited from the parent process. Starting
+the launcher from Explorer on a Windows without the runtime was not tested. If
+Windows shows its dialog there, the process outlives the watch, the launcher
+still reports a launch, and Windows' message is the only notice. The corrected
+launcher has not been run against a real browser or in Sandbox.
+
+README now states that Floorp needs the Microsoft Visual C++ Redistributable
+(x64) and adds a troubleshooting entry; SPEC describes the start-up watch.
+Nomad does not download, bundle or install that runtime.
+
+Local validation passed: the canonical gate with 472 Rust tests, formatting,
+Clippy, artifact guards, 36 build safeguard cases, release/CI safeguards and the
+dependency audit with the documented RSA exception; Rust 1.92 workspace and
+all-target checking also passed. Four HKCU, six live-upstream and two extraction
+tests remain intentionally ignored. Logs: `target/startup-failure-gate.log` and
+`target/startup-failure-msrv.log`.
