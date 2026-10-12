@@ -1138,7 +1138,7 @@ mod tests {
         assert!(matches!(error, BrowserError::Verification(_)));
         assert!(error.to_string().contains("no integrity material"));
         request.assert_calls_async(0).await;
-        assert!(steps.is_empty());
+        assert_eq!(steps, Vec::<InstallStep>::new());
         assert!(!crate::install::stage_dir(&install).exists());
         assert!(!crate::install::backup_dir(&install).exists());
     }
@@ -1185,7 +1185,7 @@ mod tests {
         .await;
         assert!(matches!(result, Err(BrowserError::Verification(_))));
         package_request.assert_calls_async(0).await;
-        assert!(steps.is_empty());
+        assert_eq!(steps, Vec::<InstallStep>::new());
         assert!(!crate::install::stage_dir(&install).exists());
         assert!(!crate::install::backup_dir(&install).exists());
         assert_eq!(

@@ -3526,7 +3526,7 @@ mod tests {
         ];
         let (own, forwarded) = split_forwarded_args(&plain).unwrap();
         assert_eq!(own, &plain[..]);
-        assert!(forwarded.is_empty());
+        assert_eq!(forwarded, &[] as &[String]);
 
         // A Nomad flag in the untrusted target position must be rejected,
         // rather than dispatched internally or forwarded as a browser switch.
@@ -3795,11 +3795,17 @@ mod tests {
     #[test]
     fn processes_matching_reports_nothing_for_absent_targets() {
         // A name that definitely isn't running, and a path that doesn't exist.
-        assert!(processes_matching("nomad-zzzz-not-a-real-process.exe").is_empty());
-        assert!(processes_matching(r"C:\definitely\not\here\nomad-zzzz.exe").is_empty());
+        assert_eq!(
+            processes_matching("nomad-zzzz-not-a-real-process.exe"),
+            Vec::<u32>::new()
+        );
+        assert_eq!(
+            processes_matching(r"C:\definitely\not\here\nomad-zzzz.exe"),
+            Vec::<u32>::new()
+        );
         // Degenerate input (no file name at all) must be an empty result,
         // never a match-everything.
-        assert!(processes_matching("").is_empty());
+        assert_eq!(processes_matching(""), Vec::<u32>::new());
     }
 
     #[cfg(windows)]

@@ -32,8 +32,8 @@ Code fixes and documentation cleanup are local commits; the live-check results
 are committed as `a83ef02`; the isolated smoke-test runbook is committed as
 `6f51fe5`. Runtime/renderer fixes and their Sandbox records are committed as
 `4d29106`; the Chromium update/failure/recovery records are committed as `d73e353`.
-This work has not been pushed, merged,
-published or copied into the user's portable installations. At the baseline review,
+The branch was subsequently pushed and opened as draft PR #68. It has not been
+merged, published or copied into the user's portable installations. At the baseline review,
 `origin/main..HEAD` contained 24 commits using the local tracking ref. No remote
 fetch was performed, so this is not GitHub's independently verified current state.
 
@@ -446,3 +446,24 @@ logs/test metadata have been exported. Static runtime and renderer implementatio
 gate, MSRV and artifact checks are complete locally; broader guest checks and
 GitHub CI remain separate.
 Defer the optional module split until behavior validation.
+
+## Draft PR and first CI results (2026-10-12)
+
+`rebuild/foundation` was pushed at `67b8c16` and draft
+[PR #68](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/pull/68) opened against
+main. All 33 published commits were checked for author/committer identity and
+full-message attribution. No merge or release publication was performed.
+
+Dependency advisories, Rust 1.92 compatibility and Actions static analysis passed.
+The [Windows canonical check](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/actions/runs/38210395672/job/114683031722)
+and Chromium Compatibility jobs failed at Clippy on the same nine test-only
+assertions. CI's Rust 1.99 introduces `clippy::assert_is_empty`; the host has
+Rust/Clippy 1.98.1. The assertions were changed locally to explicit equality or
+inequality comparisons, preserving the conditions checked and lint policy.
+
+The local canonical gate passed after this fix: 490 Rust tests, formatting,
+Clippy, safeguard fixtures and dependency audit with the documented RSA exception.
+Rust 1.92 workspace/all-target checking also passed. Full logs are retained in
+`target/pr68-ci-fix-gate.log` and `target/pr68-ci-fix-msrv.log`. The test assertion
+fix and this status update await commit/push approval; CI on the changed assertions
+has not run, and PR #68 remains draft with failed checks on the published head.
