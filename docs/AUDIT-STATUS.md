@@ -716,3 +716,58 @@ dependency audit with the documented RSA exception; Rust 1.92 workspace and
 all-target checking also passed. Four HKCU, six live-upstream and two extraction
 tests remain intentionally ignored. Logs: `target/startup-failure-gate.log` and
 `target/startup-failure-msrv.log`.
+
+## Start-up watch in Sandbox and Explorer-launch follow-up (2026-10-12)
+
+The start-up watch merged as PR #73; main is `8cff3e8`, with CI, Chromium
+Compatibility, static analysis and Scorecard passing. The four merged working
+branches from this cycle were deleted after their tips were confirmed in main.
+
+The CI-built `Nomad-Floorp.exe` from `8cff3e8` (Chromium Compatibility run
+38314176711, SHA-256
+`a40be9278f81b86fb8990c7faef7008b55134a33b0e86b8195b01013b5e8edfa`) was
+exercised in a second fresh Windows Sandbox session without the Visual C++
+runtime, with the same isolation settings. Guest commands were typed by the
+user; results rest on host screenshots.
+
+| Case | Result |
+|---|---|
+| Launcher double-clicked in Explorer, runtime absent | Not caught. Windows showed `floorp.exe - System Error`, `VCRUNTIME140.dll was not found`. The launcher logged `browser launched` and started the cleanup watcher; the failed process stayed alive for 1 min 44 s until the dialog was dismissed. The profile held only Nomad's `user.js`. |
+| Launcher started from Windows PowerShell, runtime absent | Caught. The error screen showed the missing-runtime message; the log has `browser failed to start` and no launch or watcher line. The launcher still exited 0 after the user closed the error. The three-line message pushed Retry, "Launch anyway" and Close below the fixed-size window. |
+| Launcher double-clicked, runtime installed in the guest | Pass. Floorp started (11 processes, 116 profile files), `browser launched` was logged and the watcher ran. The first `floorp.exe` process had exited within about 25 ms of creation and was correctly treated as a launch. |
+
+The first two rows differ because of the inherited Windows error mode. Windows
+PowerShell reports `SEM_FAILCRITICALERRORS` (measured on the host as `0x8001`),
+and child processes inherit it, so a load failure ends the browser at once. A
+launcher started from Explorer has the default mode, so Windows shows its own
+dialog and keeps the failed process alive beyond the one-second watch. This
+confirms the limit recorded in the previous section.
+
+Follow-up changes:
+
+- `spawn_browser` now adds `SEM_FAILCRITICALERRORS` to the launcher's error mode
+  before creating the browser process, on both launch paths. The browser
+  inherits it. Microsoft recommends that applications set this mode; every
+  earlier Sandbox browser run in this audit already had it through the
+  PowerShell helpers. Windows' own dialog for this class of failure is no longer
+  shown for the launcher or the browser; Nomad's error screen replaces it.
+- The missing-runtime message is shortened to fit two lines.
+- The error screen reserves the button row first and lets a long message scroll,
+  so the buttons cannot leave the fixed-size window. A headless layout test at
+  the real window size measured the button row at 327-345 pt for a one-line
+  message, 341-359 pt for the missing-runtime message, and 351-369 pt for longer
+  messages, inside a body that ends at 372 pt.
+
+Three tests were added. The error-mode test failed with the call bypassed, and
+the layout test failed while the message area was unconstrained (buttons at
+355-373 pt); both pass with the changes. The layout test checks geometry, not
+rendered pixels.
+
+Local validation passed: the canonical gate with 475 Rust tests, formatting,
+Clippy, artifact guards, 36 build safeguard cases, release/CI safeguards and the
+dependency audit with the documented RSA exception; Rust 1.92 workspace and
+all-target checking also passed. Logs: `target/startup-dialog-gate.log` and
+`target/startup-dialog-msrv.log`. The follow-up has not been run in Sandbox: the
+Explorer-launch case with the runtime absent, and the visible error screen,
+still need a live check. Evidence for the session above is preserved outside the
+repository at `Documents\Nomad-Launcher-Evidence\2026-10-12-floorp-startup-8cff3e8`.

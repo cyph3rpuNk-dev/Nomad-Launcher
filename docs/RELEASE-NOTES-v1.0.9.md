@@ -75,9 +75,14 @@ portable profile, relaunch, hardening, cached offline launch, registration,
 URL/HTML handoff and unregistration once the Visual C++ runtime was installed in
 the guest. It also showed that Floorp cannot start without that runtime and that
 the launcher reported the failed start as a launch. The start-up watch added
-afterwards passed the local canonical gate (472 Rust tests) and Rust 1.92
-checks, but has not been exercised against a real browser. Waterfox, LibreWolf,
-Mullvad and Helium have no live coverage. The tagged release build remains
-pending.
+afterwards was checked in a second Sandbox session: it reported the failure when
+the launcher was started from PowerShell and raised no false error once the
+runtime was installed, but a launcher started from Explorer still let Windows
+show its own missing-DLL dialog and reported a launch. A follow-up sets the
+Windows error mode so that case is reported too, and keeps the error buttons
+inside the window. It passed the local canonical gate (475 Rust tests) and Rust
+1.92 checks; its Explorer-launch behavior has not yet been confirmed in Sandbox.
+Waterfox, LibreWolf, Mullvad and Helium have no live coverage. The tagged
+release build remains pending.
 Downloaded release artifacts must be verified against the signed
 SHA256SUMS manifest and GitHub build provenance as described in README.md.
