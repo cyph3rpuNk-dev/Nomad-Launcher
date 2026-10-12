@@ -551,5 +551,31 @@ live-browser or Sandbox checks were run for this removal, and
 Logs: `target/remove-firefox-esr-gate.log` and `target/remove-firefox-esr-msrv.log`.
 The earlier seven-launcher run is in `target/remove-launchers-gate.log` and
 `target/remove-launchers-msrv.log`.
-These changes are local on `cleanup/remove-launchers`; commit, push, PR checks,
-release tagging, signing, and publication remain pending.
+These changes merged in PR #70 after its checks passed. Release tagging, signing,
+and publication remain pending.
+
+## History cleanup and socket fixture follow-up (2026-10-12)
+
+The owner approved correcting one historical commit identity and three merge
+authors. A separate mirror backup was retained before rewriting 50 commits across
+11 remote branches. Every rewritten tree and commit message matched its original;
+all release tags remained unchanged. The atomic push used an explicit lease for
+each branch. Release and Chromium Compatibility were temporarily disabled and
+restored to active afterwards. Rewritten main is `b0b231e`; older hashes in this
+document identify historical evidence. No release assets were rebuilt or replaced.
+
+Main's Chromium Compatibility run 38270579753 failed in the oversized-XPI socket
+fixture with Windows `WouldBlock` (10035). Both raw-socket fixtures accepted from
+non-blocking listeners without restoring blocking mode. A delayed-request
+regression reproduced a connection abort locally before the correction. Both
+fixtures now restore blocking mode before applying bounded read/write timeouts.
+This changes test code only.
+
+The canonical gate passed with 467 Rust tests, formatting, Clippy, safeguard
+fixtures, and dependency audit. The delayed-request regression and both affected
+tests passed 30 repetitions each (90 executions). Logs are
+`target/socket-repro.log`, `target/socket-fix-gate.log`, and
+`target/socket-fix-repeat.log`. Rust 1.92 workspace/all-target checking also passed
+(`target/socket-fix-msrv.log`). Ignored HKCU/live-upstream/extraction tests were
+not run. The fix is local on `codex/fix-socket-fixtures`; publishing and fresh
+Chromium Compatibility results remain pending.
