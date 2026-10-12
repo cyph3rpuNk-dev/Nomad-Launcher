@@ -602,7 +602,7 @@ mod tests {
         assert!(cfg.update.check_on_launch);
         assert!(cfg.update.auto_download);
         assert_eq!(cfg.launch.language.as_deref(), Some("en-US"));
-        assert!(cfg.launch.extra_args.is_empty());
+        assert_eq!(cfg.launch.extra_args, Vec::<String>::new());
         assert!(!cfg.launch.incognito);
         assert!(cfg.hardening.enabled);
         assert!(cfg.hardening.sanitize_on_shutdown);

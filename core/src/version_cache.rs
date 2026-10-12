@@ -483,7 +483,7 @@ mod tests {
                         // A racing reader must always see a complete file (or
                         // none yet) — never a half-written one.
                         if let Some(c) = VersionCache::load(&p) {
-                            assert!(!c.browser_version.is_empty());
+                            assert_ne!(c.browser_version, "");
                         }
                     }
                 })

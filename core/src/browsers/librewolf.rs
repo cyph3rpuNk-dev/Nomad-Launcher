@@ -470,7 +470,7 @@ mod tests {
         else {
             panic!("LibreWolf must return GeckoProfile hardening");
         };
-        assert!(!user_js.is_empty());
+        assert_ne!(user_js, "");
         assert!(policies.is_some());
         assert!(
             autoconfig.is_none() && cfg.is_none(),
