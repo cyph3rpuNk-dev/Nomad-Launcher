@@ -39,6 +39,9 @@ guidance are documented in [Update and instance safety](docs/UPDATE-SAFETY.md).
 | `Nomad-Chromium.exe` | [Ungoogled Chromium](https://github.com/ungoogled-software/ungoogled-chromium) | SHA-256 |
 | `Nomad-Helium.exe` | [Helium](https://github.com/imputnet/helium-windows) | SHA-256 |
 
+Floorp also needs the Microsoft Visual C++ Redistributable (x64) on the PC. Its
+installer does not include it; see [Troubleshooting](#troubleshooting).
+
 ## Getting started
 
 Firefox, Firefox ESR, and Bitwarden launchers are no longer built. Existing
@@ -414,6 +417,8 @@ for failure recovery and concurrency limits.
 
 **Nothing happens on launch.** First-run downloads take 30 to 90 seconds. Check `Nomad/nomad.log` for errors. If the log is empty, Windows SmartScreen may be quarantining the `.exe`; look in Windows Security → Protection History.
 
+**"The browser did not start", or a missing `VCRUNTIME140` / `MSVCP140` message.** The browser was installed, but Windows could not load it. Floorp depends on the Microsoft Visual C++ runtime and its installer does not ship it, so Floorp cannot start on a Windows where that runtime was never installed. Install the x64 [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) from Microsoft, then run the launcher again. In testing only Floorp was affected. Nomad watches a newly started browser for one second and reports a failure Windows signals in that time. A browser that fails later, or that is still held open by a Windows error box, is not detected, and Windows' own message is then the only notice.
+
 **"Launch failed: window error" / won't start in a virtual machine.** The Windows status window uses Direct3D 12 through wgpu and the system FXC shader compiler. It can use an available hardware or Windows software adapter; an OpenGL driver or separate Visual C++ runtime installation is not required by the launcher. Check the guest graphics support and driver if window creation fails. See `Nomad/nomad.log` beside the launcher; setting `NOMAD_LOG=debug` for that launch records more diagnostics. See [validation scope and pending checks](docs/AUDIT-STATUS.md) for current Windows and VM coverage.
 
 **"Windows protected your PC" on first launch.** A SmartScreen reputation
@@ -495,7 +500,7 @@ browser families must not share the same portable folder.
 | Operating system | Windows 10 or Windows 11 (64-bit) |
 | Launcher build | `x86_64-pc-windows-msvc` |
 | Browser architecture | `x64` by default; `x86` and `arm64` availability varies by browser and upstream release |
-| Runtime dependencies | Stock Windows components; a usable Direct3D 12 hardware or system software adapter |
+| Runtime dependencies | Launchers: stock Windows components and a usable Direct3D 12 hardware or system software adapter. Floorp itself also needs the Microsoft Visual C++ Redistributable (x64) |
 | Network | Required for first run and update checks |
 
 ## Acknowledgements

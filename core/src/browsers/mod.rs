@@ -384,6 +384,9 @@ pub enum BrowserError {
     /// A resolved upstream build has not been certified for this launcher.
     #[error("update compatibility check failed: {0}")]
     Compatibility(String),
+    /// The browser process was created but failed before it could start.
+    #[error("the browser did not start: {0}")]
+    Startup(String),
 }
 
 /// Result alias for [`BrowserFamily`] operations.

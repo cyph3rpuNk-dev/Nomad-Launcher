@@ -1162,7 +1162,14 @@ fn do_launch<B: BrowserFamily>(
     // targets. Attributed post-exit cleanup runs in handle_cleanup_flag().
     let mut cmd = browser.launch_command(install_dir, extra_args);
     let browser_exe = browser_exe_path(&cmd);
-    let child = cmd.spawn()?;
+    let child = spawn_browser(&mut cmd, STARTUP_WATCH).inspect_err(|error| {
+        tracing::error!(
+            browser = browser.id(),
+            exe = %browser_exe,
+            error = %error,
+            "browser failed to start"
+        );
+    })?;
     let pid = child.id();
     tracing::info!(browser = browser.id(), pid, exe = %browser_exe, "browser launched");
     spawn_cleanup_watcher(
@@ -1250,6 +1257,81 @@ fn browser_exe_path(cmd: &std::process::Command) -> String {
     cmd.get_program().to_string_lossy().into_owned()
 }
 
+/// How long a newly created browser process is watched for an immediate
+/// failure before the launch is reported as successful.
+const STARTUP_WATCH: std::time::Duration = std::time::Duration::from_millis(1000);
+
+/// Explains an exit code that means the browser never started.
+///
+/// Windows ends a process that cannot be loaded, or that crashes, with an
+/// NTSTATUS error code: the `0xC000_0000`..=`0xCFFF_FFFF` range. Those are the
+/// only codes treated as a failed start. Ordinary exit codes are not: a
+/// browser's first process routinely exits at once after handing its URL to an
+/// instance that is already running, or to a child that carries on.
+fn startup_failure_reason(code: i32) -> Option<String> {
+    let status = code.cast_unsigned();
+    if status >> 28 != 0xC {
+        return None;
+    }
+    Some(match status {
+        0xC000_0135 => format!(
+            "Windows could not find a system file the browser needs \
+             (STATUS_DLL_NOT_FOUND, {status:#010X}). This usually means the \
+             Microsoft Visual C++ Redistributable (x64) is not installed."
+        ),
+        _ => format!("it stopped immediately with Windows error {status:#010X}."),
+    })
+}
+
+/// Starts the prepared browser command and confirms it did not fail at once.
+///
+/// Process creation succeeding is not evidence that the browser started: a
+/// missing DLL or a start-up crash ends the new process within milliseconds.
+/// The child is polled for up to `watch`; an NTSTATUS failure in that window is
+/// returned as [`BrowserError::Startup`] so the caller neither reports a
+/// launch nor starts post-launch work. A process that is still running, or
+/// that exited with an ordinary code, is returned as started.
+fn spawn_browser(
+    cmd: &mut std::process::Command,
+    watch: std::time::Duration,
+) -> Result<std::process::Child, BrowserError> {
+    let mut child = cmd.spawn()?;
+    let deadline = std::time::Instant::now() + watch;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return match status.code().and_then(startup_failure_reason) {
+                    Some(reason) => Err(BrowserError::Startup(reason)),
+                    None => Ok(child),
+                };
+            }
+            Ok(None) => {}
+            // An unreadable status is not evidence that the start failed.
+            Err(error) => {
+                tracing::debug!(error = %error, "could not poll the new browser process");
+                return Ok(child);
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(child);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+/// [`spawn_browser`] for the fallback launch, whose error screen already
+/// leads with "Could not start the browser".
+fn spawn_browser_for_fallback(
+    cmd: &mut std::process::Command,
+    watch: std::time::Duration,
+) -> std::io::Result<std::process::Child> {
+    spawn_browser(cmd, watch).map_err(|error| match error {
+        BrowserError::Io(error) => error,
+        BrowserError::Startup(reason) => std::io::Error::other(reason),
+        other => std::io::Error::other(other.to_string()),
+    })
+}
+
 /// Applies browser PE-icon branding when one is configured and not yet
 /// applied, showing an "Applying branding…" status during the patch.
 fn apply_branding(
@@ -1310,7 +1392,7 @@ fn handle_error<B: BrowserFamily>(
             let mut cmd = browser.launch_command(install_dir, extra_args);
             let browser_exe = browser_exe_path(&cmd);
             finish_fallback_spawn(
-                cmd.spawn(),
+                spawn_browser_for_fallback(&mut cmd, STARTUP_WATCH),
                 |child| {
                     tracing::info!(
                         browser = browser.id(),
@@ -2923,6 +3005,120 @@ mod tests {
             cvar.notify_all();
             saw_failure
         })
+    }
+
+    /// An inert stand-in for a browser: `cmd.exe` exiting with `code`.
+    #[cfg(windows)]
+    fn exits_with(code: i32) -> std::process::Command {
+        let mut cmd = std::process::Command::new("cmd.exe");
+        cmd.args(["/d", "/c", "exit", &code.to_string()]);
+        cmd
+    }
+
+    /// Generous bound: `spawn_browser` returns as soon as the child exits.
+    #[cfg(windows)]
+    const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// Regression: on a Windows without the Visual C++ runtime, `floorp.exe`
+    /// died with `STATUS_DLL_NOT_FOUND` 26 ms after it was created, and the
+    /// launcher still logged "browser launched", started the cleanup watcher
+    /// and exited 0.
+    #[cfg(windows)]
+    #[test]
+    fn a_browser_that_cannot_load_is_not_reported_as_launched() {
+        let dll_not_found = 0xC000_0135_u32.cast_signed();
+        let error = spawn_browser(&mut exits_with(dll_not_found), EXIT_WAIT)
+            .expect_err("a loader failure must not count as a launch");
+        let BrowserError::Startup(reason) = &error else {
+            panic!("expected a start-up failure, got {error:?}");
+        };
+        assert!(reason.contains("0xC0000135"), "{reason}");
+        assert!(reason.contains("Visual C++"), "{reason}");
+        assert!(error.to_string().starts_with("the browser did not start: "));
+
+        let access_violation = 0xC000_0005_u32.cast_signed();
+        let error = spawn_browser(&mut exits_with(access_violation), EXIT_WAIT)
+            .expect_err("a start-up crash must not count as a launch");
+        assert!(
+            matches!(&error, BrowserError::Startup(reason) if reason.contains("0xC0000005")),
+            "{error:?}"
+        );
+    }
+
+    /// A browser's first process may exit at once with an ordinary code after
+    /// handing over to a running instance; that is a successful launch.
+    #[cfg(windows)]
+    #[test]
+    fn a_browser_that_hands_over_and_exits_is_still_launched() {
+        for code in [0, 1, 24, 255, -1] {
+            let mut child = spawn_browser(&mut exits_with(code), EXIT_WAIT)
+                .unwrap_or_else(|error| panic!("exit code {code} is not a failed start: {error}"));
+            assert_eq!(child.wait().unwrap().code(), Some(code));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_browser_that_keeps_running_is_launched_after_the_watch() {
+        // Stays alive for a few seconds; this fixture owns and ends it.
+        let mut cmd = std::process::Command::new("ping.exe");
+        cmd.args(["-n", "6", "127.0.0.1"])
+            .stdout(std::process::Stdio::null());
+        let started = std::time::Instant::now();
+        let mut child = spawn_browser(&mut cmd, std::time::Duration::from_millis(150))
+            .expect("a running process is a successful launch");
+        let waited = started.elapsed();
+        let still_running = child.try_wait().unwrap().is_none();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(still_running, "the fixture must outlive the watch");
+        assert!(
+            waited >= std::time::Duration::from_millis(150),
+            "the watch must run its full length for a live process: {waited:?}"
+        );
+        assert!(
+            waited < std::time::Duration::from_secs(4),
+            "the watch must not wait for the process to exit: {waited:?}"
+        );
+    }
+
+    #[test]
+    fn only_ntstatus_errors_count_as_a_failed_start() {
+        for code in [0, 1, 2, 24, 255, 259, i32::MAX, -1, i32::MIN] {
+            assert!(startup_failure_reason(code).is_none(), "{code}");
+        }
+        for status in [0xC000_0005_u32, 0xC000_007B, 0xC000_0135, 0xC000_0142] {
+            let reason = startup_failure_reason(status.cast_signed())
+                .unwrap_or_else(|| panic!("{status:#010X} must be a failed start"));
+            assert!(reason.contains(&format!("{status:#010X}")), "{reason}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fallback_launch_of_a_browser_that_cannot_load_stays_visible() {
+        let browser = browsers::helium::Helium::new(config::Arch::X64);
+        let state = release_check_test_state(&browser);
+        let controller = fallback_failure_choice(&state, false);
+        let result =
+            spawn_browser_for_fallback(&mut exits_with(0xC000_0135_u32.cast_signed()), EXIT_WAIT);
+        assert!(
+            matches!(&result, Err(error) if error.to_string().contains("Visual C++")),
+            "{result:?}"
+        );
+        let mut started = false;
+        let action = finish_fallback_spawn(
+            result,
+            |_| started = true,
+            &state,
+            &egui::Context::default(),
+        );
+        assert!(
+            controller.join().unwrap(),
+            "the failed start must be shown until the user acts"
+        );
+        assert!(matches!(action, PostErrorAction::Done));
+        assert!(!started, "a failed start must not begin post-launch work");
     }
 
     #[test]
