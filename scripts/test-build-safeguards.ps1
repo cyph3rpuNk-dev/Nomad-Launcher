@@ -92,7 +92,7 @@ function New-Fixture([string]$Case) {
         if ($Case -eq 'linked-output') {Remove-Item -LiteralPath $output -Recurse -Force}
         else {$link=Join-Path $output 'Nomad-Waterfox.exe'}
         $global:FixtureLink=$link
-        if (($link+$foreign) -notmatch '^[A-Za-z0-9\\/:. _-]+$') {throw 'Unsafe link fixture characters.'}
+        if (($link+$foreign) -notmatch '^[A-Za-z0-9\\/:. _~-]+$') {throw 'Unsafe link fixture characters.'}
         $proc=Start-Process -FilePath $env:ComSpec -ArgumentList ('/d /c mklink /J "'+$link+'" "'+$foreign+'"') -Wait -PassThru -WindowStyle Hidden
         if ($proc.ExitCode -ne 0) {throw 'Fixture junction creation failed.'}
     }

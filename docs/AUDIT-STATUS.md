@@ -465,5 +465,29 @@ The local canonical gate passed after this fix: 490 Rust tests, formatting,
 Clippy, safeguard fixtures and dependency audit with the documented RSA exception.
 Rust 1.92 workspace/all-target checking also passed. Full logs are retained in
 `target/pr68-ci-fix-gate.log` and `target/pr68-ci-fix-msrv.log`. The test assertion
-fix and this status update await commit/push approval; CI on the changed assertions
-has not run, and PR #68 remains draft with failed checks on the published head.
+fix and status update were subsequently committed and pushed as `f1b9ec2`.
+
+## CI rerun and junction-fixture correction (2026-10-12)
+
+CI on `f1b9ec2` passed Clippy, dependency advisories, Rust 1.92 compatibility and
+Actions static analysis. The [Windows test job](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/actions/runs/38212122177/job/114688413262)
+and Chromium Compatibility jobs then failed 16 unit tests at the shared
+`owned_directory_link` fixture's path-character assertion, before those tests
+could exercise their safety predicates.
+
+A new regression reproduced the same assertion failure locally with `~` in an
+owned temporary directory. The Rust fixture now accepts this Windows short-path
+character while preserving root containment and rejecting shell expansion/
+metacharacters before calling cmd. Added a successful junction regression and a
+percent-sign refusal regression. A full-gate run with TEMP/TMP set only in the
+child process to an owned tilde-containing path also exposed the same restriction
+in the PowerShell build fixture; its path whitelist received the same narrow fix.
+
+The reproduced-environment gate passed after both fixture fixes: 492 Rust tests,
+formatting, Clippy, artifact/build/CI safeguard fixtures and dependency audit with
+the documented RSA exception. Rust 1.92 workspace/all-target checking passed.
+Logs: `target/pr68-junction-fix-gate.log` and `target/pr68-junction-fix-msrv.log`.
+The fixture correction and this record are local and await commit/push approval.
+PR #68 remains draft with failed checks on `f1b9ec2`; CI has not run on the
+fixture correction. Live Chromium archive/build steps were not reached in those
+failed workflows.
