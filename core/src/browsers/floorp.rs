@@ -12,16 +12,16 @@ use super::{
 };
 use crate::config::Arch;
 
-/// Curated safe user.js payload — shared with Firefox (both are Gecko).
+/// Curated safe user.js payload (arkenfox-derived, SPEC §5).
 const USER_JS: &str = include_str!("../../payloads/firefox/user.js");
 
-/// Distribution-level policies.json — shared with Firefox (LibreWolf-derived, MPL-2.0).
+/// Distribution-level policies.json — shared Gecko payload (LibreWolf-derived, MPL-2.0).
 const POLICIES_JSON: &str = include_str!("../../payloads/firefox/policies.json");
 
-/// Autoconfig pointer — shared with Firefox.
+/// Autoconfig pointer — shared Gecko payload.
 const AUTOCONFIG_JS: &str = include_str!("../../payloads/firefox/autoconfig.js");
 
-/// Main `lockPref()` payload — shared with Firefox.
+/// Main `lockPref()` payload — shared Gecko payload.
 const NOMAD_CFG: &str = include_str!("../../payloads/firefox/nomad.cfg");
 
 const API_URL: &str = "https://api.github.com/repos/floorp-projects/floorp/releases/latest";
@@ -382,12 +382,35 @@ mod tests {
             panic!("Floorp must return GeckoProfile hardening");
         };
         assert!(!user_js.is_empty(), "user_js payload must not be empty");
+        assert!(
+            user_js.contains("user_pref("),
+            "user_js must contain preference calls"
+        );
+        assert!(
+            user_js.contains("privacy.trackingprotection.allow_list.baseline.enabled\", true"),
+            "Strict ETP must keep the baseline WebCompat allow-list on so major sites don't break"
+        );
         assert!(policies.is_some(), "Floorp must include policies.json");
         assert!(
             autoconfig.is_some(),
             "Floorp must include the autoconfig pointer"
         );
-        assert!(cfg.is_some(), "Floorp must include the nomad.cfg payload");
+        let cfg = cfg.expect("Floorp must include the nomad.cfg payload");
+        assert!(
+            cfg.contains("privacy.resistFingerprinting\", false"),
+            "Floorp must default RFP OFF and rely on FPP — RFP is site-breaking"
+        );
+        // nomad.cfg is LibreWolf-derived: its UI/About-dialog URL overrides must
+        // be stripped so non-LibreWolf browsers don't link to LibreWolf. Guards
+        // against an upstream re-sync silently re-introducing them. (Targets the
+        // removed pref names, not a bare URL — a librewolf.* uBO-assets pref
+        // legitimately keeps a codeberg URL and must not trip this.)
+        assert!(
+            !cfg.contains("app.support.baseURL")
+                && !cfg.contains("app.releaseNotesURL")
+                && !cfg.contains("support.librewolf.net"),
+            "nomad.cfg must not point the UI/About dialog at LibreWolf"
+        );
     }
 
     #[test]

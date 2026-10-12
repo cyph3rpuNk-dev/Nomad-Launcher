@@ -50,7 +50,7 @@ location, `target/release`. Optional `-ArtifactDirectory` must stay beneath
 this checkout's `target`; links, reparse points, parent/drive-relative paths
 and wrong artifact types are refused.
 
-The exact nine launcher names must match the workspace binary declarations.
+The exact six launcher names must match the workspace binary declarations.
 Missing/empty or extra launcher outputs fail rather than silently shipping a
 partial or stale set. The artifact guard, Cargo configuration, four license texts and `TRADEMARKS.md` must be nonempty
 ordinary files before building. The notices and license destinations remain

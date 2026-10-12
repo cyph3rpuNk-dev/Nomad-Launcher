@@ -58,6 +58,10 @@ verification path, the primary fingerprint, and the key/subkey binding signature
 The final live coverage check passed for Firefox, Firefox ESR, Mullvad and
 uBlock after the refresh. Never normalize bytes covered by a detached signature.
 
+The Firefox and Firefox ESR launchers were removed on 2026-10-12, together with
+the embedded Mozilla key `core/keys/firefox.asc` and its coverage check. The
+remaining keys covered by that check are Mullvad and gorhill (uBlock Origin).
+
 The weekly Hardening Sync workflow already runs the public signing-key coverage
 script. Run it with a disposable `GNUPGHOME` when checking locally; Git Bash
 needs an MSYS-style path such as `/c/...`, not a Windows backslash path. The
