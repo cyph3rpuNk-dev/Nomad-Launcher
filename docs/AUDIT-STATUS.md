@@ -665,6 +665,5 @@ rendering. Waterfox, LibreWolf, Mullvad and Helium still have no live coverage.
 Evidence is preserved outside the repository at
 `Documents\Nomad-Launcher-Evidence\2026-10-12-floorp-4c4071a` on the owner's
 machine: 16 screenshots, the guest helper scripts and Sandbox configuration, the
-launcher manifest, a results README and a checksum list. These documentation
-changes are local on `docs/floorp-sandbox-validation`; commit, push and review
-remain pending. No release tag, signing or publication has been performed.
+launcher manifest, a results README and a checksum list. No release tag, signing
+or publication has been performed.
