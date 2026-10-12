@@ -2344,11 +2344,16 @@ mod tests {
         {
             use std::os::windows::process::CommandExt;
             for path in [link, target] {
-                assert!(path
-                    .to_str()
-                    .unwrap()
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || r"\/:. _-".contains(c)));
+                // Hosted Windows runners can use short paths such as RUNNER~1.
+                // Keep expansion/metacharacters refused before invoking cmd.
+                assert!(
+                    path.to_str()
+                        .unwrap()
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || r"\/:. _-~".contains(c)),
+                    "fixture path contains unsafe shell characters: {}",
+                    path.display()
+                );
             }
             let cmd = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
                 .join("System32")
@@ -2374,6 +2379,42 @@ mod tests {
         {
             std::os::unix::fs::symlink(target, link).unwrap();
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn owned_directory_link_accepts_tilde_in_temporary_paths() {
+        let temp = tempfile::Builder::new()
+            .prefix("runner~")
+            .tempdir()
+            .unwrap();
+        let target = temp.path().join("target");
+        let link = temp.path().join("link");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("sentinel"), b"owned fixture").unwrap();
+
+        owned_directory_link(&temp, &link, &target);
+
+        assert_eq!(
+            std::fs::read(link.join("sentinel")).unwrap(),
+            b"owned fixture"
+        );
+        assert!(crate::fs_safety::ensure_directory(&link).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[should_panic(expected = "fixture path contains unsafe shell characters")]
+    fn owned_directory_link_refuses_shell_expansion_in_temporary_paths() {
+        let temp = tempfile::Builder::new()
+            .prefix("runner%")
+            .tempdir()
+            .unwrap();
+        let target = temp.path().join("target");
+        let link = temp.path().join("link");
+        std::fs::create_dir(&target).unwrap();
+
+        owned_directory_link(&temp, &link, &target);
     }
 
     #[test]
