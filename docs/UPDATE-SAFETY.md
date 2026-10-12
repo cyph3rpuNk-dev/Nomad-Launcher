@@ -82,8 +82,7 @@ swapping. A hook returning success cannot bypass this mandatory layout gate.
 | Layout | Required nonempty regular files |
 |---|---|
 | Chromium (Helium, Ungoogled Chromium) | Declared root executable, `chrome.dll`, `resources.pak`, `icudtl.dat`, `chrome_100_percent.pak`, `chrome_200_percent.pak` |
-| Gecko (Firefox stable/ESR, Floorp, LibreWolf, Mullvad, Waterfox) | Declared root executable, `xul.dll`, `application.ini`, `omni.ja`, `browser/omni.ja` |
-| Self-contained portable app (Bitwarden) | Declared root executable `Bitwarden-Portable.exe` |
+| Gecko (Floorp, LibreWolf, Mullvad, Waterfox) | Declared root executable, `xul.dll`, `application.ini`, `omni.ja`, `browser/omni.ja` |
 
 Missing, empty, unreadable or wrong-type required entries fail closed. The stage
 root and required path components must be ordinary entries, not symlinks or
@@ -95,8 +94,7 @@ The Gecko contract follows Mozilla's [package manifest](https://github.com/mozil
 and [omnijar packager](https://github.com/mozilla-firefox/firefox/blob/main/python/mozbuild/mozpack/packager/formats.py).
 These layouts are explicit compatibility contracts. An upstream layout change
 must be reviewed before changing the required files; do not skip the gate to
-install an incompatible release. Bitwarden remains a single-file portable app
-and does not require the unpacked runtime files of an ordinary Electron install.
+install an incompatible release.
 
 Ungoogled Chromium compatibility is checked against the authenticated staged
 artifact instead of a maximum major version. Both GUI and headless updates must
@@ -145,7 +143,7 @@ back up the profile and create a fresh instance instead.
 ## Installation folder boundary
 
 The configured `browser.install_dir` must be one Windows-safe folder name
-directly beside the launcher, such as `Browser` or Bitwarden's `App`.
+directly beside the launcher, such as `Browser` or `App`.
 Configuration deserialization rejects paths and the reserved sibling names
 `Data` and `Nomad` in any letter case, including ambiguous trailing-dot/space
 spellings. Windows device names and invalid name characters are rejected too.
@@ -175,8 +173,8 @@ configuration. Staging must be newly created after locked recovery; an existing
 stage is never silently adopted for a download.
 
 ZIP destinations are checked before entry writes. The bundled extractor's raw
-tree is checked before marker discovery and promotion. Bitwarden's vault tree is
-checked before copying, and state preservation precedes the staged version marker.
+tree is checked before marker discovery and promotion. State preservation
+precedes the staged version marker.
 Configuration, ownership, logs, hardening, branding and cache writers share these
 checks too. Download/cache temporary files use exclusive creation; failure cleanup
 removes only a temporary file created by that operation. Existing temporary files
@@ -192,8 +190,8 @@ format handling; the checks do not execute downloaded installers or browsers.
 ## Package targets and legacy records
 
 `BrowserFamily::package_target()` identifies the adapter's package selector:
-`x64`, `x86`, or `arm64` for browsers; `portable` for Bitwarden's single
-artifact. Cache records and successful `.nomad-version` markers carry this
+`x64`, `x86`, or `arm64` for browsers; `portable` remains readable for legacy
+single-artifact records. Cache records and successful `.nomad-version` markers carry this
 target. Cached metadata must have a matching known target as well as pass the
 existing freshness, URL and integrity-material checks. Cross-target and legacy
 records cause a fresh release lookup; uBlock version state is preserved.
@@ -267,11 +265,8 @@ even when the SHA-256 or SHA-512 digest matches. An unreadable/invalid signature
 or a failed signature download also aborts before extraction and promotion.
 The active installation, version marker and profile remain intact.
 
-Firefox uses a separate existing chain: its adapter authenticates `SHA256SUMS`
-with the embedded Mozilla key during release resolution, then returns the
-package's digest with no detached package-signing key. Hash-only adapters and
-Bitwarden's additional Authenticode check retain their existing verification
-paths. No trust anchors or extension signature policies change in this fix.
+Hash-only adapters retain their existing verification paths. No trust anchors or
+extension signature policies change in this fix.
 Tests use local mock HTTP and inert files in owned temporary directories;
 live-upstream compatibility and signing-key freshness are separate checks.
 
@@ -322,7 +317,7 @@ versions from filenames. A release changing during the download cannot silently
 pair one version's cache record with another version's bytes.
 
 The hash trusts AMO metadata; signature-file presence is only a layout check.
-Firefox performs cryptographic Mozilla signature verification at installation.
+The browser performs cryptographic Mozilla signature verification at installation.
 Already-current cached files are not rehashed, and `auto_download = false` still
 defers downloads. Failed metadata resolution, download, verification or promotion
 leaves the prior XPI and extension version cache unchanged; version records

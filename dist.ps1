@@ -9,7 +9,7 @@ if ($ArtifactDirectory -match '(^|[\\/])\.\.([\\/]|$)' -or $ArtifactDirectory -m
 if (-not [IO.Path]::IsPathRooted($ArtifactDirectory)) {$ArtifactDirectory=Join-Path $PSScriptRoot $ArtifactDirectory}
 $artifactDir=[IO.Path]::GetFullPath($ArtifactDirectory)
 $programFilesX86=[Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
-$expectedNames=@('Nomad-Bitwarden.exe','Nomad-Chromium.exe','Nomad-Firefox.exe','Nomad-Firefox-ESR.exe','Nomad-Floorp.exe','Nomad-Helium.exe','Nomad-LibreWolf.exe','Nomad-Mullvad.exe','Nomad-Waterfox.exe')
+$expectedNames=@('Nomad-Chromium.exe','Nomad-Floorp.exe','Nomad-Helium.exe','Nomad-LibreWolf.exe','Nomad-Mullvad.exe','Nomad-Waterfox.exe')
 function Assert-OrdinaryPath([string]$Path) {
     $cursor=[IO.Path]::GetFullPath($Path)
     while ($cursor) {
@@ -139,9 +139,9 @@ Components bundled INSIDE the Nomad launcher binaries
 
 Software Nomad downloads at RUNTIME (NOT bundled in these binaries)
 ------------------------------------------------------------------
-The browsers and apps Nomad launches (Firefox, Firefox ESR,
-Mullvad Browser, Ungoogled Chromium, Helium, Floorp, Waterfox, LibreWolf,
-Bitwarden) are fetched from their official sources at launch and remain under
+The browsers Nomad launches (Mullvad Browser, Ungoogled Chromium, Helium,
+Floorp, Waterfox, and LibreWolf)
+are fetched from their official sources at launch and remain under
 their own licenses and trademarks. Nomad is an independent project and is not
 affiliated with, endorsed by, or sponsored by any of them. See TRADEMARKS.md.
 '@

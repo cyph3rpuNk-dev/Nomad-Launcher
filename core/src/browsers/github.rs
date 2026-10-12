@@ -17,11 +17,6 @@ pub(super) use crate::network::map_network_err;
 #[derive(Debug, Deserialize)]
 pub(super) struct Release {
     pub tag_name: String,
-    /// Whether this is a prerelease. Used when filtering a `releases` list for
-    /// the latest *stable* release; ignored by `releases/latest` consumers.
-    /// Defaults to `false` when absent.
-    #[serde(default)]
-    pub prerelease: bool,
     /// When the release was published (`YYYY-MM-DDTHH:MM:SSZ`). Consumed by
     /// [`asset_provenance_suspect`]; `None` only for draft releases.
     pub published_at: Option<String>,
@@ -84,17 +79,6 @@ async fn fetch_raw_with_limit(
 
 /// Fetches and deserialises a GitHub release from `url`.
 pub(super) async fn fetch_release(client: &reqwest::Client, url: &str) -> Result<Release> {
-    let body = crate::network::fetch_text(client, url).await?;
-    serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))
-}
-
-/// Fetches and deserialises a list of GitHub releases from `url` (the
-/// `releases` endpoint). Returned newest-first, as GitHub orders them.
-///
-/// Used by repos that publish multiple products into one release stream
-/// (e.g. `bitwarden/clients`), where `releases/latest` may point at an
-/// unrelated product and the caller must filter by tag.
-pub(super) async fn fetch_releases(client: &reqwest::Client, url: &str) -> Result<Vec<Release>> {
     let body = crate::network::fetch_text(client, url).await?;
     serde_json::from_str(&body).map_err(|e| BrowserError::Parse(e.to_string()))
 }
@@ -251,7 +235,6 @@ mod tests {
     fn release(published_at: Option<&str>) -> Release {
         Release {
             tag_name: "1.99.0".to_owned(),
-            prerelease: false,
             published_at: published_at.map(str::to_owned),
             assets: Vec::new(),
         }

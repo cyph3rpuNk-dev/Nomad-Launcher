@@ -18,14 +18,12 @@ Nomad Launcher is a family of portable Windows browser launchers. Each launcher 
 
 ## 2. Browser Support
 
-Each browser (and channel) ships as its own launcher binary. v1 produces nine binaries.
+Each browser (and channel) ships as its own launcher binary. v1 produces six binaries.
 
 ### v1 MVP
 | Binary | Browser | Update Source | Signature |
 |--------|---------|---------------|-----------|
 | `nomad-ungoogled-chromium.exe` | ungoogled-chromium | GitHub releases API (`ungoogled-software/ungoogled-chromium-windows`) | SHA-256 only |
-| `nomad-firefox.exe` | Firefox Stable | Mozilla Product Details API (`product-details.mozilla.org`) | GPG + SHA-256 |
-| `nomad-firefox-esr.exe` | Firefox ESR | Same API, ESR channel (hardcoded in the launcher) | GPG + SHA-256 |
 | `nomad-floorp.exe` | Floorp | GitHub releases API (`Floorp-Projects/Floorp`) | SHA-256 only |
 | `nomad-waterfox.exe` | Waterfox | GitHub releases API (`BrowserWorks/waterfox`) | SHA-256 only |
 | `nomad-helium.exe` | Helium | GitHub releases API (`imputnet/helium-windows`) | SHA-256 only |
@@ -44,10 +42,8 @@ The same launcher pipeline (download → verify → stage → atomic-swap → la
 
 | Binary | App | Update Source | Signature |
 |--------|-----|---------------|-----------|
-| `nomad-bitwarden.exe` | Bitwarden desktop (Electron) | GitHub releases (`bitwarden/clients`, newest stable `desktop-v…` tag) | SHA-256 + Authenticode |
 
 Notes:
-- **Bitwarden** — the official portable desktop app, not a browser and not built from source. `engine()` returns the dedicated `Engine::Electron` variant so the Chromium/Gecko-gated launch-flag injection never applies. The repo publishes browser-extension/desktop/CLI/web releases into one stream, so the launcher lists releases and selects the newest non-prerelease tag prefixed `desktop-v` (`releases/latest` would return the wrong product). The `-x64.appx` is **not** used — extracted from its MSIX package it is inert (spawns an Electron tree but creates no window or userData); the portable `.exe` is built for standalone use and is the only viable artifact. Verified with SHA-256 (GitHub asset digest) **plus an Authenticode signer check** (`WinVerifyTrust` with whole-chain revocation + signer subject must equal `Bitwarden Inc.`; see §9) — Bitwarden publishes no GPG key. Made portable and Nomad-updatable via two env vars at launch: `BITWARDEN_APPDATA_DIR` (redirects the vault to `App\Data` *inside* the install dir) and `ELECTRON_NO_UPDATER=1` (disables the built-in updater). Because the vault lives inside `install_dir`, it is carried across the update swap by `preserve_state_across_update`. Ships a trimmed per-app `nomad.toml` via `BrowserFamily::default_config` (browser-only privacy keys omitted). No Windows Hello (installer-only); master-password unlock only.
 
 ---
 
@@ -67,7 +63,7 @@ nomad-launcher/
       version_cache.rs        # nomad-version-cache.toml (6 h TTL target-scoped release/uBO cache)
       downloader.rs           # HTTP download with progress
       gpg.rs                  # pure-Rust GPG verification + SHA-256 / SHA-512
-      authenticode.rs         # WinVerifyTrust signer pinning (Bitwarden)
+      authenticode.rs         # WinVerifyTrust signer verification utility
       extract.rs              # extract_zip, extract_nsis_with_7zip, strip_mozilla_runtime_extras
       install.rs              # atomic_swap of a staged install over the live install
       hardening.rs            # privacy hardening: Gecko user.js/policies.json writer
@@ -84,32 +80,26 @@ nomad-launcher/
         github.rs             # shared GitHub Releases API helper
         helium.rs
         ungoogled.rs
-        firefox.rs            # Firefox stable + ESR (new_esr); no firefox_esr.rs
         floorp.rs
         waterfox.rs
         librewolf.rs
         mullvad.rs
-        bitwarden.rs          # non-browser: official Bitwarden desktop app (Engine::Electron)
     keys/                     # embedded ASCII-armored public keys
-      firefox.asc
       helium.asc              # placeholder slot — Helium has no usable key (SHA-256 only)
       mullvad.asc
       gorhill.asc             # uBlock Origin release-tag signing key (Chromium uBO)
     payloads/                 # vendored user.js, Chromium flag sets, 7-Zip blobs (include_bytes!/include_str!)
-  launchers/                  # one binary crate per browser (+ Bitwarden, a desktop app)
+  launchers/                  # one binary crate per browser
     ungoogled-chromium/       # package nomad-ungoogled-chromium
       Cargo.toml
       build.rs                # winresource: embed launcher icon
       icon.ico
       src/main.rs
     helium/
-    firefox/
-    firefox-esr/
     floorp/
     waterfox/
     librewolf/
     mullvad/
-    bitwarden/                # package nomad-bitwarden (Electron desktop app; reuses the pipeline)
   tests/
     integration/              # integration tests (mock HTTP, fake FS)
     fixtures/                 # test archives, fixture JSON, test keys
@@ -121,11 +111,11 @@ Each `launchers/<browser>/src/main.rs` is minimal — it selects the browser and
 
 ```rust
 fn main() -> std::process::ExitCode {
-    nomad_core::run(nomad_core::browsers::Firefox::stable())
+    nomad_core::run(nomad_core::Floorp::new, ICON, None)
 }
 ```
 
-The package name (e.g. `nomad-firefox`) determines the output binary name `nomad-firefox.exe`. Each launcher crate has a `build.rs` that uses `winresource` to embed its browser-branded `icon.ico` into the executable at compile time.
+The package name (e.g. `nomad-floorp`) determines the output binary name `nomad-floorp.exe`. Each launcher crate has a `build.rs` that uses `winresource` to embed its browser-branded `icon.ico` into the executable at compile time.
 
 ### Core trait
 
@@ -154,9 +144,9 @@ pub trait BrowserFamily: Send + Sync {
     fn upstream_url(&self) -> &'static str;  // status-window footer release link
 
     // ── Defaulted (override only when a member genuinely differs) ──────────
-    fn default_config(&self) -> &'static str { DEFAULT_NOMAD_TOML }              // non-browser apps trim this (Bitwarden)
+    fn default_config(&self) -> &'static str { DEFAULT_NOMAD_TOML }              // adapter-specific defaults
     fn profile_dir(&self, install_dir: &Path) -> Option<PathBuf> { None }        // Gecko: portable profile dir
-    fn preserve_state_across_update(&self, current: &Path, stage: &Path) -> Result<()> { Ok(()) } // Bitwarden
+    fn preserve_state_across_update(&self, current: &Path, stage: &Path) -> Result<()> { Ok(()) } // adapter-specific state
     fn has_builtin_fingerprint_noise(&self) -> bool { false }                   // Helium Noise
     fn accent(&self) -> egui::Color32 { theme::ACCENT }                          // per-launcher accent colour
     fn prepare_launch(&self, install_dir: &Path, cfg: HardeningConfig) -> Result<()> { Ok(()) } // best-effort staging
@@ -165,11 +155,11 @@ pub trait BrowserFamily: Send + Sync {
 }
 ```
 
-- `Engine` is `Chromium`, `Gecko`, or `Electron`. `Electron` (Bitwarden's desktop app) exists so the Chromium/Gecko launch-flag injection in `build_launch_args` never fires for a non-browser app.
-- `public_key()` exposes a detached package-signing key: `Some` requires the package signature, and a missing signature cannot fall back to a hash. `None` uses the adapter's hash/other verification path, plus Authenticode signer pinning for Bitwarden. Firefox returns `None` here because it authenticates its checksum manifest during release resolution.
+- `Engine` is `Chromium`, `Gecko`, or `Electron`. `Electron` exists so the Chromium/Gecko launch-flag injection in `build_launch_args` never fires for a non-browser app.
+- `public_key()` exposes a detached package-signing key: `Some` requires the package signature, and a missing signature cannot fall back to a hash. `None` uses the adapter's hash/other verification path.
 - `VersionInfo` carries: browser version, underlying engine version, download URL, optional signature URL, optional SHA-256 hash, optional SHA-512 hash.
-- Stable browser release versions are ordered numerically, including numeric packaging revisions and Firefox ESR suffixes. Older or unorderable releases fail before download/staging, including target changes and legacy-target migration. Obsolete cached metadata triggers a fresh lookup; rejected fresh metadata does not replace the cache.
-- `InstalledVersion` carries the browser version, engine version and optional package-selection target (`x64`, `x86`, `arm64` or `portable`). Legacy markers omit the target and require a verified replacement before being treated as current. `BrowserFamily::package_target()` identifies the adapter selector; cache reuse and up-to-date decisions require a matching known target. Bitwarden uses `portable` for its single artifact. Targets identify package selection; Nomad does not independently validate executable machine types.
+- Stable browser release versions are ordered numerically, including numeric packaging revisions and a trailing `esr` suffix. Older or unorderable releases fail before download/staging, including target changes and legacy-target migration. Obsolete cached metadata triggers a fresh lookup; rejected fresh metadata does not replace the cache.
+- `InstalledVersion` carries the browser version, engine version and optional package-selection target (`x64`, `x86`, `arm64` or `portable`). Legacy markers omit the target and require a verified replacement before being treated as current. `BrowserFamily::package_target()` identifies the adapter selector; cache reuse and up-to-date decisions require a matching known target. `portable` remains readable for legacy single-artifact records. Targets identify package selection; Nomad does not independently validate executable machine types.
 - `hardening()` returns the browser's privacy-hardening payload (see §5): `Hardening::LaunchFlags { flags, local_state, preferences }` for Chromium-family browsers (flags appended at launch, JSON state seeded), `Hardening::GeckoProfile { user_js, policies, autoconfig, cfg, ublock_xpi_releases_url }` for Gecko-family browsers (files written into the install).
 - `ProgressSink` is a `tokio::sync::watch::Sender<f32>` (0.0–1.0).
 - The seven defaulted methods keep the common case to zero boilerplate; only the member named in each trailing comment overrides it.
@@ -250,7 +240,7 @@ Rules:
   Staging and backup remain siblings of that folder, and the portable profile
   and Nomad state remain beside the launcher. Invalid existing configurations
   fail visibly without automatic migration or deletion.
-- There is no `channel` key — the Firefox ESR launcher hardcodes its channel internally; all other browsers have a single channel.
+- There is no `channel` key — every browser has a single channel.
 - Unknown keys are rejected at startup with a descriptive error (no silent ignoring).
 - On first run with no `nomad.toml`, a default config is written beside the `.exe` and launch proceeds with defaults.
 - Config is read once per launch; there is no live reload (the process is short-lived).
@@ -344,7 +334,7 @@ are replaced through a sibling temporary file so a failed write leaves the
 original intact. The upstream updater DLL and helper are retained; the profile
 preference disables update access without removing a binary dependency.
 
-### Gecko-family (Firefox, LibreWolf, Floorp, Waterfox) — layered profile
+### Gecko-family (LibreWolf, Floorp, Waterfox) — layered profile
 
 Two layers, written to separate profile and installation locations:
 
@@ -365,7 +355,7 @@ The arkenfox-derived profile and the Chromium flag sets are **vendored** — pin
 
 The AMO-signed uBlock Origin XPI (Gecko) and the gorhill `uBlock0_X.X.X.chromium.zip` (Ungoogled Chromium) are the explicit runtime-fetch exceptions.
 
-The AMO XPI is downloaded because Gecko requires a Mozilla-signed artifact that Nomad cannot reproduce. Nomad reads its version, exact file URL, and SHA-256 digest from one AMO add-on metadata response; the GUID must be `uBlock0@raymondhill.net` and the file status `public`. Missing/malformed hashes or mismatched XPI bytes fail before staging. The digest depends on AMO metadata over HTTPS, while Firefox performs Mozilla signature validation at installation. The local signature-file check is only a layout check. Version discovery no longer follows a mutable `/latest/` redirect or guesses from filenames.
+The AMO XPI is downloaded because Gecko requires a Mozilla-signed artifact that Nomad cannot reproduce. Nomad reads its version, exact file URL, and SHA-256 digest from one AMO add-on metadata response; the GUID must be `uBlock0@raymondhill.net` and the file status `public`. Missing/malformed hashes or mismatched XPI bytes fail before staging. The digest depends on AMO metadata over HTTPS, while the browser performs Mozilla signature validation at installation. The local signature-file check is only a layout check. Version discovery no longer follows a mutable `/latest/` redirect or guesses from filenames.
 
 The gorhill ZIP is fetched only after its GitHub asset metadata supplies a valid `sha256:<64 hex characters>` digest, the release tag's GPG signature verifies against the embedded gorhill key (`F5630CAE62A14316`), and the upload timeline passes `github::asset_provenance_suspect`. ZIP bytes must match the digest before extraction; absent, malformed or mismatched digests leave the installed extension and cache untouched. The tag signature authenticates the tag/commit only. GitHub's asset digest provides archive integrity dependent on GitHub metadata, not a publisher signature over the ZIP; the timeline check remains additional evidence against asset replacement. Already-current installed files are not rehashed. Nomad remains the sole updater for the extension binary.
 
@@ -375,7 +365,7 @@ The gorhill ZIP is fetched only after its GitHub asset metadata supplies a valid
 
 Branding covers launcher assets and the supported Ungoogled Chromium overlays:
 
-- Each launcher crate embeds a browser-branded `icon.ico` into its `.exe` at compile time via a `winresource` build script. `nomad-firefox.exe` carries a Firefox-branded icon, and so on.
+- Each launcher crate embeds a browser-branded `icon.ico` into its `.exe` at compile time via a `winresource` build script. `nomad-floorp.exe` carries a Floorp-branded icon, and so on.
 - The status window's identity card displays the browser's logo and brand colors (see §7), matching the Nomad mockups.
 - Ungoogled Chromium uses [`core/src/branding.rs`](core/src/branding.rs) and
   [`core/src/branding/chromium.rs`](core/src/branding/chromium.rs) to patch PE icon
@@ -392,12 +382,12 @@ Each launcher's `build.rs` sets the following `winresource` fields in addition t
 
 | Field | Value |
 |---|---|
-| `FileDescription` | `Nomad Launcher — <DisplayName>` (e.g. `Nomad Launcher — Firefox`) |
+| `FileDescription` | `Nomad Launcher — <DisplayName>` (e.g. `Nomad Launcher — Floorp`) |
 | `ProductName` | `Nomad Launcher` |
 | `FileVersion` | Nomad Launcher version (e.g. `0.1.0`) — updated at each release |
 | `ProductVersion` | Same as `FileVersion` |
-| `InternalName` | `nomad-<browser-id>` (e.g. `nomad-firefox`) |
-| `OriginalFilename` | `nomad-<browser-id>.exe` (e.g. `nomad-firefox.exe`) |
+| `InternalName` | `nomad-<browser-id>` (e.g. `nomad-floorp`) |
+| `OriginalFilename` | `nomad-<browser-id>.exe` (e.g. `nomad-floorp.exe`) |
 | `LegalCopyright` | `© 2026 Cyph3rpuNk-dev` |
 
 `CompanyName` is not set. `FileVersion` and `ProductVersion` track the Nomad Launcher release version, not the browser version it manages.
@@ -412,7 +402,7 @@ There is no tray icon and no persistent window. Running `nomad-<browser>.exe` op
 "Nomad dark" palette — the design tokens (palette + type/spacing/radius/motion
 scales) live in [`core/src/ui/theme.rs`](core/src/ui/theme.rs); identity rendering
 is implemented in [`core/src/ui/identity.rs`](core/src/ui/identity.rs).
-Unified chrome across all nine launchers; per-browser differentiation is the
+Unified chrome across all six launchers; per-browser differentiation is the
 identity card's logo + name, plus an optional accent override
 (`BrowserFamily::accent`, default = the family amber accent). The footer carries
 the shared Nomad mark + wordmark.
@@ -440,7 +430,7 @@ A narrow window containing two stacked cards and a footer link.
 
 **1. Identity card** (`#292A2D`, 6 px radius)
 - Top row: browser logo (34×34, the browser's own brand colors) + display name (15 px, `#E8EAED`) + version subtitle (11 px, `#9AA0A6`).
-- **Version subtitle format (uniform across all nine launchers):** `{browser_version} — {engine} {engine_version} (Portable)`. The ` — {engine} {engine_version}` segment is omitted when the browser version and engine version are identical, leaving `{browser_version} (Portable)`. Examples: `1.19.12b — Firefox 150.0.2 (Portable)`; `148.0.7778.96 (Portable)`.
+- **Version subtitle format (uniform across all six launchers):** `{browser_version} — {engine} {engine_version} (Portable)`. The ` — {engine} {engine_version}` segment is omitted when the browser version and engine version are identical, leaving `{browser_version} (Portable)`. Examples: `1.19.12b — Firefox 150.0.2 (Portable)`; `148.0.7778.96 (Portable)`.
 - A hairline divider separates the identity row from the status block.
 - Eyebrow label: `PORTABLE LAUNCHER` (9 px, uppercase, letter-spaced, `#80868C`).
 - Primary status line (14 px, `#E8EAED`) — the current phase, e.g. "Checking for updates…", "Downloading 127.0…", "Verifying signature…", "Extracting…", "Writing profile defaults…", "Launching browser…".
@@ -539,9 +529,8 @@ Nomad's own UI language.
 ## 9. Signature & Hash Verification
 
 - Every download is verified against the expected SHA-256 hash before extraction.
-- An adapter exposing a package-signing key requires a valid GPG detached package signature, verified with `pgp` against the embedded key. Missing signature metadata is rejected before stage creation/download; failed downloads and unreadable/invalid signatures abort before extraction. A matching hash cannot bypass this requirement. Firefox instead verifies the GPG signature over `SHA256SUMS` during release resolution, then verifies the downloaded package against that authenticated digest.
-- **GPG-verified browsers:** Firefox Stable, Firefox ESR (Mozilla release key) and Mullvad Browser (Tor Browser Developers key, plus the SHA-256 GitHub asset digest). Keys are embedded into `nomad-core` via `include_bytes!` from `core/keys/<browser>.asc`.
-- **Authenticode-verified apps:** Bitwarden. It publishes no GPG key, so in addition to the SHA-256 GitHub asset digest, `core/src/authenticode.rs` runs `WinVerifyTrust` (generic-verify policy, no UI, whole-chain revocation checking with a no-revocation fallback when the revocation status is undeterminable) and extracts the signer certificate's subject via `CryptQueryObject`/`CryptMsgGetParam`/`CertGetNameStringW`; the subject must equal `Bitwarden Inc.` (case-insensitive) or the package is rejected before staging. This is a publisher pin on top of the byte pin — the spirit of GPG verification for an artifact with no GPG key. Windows-only; `unsafe` is confined behind a safe wrapper.
+- An adapter exposing a package-signing key requires a valid GPG detached package signature, verified with `pgp` against the embedded key. Missing signature metadata is rejected before stage creation/download; failed downloads and unreadable/invalid signatures abort before extraction. A matching hash cannot bypass this requirement.
+- **GPG-verified browsers:** Mullvad Browser (Tor Browser Developers key, plus the SHA-256 GitHub asset digest). Keys are embedded into `nomad-core` via `include_bytes!` from `core/keys/<browser>.asc`.
 - **Hash-only browsers:** ungoogled-chromium, Floorp, Helium, LibreWolf (SHA-256) and Waterfox (SHA-512, from the `.sha512` file published beside each CDN installer). For these, `public_key()` returns `None`, `verify_signature` is not invoked, and the absence of a GPG signature is logged at `WARN` level on every download. For GitHub-released browsers the SHA-256 hash is taken from the release asset's `digest` field (`sha256:…`) recorded by GitHub. If no hash is available from any source, the package is rejected (fail-closed; see `updater::verify_package`).
 
 ---
@@ -681,7 +670,6 @@ for limits and testing.
   There is no automatic pre-launch deletion of host browser state.
 - Write to `HKLM` (requires elevation and breaks the portability promise).
 - Execute a downloaded binary that has not passed hash (and, where applicable, GPG or Authenticode) verification.
-- **Bitwarden:** use the `-x64.appx` (inert when unpacked), build it from source, or run any NSIS/web installer — only the official portable `.exe` is wrapped. Do not relocate the vault (`App\Data`) outside `install_dir` *without* keeping the `preserve_state_across_update` copy, and do not drop the Authenticode signer check.
 - Modify downloaded binaries before verification, or bypass required staged overlay validation. The supported PE/PAK branding overlays in §6 are deliberate post-verification modifications.
 - Store credentials, tokens, or personally identifiable information anywhere.
 - Silently ignore config parse errors or unknown keys.
