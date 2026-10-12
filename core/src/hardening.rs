@@ -31,8 +31,9 @@ const MARKER_END: &str = "// === Nomad Launcher hardening — end ===";
 /// user's own prefs with just the managed block. The launch path logs the
 /// error and launches without refreshing the block.
 pub fn write_user_js(profile_dir: &Path, user_js_content: &str) -> Result<()> {
-    std::fs::create_dir_all(profile_dir)?;
+    crate::fs_safety::create_dir_all(profile_dir)?;
     let path = profile_dir.join("user.js");
+    crate::fs_safety::ensure_file(&path)?;
     let existing = match std::fs::read_to_string(&path) {
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -46,7 +47,7 @@ pub fn write_user_js(profile_dir: &Path, user_js_content: &str) -> Result<()> {
     } else {
         format!("{existing}\n\n{managed}")
     };
-    std::fs::write(&path, new_content)?;
+    crate::fs_safety::atomic_write(&path, new_content.as_bytes())?;
     Ok(())
 }
 
@@ -64,6 +65,7 @@ pub fn write_user_js(profile_dir: &Path, user_js_content: &str) -> Result<()> {
 /// removed.
 pub fn remove_managed_user_js(profile_dir: &Path) -> Result<()> {
     let path = profile_dir.join("user.js");
+    crate::fs_safety::ensure_file(&path)?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(()); // no file (or unreadable) — nothing to remove
     };
@@ -74,7 +76,7 @@ pub fn remove_managed_user_js(profile_dir: &Path) -> Result<()> {
     if stripped.trim().is_empty() {
         std::fs::remove_file(&path)?;
     } else {
-        std::fs::write(&path, stripped)?;
+        crate::fs_safety::atomic_write(&path, stripped.as_bytes())?;
     }
     Ok(())
 }
@@ -88,8 +90,8 @@ pub fn remove_managed_user_js(profile_dir: &Path) -> Result<()> {
 /// Returns [`BrowserError::Io`] if the directory or file cannot be written.
 pub fn write_policies_json(install_dir: &Path, policies_content: &str) -> Result<()> {
     let dist = install_dir.join("distribution");
-    std::fs::create_dir_all(&dist)?;
-    std::fs::write(dist.join("policies.json"), policies_content)?;
+    crate::fs_safety::create_dir_all(&dist)?;
+    crate::fs_safety::atomic_write(&dist.join("policies.json"), policies_content.as_bytes())?;
     Ok(())
 }
 
@@ -112,9 +114,12 @@ pub fn write_autoconfig(
     cfg_content: &str,
 ) -> Result<()> {
     let pref_dir = install_dir.join("defaults").join("pref");
-    std::fs::create_dir_all(&pref_dir)?;
-    std::fs::write(pref_dir.join("autoconfig.js"), autoconfig_content)?;
-    std::fs::write(install_dir.join("nomad.cfg"), cfg_content)?;
+    crate::fs_safety::create_dir_all(&pref_dir)?;
+    crate::fs_safety::atomic_write(
+        &pref_dir.join("autoconfig.js"),
+        autoconfig_content.as_bytes(),
+    )?;
+    crate::fs_safety::atomic_write(&install_dir.join("nomad.cfg"), cfg_content.as_bytes())?;
     Ok(())
 }
 
@@ -142,6 +147,7 @@ pub fn remove_autoconfig(install_dir: &Path) -> Result<()> {
         install_dir.join("nomad.cfg"),
     ];
     for path in targets {
+        crate::fs_safety::ensure_file(&path)?;
         match std::fs::remove_file(&path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -184,7 +190,7 @@ pub fn write_chromium_state(
     }
     if let Some(payload) = preferences_json {
         let default_dir = user_data_dir.join("Default");
-        std::fs::create_dir_all(&default_dir)?;
+        crate::fs_safety::create_dir_all(&default_dir)?;
         let path = default_dir.join("Preferences");
         merge_json_file(&path, payload)?;
     }
@@ -207,8 +213,8 @@ pub fn write_chromium_state(
 /// Returns [`BrowserError::Io`] when the file cannot be written.
 pub fn write_chromium_initial_preferences(install_dir: &Path, payload: &str) -> Result<()> {
     let path = install_dir.join("initial_preferences");
-    std::fs::create_dir_all(install_dir)?;
-    std::fs::write(&path, payload)?;
+    crate::fs_safety::create_dir_all(install_dir)?;
+    crate::fs_safety::atomic_write(&path, payload.as_bytes())?;
     Ok(())
 }
 
@@ -290,6 +296,7 @@ fn set_by_path(root: &mut Value, path: &str, val: Value) {
 /// Writes the result back as compact JSON (Chromium also writes prefs without
 /// indentation).
 fn merge_json_file(path: &Path, defaults_json: &str) -> Result<()> {
+    crate::fs_safety::ensure_file(path)?;
     let defaults: Value = serde_json::from_str(defaults_json)
         .map_err(|e| BrowserError::Parse(format!("invalid Chromium hardening payload: {e}")))?;
     let existing: Value = match std::fs::read_to_string(path) {
@@ -299,7 +306,9 @@ fn merge_json_file(path: &Path, defaults_json: &str) -> Result<()> {
                 path.display()
             ))
         })?,
-        _ => Value::Object(Map::new()),
+        Ok(_) => Value::Object(Map::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
+        Err(e) => return Err(e.into()),
     };
     let mut merged = merge_value(existing, defaults.clone());
     for &locked in LOCKED_SCALAR_PATHS {
@@ -308,11 +317,11 @@ fn merge_json_file(path: &Path, defaults_json: &str) -> Result<()> {
         }
     }
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        crate::fs_safety::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec(&merged)
         .map_err(|e| BrowserError::Parse(format!("could not serialize merged JSON: {e}")))?;
-    std::fs::write(path, bytes)?;
+    crate::fs_safety::atomic_write(path, &bytes)?;
     Ok(())
 }
 
@@ -451,6 +460,64 @@ fn strip_fenced(existing: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_chromium_preferences_are_preserved_without_resetting_to_defaults() {
+        let fixture = tempfile::tempdir().unwrap();
+        let profile = fixture.path().join("Default");
+        std::fs::create_dir_all(&profile).unwrap();
+        let path = profile.join("Preferences");
+        let original = b"private preferences \xff\xfe";
+        std::fs::write(&path, original).unwrap();
+        assert!(write_chromium_state(fixture.path(), None, Some(r#"{"x":true}"#)).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_preferences_replacement_preserves_existing_bytes() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let fixture = tempfile::tempdir().unwrap();
+        let path = fixture.path().join("Local State");
+        let original = br#"{"custom":"keep"}"#;
+        std::fs::write(&path, original).unwrap();
+        // Reads and writes are allowed, but replacement is denied. A truncate
+        // writer changes the file; a staged replacement must fail safely.
+        let handle = std::fs::File::options()
+            .read(true)
+            .share_mode(
+                windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
+                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
+            )
+            .open(&path)
+            .unwrap();
+        let result = write_chromium_state(fixture.path(), Some(r#"{"new":true}"#), None);
+        assert!(result.is_err(), "a locked replacement must fail");
+        drop(handle);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(fixture.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn profile_writers_and_removal_reject_linked_profile_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("instance");
+        let foreign = temp.path().join("foreign");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        let original = format!("{MARKER_BEGIN}\nowned block\n{MARKER_END}\n");
+        std::fs::write(foreign.join("user.js"), &original).unwrap();
+        crate::tests::owned_directory_link(&temp, &base.join("profile"), &foreign);
+        let profile = base.join("profile");
+        assert!(write_user_js(&profile, "new block").is_err());
+        assert!(remove_managed_user_js(&profile).is_err());
+        assert!(write_chromium_state(&profile, Some("{}"), Some("{}")).is_err());
+        assert_eq!(
+            std::fs::read_to_string(foreign.join("user.js")).unwrap(),
+            original
+        );
+        assert_eq!(std::fs::read_dir(&foreign).unwrap().count(), 1);
+    }
 
     #[test]
     fn write_user_js_errors_on_unreadable_existing_file_instead_of_clobbering() {

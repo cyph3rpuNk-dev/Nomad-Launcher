@@ -16,6 +16,11 @@ on:
 # Default-deny: the job opts into exactly the permissions it needs below.
 permissions: {}
 
+# Serialize reruns for the same tag instead of racing draft creation/upload.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -32,6 +37,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check release target before building or attesting
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: .\scripts\publish-draft-release.ps1 -Tag $env:TAG -Repository $env:GITHUB_REPOSITORY -CheckOnly
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
@@ -45,7 +56,7 @@ jobs:
         run: pwsh -NoProfile -File scripts/check.ps1
 
       - name: Verify current Chromium compatibility before building release artifacts
-        run: cargo test -p nomad-core --test upstream_extract chromium_release -- --ignored --nocapture
+        run: cargo test --locked --target x86_64-pc-windows-msvc -p nomad-core --test upstream_extract chromium_release -- --ignored --nocapture
 
       # No cargo cache on purpose: a poisoned cache entry restored into a
       # release build could end up inside a shipped binary (zizmor's
@@ -54,10 +65,10 @@ jobs:
 
       - name: Build launchers and write SHA256SUMS (dist.ps1)
         # NOMAD_SIGN_CERT / NOMAD_SIGNING_KEY are deliberately not set, so
-        # dist.ps1 runs only its build portion: cargo build --release
-        # --workspace, license staging, and the SHA256SUMS manifest, with
+        # dist.ps1 runs a locked x64 Windows build, validates the exact artifact
+        # set, stages licenses and writes the SHA256SUMS manifest, with
         # artifact naming identical to a local build. The "UNSIGNED" warnings
-        # it prints are expected here.
+        # for unrequested signing are expected here.
         run: .\dist.ps1
 
       - name: Attest build provenance
@@ -81,16 +92,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: |
-          $notes = "Draft created by the release workflow.`n`nBefore publishing: download SHA256SUMS from this draft, create the detached signature locally (gpg --armor --detach-sign SHA256SUMS), attach SHA256SUMS.asc, then publish."
-          gh release view $env:TAG *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $env:TAG --draft --verify-tag --title $env:TAG --notes $notes
-            if ($LASTEXITCODE -ne 0) { exit 1 }
-          }
-          $files = @(Get-ChildItem target\release -Filter "Nomad-*.exe" | Sort-Object Name | ForEach-Object FullName)
-          # The public release key ships with every release (README tells users
-          # to import it from here); SHA256SUMS.asc is attached by the owner.
-          $files += @("target\release\SHA256SUMS", "target\release\licenses.zip", "nomad-release-signing-key.asc")
-          gh release upload $env:TAG @files --clobber
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+        run: .\scripts\publish-draft-release.ps1 -Tag $env:TAG -Repository $env:GITHUB_REPOSITORY

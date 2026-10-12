@@ -2,7 +2,7 @@
 
 ## 1. Objective
 
-Nomad Launcher is a family of portable Windows browser launchers. Each launcher is a single self-contained executable, `nomad-<browser-id>.exe`, that updates, privacy-hardens, and launches exactly one browser from a local directory. No installer. No registry writes during normal operation. Distributable to end users as-is.
+Nomad Launcher is a family of portable Windows browser launchers. Each launcher is a single self-contained executable, `nomad-<browser-id>.exe`, that updates, privacy-hardens, and launches exactly one browser from a local directory. No installer. No new default-browser registration during normal operation; existing browser self-registrations may be repaired as specified in §10. Distributable to end users as-is.
 
 **Inspiration:** chrlauncher, expanded to cover Firefox-family browsers and more.
 
@@ -34,9 +34,9 @@ Each browser (and channel) ships as its own launcher binary. v1 produces nine bi
 
 Notes:
 - **Helium** — upstream signs commits via GitHub's web-flow key, which cannot produce detached signatures for release assets; no usable GPG key is available for embedding. SHA-256 only; absence of GPG signature logged at `WARN`.
-- **LibreWolf** — ships pre-hardened; Nomad applies a thin `policies.json`-only override rather than the full arkenfox `user.js` stack (see §5). No upstream GPG signing key usable for release asset verification. SHA-256 only.
+- **LibreWolf** — ships pre-hardened; Nomad applies its own minimal `user.js` and shared `policies.json`, preserving LibreWolf's autoconfig (see §5). No upstream GPG signing key usable for release asset verification. SHA-256 only.
 - **Mullvad Browser** — ships its own complete anti-fingerprinting stack (RFP, letterboxing, standardized UA / timezone / fonts) plus uBlock Origin and NoScript; Nomad applies **no** `user.js` and provisions **no** uBO, writing only a `DisableAppUpdate` `policies.json` (see §5) so its crowd-blending model stays intact. Verified with the Tor Browser Developers GPG key (`core/keys/mullvad.asc`) plus the SHA-256 GitHub asset digest.
-- Patching the downloaded browser's own icon resources (PE resource editing) is deferred to post-v1.
+- Ungoogled Chromium receives verified PE icon and PAK logo overlays during staging; see §6.
 
 ### Non-browser apps
 
@@ -64,7 +64,7 @@ nomad-launcher/
       lib.rs                  # pub fn run(browser: impl BrowserFamily); orchestration + scrub_*
       config.rs               # nomad.toml load/save/validate
       updater.rs              # launch-time update check + atomic-swap driver
-      version_cache.rs        # nomad-version-cache.toml (4 h TTL release/uBO cache)
+      version_cache.rs        # nomad-version-cache.toml (6 h TTL target-scoped release/uBO cache)
       downloader.rs           # HTTP download with progress
       gpg.rs                  # pure-Rust GPG verification + SHA-256 / SHA-512
       authenticode.rs         # WinVerifyTrust signer pinning (Bitwarden)
@@ -135,8 +135,10 @@ pub trait BrowserFamily: Send + Sync {
     fn id(&self) -> &'static str;            // e.g. "ungoogled-chromium"
     fn display_name(&self) -> &'static str;  // e.g. "Ungoogled Chromium"
     fn engine(&self) -> Engine;              // Chromium | Gecko | Electron
+    fn staged_install_layout(&self) -> StagedInstallLayout; // mandatory executable/runtime layout
     fn public_key(&self) -> Option<&'static [u8]>; // ASCII-armored PGP key, if upstream signs
 
+    fn package_target(&self) -> PackageTarget; // x64/x86/arm64, or portable for one artifact
     fn installed_version(&self, install_dir: &Path) -> Option<InstalledVersion>;
 
     // Async methods use RPITIT (`impl Future + Send`), not `async fn` — the
@@ -164,22 +166,64 @@ pub trait BrowserFamily: Send + Sync {
 ```
 
 - `Engine` is `Chromium`, `Gecko`, or `Electron`. `Electron` (Bitwarden's desktop app) exists so the Chromium/Gecko launch-flag injection in `build_launch_args` never fires for a non-browser app.
-- `public_key()` returns `None` for browsers whose upstream does not publish GPG signatures; verification then falls back to SHA-256 (or SHA-512 for Waterfox), plus Authenticode signer pinning for Bitwarden.
+- `public_key()` exposes a detached package-signing key: `Some` requires the package signature, and a missing signature cannot fall back to a hash. `None` uses the adapter's hash/other verification path, plus Authenticode signer pinning for Bitwarden. Firefox returns `None` here because it authenticates its checksum manifest during release resolution.
 - `VersionInfo` carries: browser version, underlying engine version, download URL, optional signature URL, optional SHA-256 hash, optional SHA-512 hash.
-- `InstalledVersion` carries the browser version and engine version parsed from the local install.
+- Stable browser release versions are ordered numerically, including numeric packaging revisions and Firefox ESR suffixes. Older or unorderable releases fail before download/staging, including target changes and legacy-target migration. Obsolete cached metadata triggers a fresh lookup; rejected fresh metadata does not replace the cache.
+- `InstalledVersion` carries the browser version, engine version and optional package-selection target (`x64`, `x86`, `arm64` or `portable`). Legacy markers omit the target and require a verified replacement before being treated as current. `BrowserFamily::package_target()` identifies the adapter selector; cache reuse and up-to-date decisions require a matching known target. Bitwarden uses `portable` for its single artifact. Targets identify package selection; Nomad does not independently validate executable machine types.
 - `hardening()` returns the browser's privacy-hardening payload (see §5): `Hardening::LaunchFlags { flags, local_state, preferences }` for Chromium-family browsers (flags appended at launch, JSON state seeded), `Hardening::GeckoProfile { user_js, policies, autoconfig, cfg, ublock_xpi_releases_url }` for Gecko-family browsers (files written into the install).
 - `ProgressSink` is a `tokio::sync::watch::Sender<f32>` (0.0–1.0).
 - The seven defaulted methods keep the common case to zero boilerplate; only the member named in each trailing comment overrides it.
 
 ---
 
+### Staged layout validation
+
+Every adapter declares its Chromium, Gecko, or self-contained portable-app
+layout. The shared finalizer checks required nonempty regular files before
+preparation and after overlays, before writing a version marker or swapping.
+Missing files, directory placeholders, symlinks and Windows reparse-point paths
+fail closed, independently of optional browser-specific hooks or hardening.
+See [the required file contracts](docs/UPDATE-SAFETY.md#update-transaction).
+
+### Filesystem boundaries
+
+Use fixed package basenames within exclusively created staging. Check original
+paths and ancestors for symlinks/reparse points before portable-state operations;
+validate copied/promoted trees and remove only owned temporary files on failure.
+The headless updater shares the configured folder-name constraints. See
+[Filesystem paths before mutation](docs/UPDATE-SAFETY.md#filesystem-paths-before-mutation)
+for scope and the concurrent-drive-writer limitation.
+
+### Settings and managed-extension failure handling
+
+Preference read failures must not reset existing settings to defaults. Prepare
+and flush file replacements before promotion; preserve the original on failure.
+Managed extension replacements are staged/validated before swap, retain rollback
+state, and update cached versions only after promotion. Carry the working Chromium
+extension into staged browser updates. See
+[Settings and extension preservation](docs/UPDATE-SAFETY.md#settings-and-extension-preservation).
+
+### Update concurrency and recovery
+
+`Nomad/install.lock` serializes each portable folder across launcher processes.
+The GUI keeps the OS lock through recovery, update prompts, staging, swap, launch
+preparation and spawn, including fallback launch. Headless updates retain it for
+the update transaction. A competing GUI invocation offers Retry or Close, with
+no fallback writes; separate portable folders can operate independently. The OS
+releases the lock when the owning process exits. Its empty file remains on disk.
+
+Recovery failures abort dependent update work. Failed backup restoration leaves
+stage and backup intact; swap refuses an unrecovered backup. Protocol launches
+and disabled headless checks skip staging recovery. See
+[Update and instance safety](docs/UPDATE-SAFETY.md) for the full contract.
+
 ## 4. Configuration
 
-File: `nomad.toml`, sitting beside its launcher `.exe`. Each launcher has its own config, scoped to that one browser — there is no browser array.
+File: `Nomad/nomad.toml`, inside the `Nomad/` subfolder beside its launcher `.exe`. Each launcher has its own config, scoped to that one browser — there is no browser array.
 
 ```toml
 [browser]
-install_dir = "browser"      # relative to the .exe directory
+install_dir = "browser"      # one folder name beside the .exe directory
 arch = "x64"                 # "x64" | "x86" | "arm64"
 
 [update]
@@ -187,7 +231,7 @@ check_on_launch = true       # false = skip the update check, launch immediately
 auto_download = true         # false = prompt in the status window before downloading
 
 [launch]
-language = "en-US"           # passed as --lang to browsers that accept it
+language = "en-US"           # Chromium/Helium UI language; omit or blank for browser default
 extra_args = []              # additional command-line arguments
 
 [hardening]
@@ -197,7 +241,15 @@ scrub_prefetch = false       # true = delete Windows Prefetch entries on exit (r
 ```
 
 Rules:
-- All paths are relative to the `.exe`'s directory (portability guarantee).
+- `browser.install_dir` is exactly one normal Windows-safe folder name beside
+  the launcher. Reject empty/current/parent, absolute, root-relative,
+  drive-relative, UNC, and nested paths; reject `Data`/`Nomad` case-insensitively,
+  Windows device names (including extensions), reserved characters, controls,
+  and trailing dots/spaces. Validate during deserialization before update or
+  launch work; validate first-run defaults before creating configuration files.
+  Staging and backup remain siblings of that folder, and the portable profile
+  and Nomad state remain beside the launcher. Invalid existing configurations
+  fail visibly without automatic migration or deletion.
 - There is no `channel` key — the Firefox ESR launcher hardcodes its channel internally; all other browsers have a single channel.
 - Unknown keys are rejected at startup with a descriptive error (no silent ignoring).
 - On first run with no `nomad.toml`, a default config is written beside the `.exe` and launch proceeds with defaults.
@@ -221,8 +273,8 @@ enum Hardening {
         preferences: Option<&'static str>,
     },
     /// Gecko-family: a marker-fenced user.js, an optional policies.json, an
-    /// optional autoconfig pair (autoconfig.js + .cfg), and an optional AMO
-    /// uBlock XPI URL — all embedded/resolved at compile time. `autoconfig`
+    /// optional autoconfig pair (autoconfig.js + .cfg), and an optional
+    /// uBlock AMO metadata URL — all embedded/resolved at compile time. `autoconfig`
     /// and `cfg` are `None` for forks shipping their own (e.g. LibreWolf);
     /// `ublock_xpi_releases_url` is `None` for browsers bundling uBlock.
     GeckoProfile {
@@ -251,7 +303,9 @@ Chromium hardening uses three surfaces with distinct purposes:
 2. **`local_state.json` seed** (`payloads/chromium/local_state.json`) — written once into `<user-data-dir>/Local State`, surfaces in `chrome://flags`, and seeds DNS-over-HTTPS to Quad9 secure mode. Reserved for `chrome://flags` toggles that only accept value-typed settings (e.g. `extension-mime-request-handling@2`) and for non-flag config (DoH).
 3. **`preferences.json` profile-pref seed** (`payloads/chromium/preferences.json`) — value-typed prefs with no `--flag` switch: HTTPS-Only mode, Do Not Track, network-prediction off, third-party-cookie block, the Sensors content-setting block, `canMakePayment`/Media Router off, search-suggest/translate/alternate-error-pages off, Privacy Sandbox m1. Merged into `<user-data-dir>/Default/Preferences` every launch with **"user-wins"** scalar semantics; a privacy-critical subset (`LOCKED_SCALAR_PATHS` — HTTPS-Only, Safe Browsing off, Privacy Sandbox m1, DoH) is force-re-applied so the browser or a tampered profile cannot silently re-enable it.
 
-**First-run clobber (why surface 3 also rides in `initial_preferences`).** Chromium's first-run pipeline *regenerates* `Default/Preferences` from the `initial_preferences` template next to `chrome.exe`, discarding whatever Nomad wrote to `Default/Preferences` beforehand. So on a brand-new profile the surface-3 seed alone is inactive for the entire first session and only "heals" on the second launch (when `--no-first-run` is set and Chromium loads Nomad's seeded file normally). To make the hardening active on the first run, `prepare_launch` merges `preferences.json` into the `initial_preferences` payload via `hardening::build_initial_preferences()` — the one seed path Chromium honours on first profile creation, the same path that carries the MAC-protected `extensions.ui.developer_mode`. `preferences.json` remains the single source of truth (surface 3 still maintains established profiles); `Local State` is unaffected because Chromium merges that store rather than regenerating it. Verified end-to-end against ungoogled-chromium and guarded by `merged_initial_preferences_carry_developer_mode_and_profile_hardening`.
+**First-run clobber (why surface 3 also rides in `initial_preferences`).** Chromium's first-run pipeline *regenerates* `Default/Preferences` from the `initial_preferences` template next to `chrome.exe`, discarding whatever Nomad wrote to `Default/Preferences` beforehand. So on a brand-new profile the surface-3 seed alone is inactive for the entire first session and only "heals" on the second launch (when `--no-first-run` is set and Chromium loads Nomad's seeded file normally). When `[hardening] enabled = true`, `prepare_launch` merges `preferences.json` into the `initial_preferences` payload via `hardening::build_initial_preferences()` — the seed path Chromium honours on first profile creation, the same path that carries the MAC-protected `extensions.ui.developer_mode`. `preferences.json` remains the single source of truth (surface 3 still maintains established profiles); `Local State` is unaffected because Chromium merges that store rather than regenerating it. Verified end-to-end against ungoogled-chromium and guarded by `merged_initial_preferences_carry_developer_mode_and_profile_hardening`.
+
+With hardening disabled, both Chromium adapters rewrite the first-run seed with the base developer-mode template only; Helium also keeps its mandatory updater-disable preference. This replaces stale hardened seeds without resetting existing user profile preferences. Seed parse/write errors propagate from launch preparation rather than permitting a launch with stale defaults. Toggle and failed-replacement regressions use owned temporary fixtures; no browser is launched by those tests.
 
 **Profile-storage switches are not hardening and are never gated on `[hardening] enabled`.** `--disable-machine-id`, `--disable-encryption`, and `--disable-features=DeviceBoundSessions` live in `CHROMIUM_PORTABILITY_FLAGS` (`browsers/mod.rs`) and are applied by `launch_command`, beside `--user-data-dir`, on every launch. They decide *how the profile is stored*, not how private it is, and toggling them reformats an existing profile:
 
@@ -274,15 +328,27 @@ Flags upstream marks as **potentially breaking** are excluded from the default s
 
 **`[hardening] reduce_system_info`** (default `true`, Chromium-family only) — Nomad merges the `ReducedSystemInfo` feature into the same `--enable-features=` bundle: system details exposed via headers/JS are reduced and `navigator.hardwareConcurrency` reports two cores, shrinking fingerprint entropy (CPU-core count is a stable identifier). On by default for the fingerprint reduction; set `false` to disable if you hit slowdowns in apps that size worker/thread pools from `hardwareConcurrency` (in-browser video encoders, some WASM workloads, heavy editors). The serde default is `true`, so configs that omit the key (including those written before the option existed) still get it.
 
-**`[hardening] scrub_prefetch`** (default `false`, all browsers) — when `true`, the cleanup watcher attempts to delete Windows Prefetch entries (`C:\Windows\Prefetch\`) for the launcher and browser executables after each browser exit. Prefetch entries record the full executable path and run timestamps, so removing them reduces forensic traces on the portable medium. Requires administrator privileges: a UAC elevation prompt appears on every browser close for non-admin accounts. Defaults to `false` (opt-in) — the per-exit UAC dialog is disruptive for regular use and would condition users to approve launcher-sourced elevation prompts. Enable only on forensics-sensitive machines where you control the account type. The cleanup watcher skips this step entirely when the flag is absent, so there is no performance cost on the default path. Note: `scrub_shell_recent` and `scrub_automatic_destinations` (Recent Items / JumpList trace removal) are always-on when the launcher is on a **removable drive** (`GetDriveTypeW == DRIVE_REMOVABLE`); they are automatically skipped on fixed drives to prevent wiping the user's system-wide Recent history.
+**`[hardening] scrub_prefetch`** (default `false`, all browsers) — when `true`, the cleanup watcher attempts to delete Windows Prefetch entries (`C:\Windows\Prefetch\`) for the launcher and browser executables after each browser exit. Prefetch entries record the full executable path and run timestamps, so removing them reduces forensic traces on the portable medium. Requires administrator privileges: a UAC elevation prompt appears on every browser close for non-admin accounts. Defaults to `false` (opt-in) — the per-exit UAC dialog is disruptive for regular use and would condition users to approve launcher-sourced elevation prompts. Enable only on forensics-sensitive machines where you control the account type. The cleanup watcher skips this step entirely when the flag is absent, so there is no performance cost on the default path. Automatic Recent cleanup is scoped to a corroborated target inside the owned portable folder on any drive; unrelated same-drive entries and compound Jump Lists are preserved.
 
 **Helium exception.** Helium ships its own anti-fingerprinting framework ("Helium Noise") that already noises canvas pixels and AudioContext and **randomizes** `hardwareConcurrency` (2–16) by default — a more complete and less detectable approach than the ungoogled flags. So for Helium, Nomad defers those vectors to Helium Noise: it omits `--fingerprinting-canvas-image-data-noise` from Helium's flag set and never applies `ReducedSystemInfo` (gated by `BrowserFamily::has_builtin_fingerprint_noise()`), since `ReducedSystemInfo`'s clamp-to-`2` would override Helium's randomized value. Nomad still supplies the vectors Helium Noise does not cover (`measuretext`/`client-rects` noise, `SpoofWebGLInfo`, `RemoveClientHints`). Ungoogled Chromium has no Helium Noise and keeps the full set.
 
+**Helium updater portability rule.** `prepare_launch` forces
+`helium.services.browser_updates = false` into both the merged
+`Browser/initial_preferences` template and an existing
+`Data/Default/Preferences`, regardless of `[hardening] enabled`. This overrides
+an existing `true` on every launch while preserving unrelated preferences.
+Fresh profile creation stays with Chromium. An unreadable, malformed, or
+unwritable profile is not replaced with defaults: preparation fails and both
+normal launch and "Launch anyway" refuse to spawn Helium. Existing preferences
+are replaced through a sibling temporary file so a failed write leaves the
+original intact. The upstream updater DLL and helper are retained; the profile
+preference disables update access without removing a binary dependency.
+
 ### Gecko-family (Firefox, LibreWolf, Floorp, Waterfox) — layered profile
 
-Two layers, both written into `install_dir`:
+Two layers, written to separate profile and installation locations:
 
-1. **`user.js`** — a Nomad-curated "safe" profile derived from the arkenfox `user.js` template: the arkenfox core sections minus every preference arkenfox itself tags as site-breaking (`[SETUP-WEB]`), aggressive (`[SETUP-HARDEN]`), or optional (sections 4000+, including RFP). The Nomad-written block is fenced with marker comments; preferences outside the fence — including the user's own — are preserved, and the block is re-seeded idempotently on every launch.
+1. **`user.js`** — written to the portable profile returned by `profile_dir` (`Data/` for these browsers), outside the replaceable installation. A Nomad-curated "safe" profile derived from the arkenfox `user.js` template: the arkenfox core sections minus every preference arkenfox itself tags as site-breaking (`[SETUP-WEB]`), aggressive (`[SETUP-HARDEN]`), or optional (sections 4000+, including RFP). The Nomad-written block is fenced with marker comments; preferences outside the fence — including the user's own — are preserved, and the block is re-seeded idempotently on every launch.
 2. **`policies.json`** — written to `<install_dir>/distribution/policies.json`. Carries the structural locks `user.js` cannot enforce: disable the browser's built-in updater (Nomad is the sole updater), disable telemetry / studies / crash reporting, disable Pocket and Firefox accounts. This file is fully Nomad-managed.
 
 ### LibreWolf — own minimal `user.js`, shares `policies.json`, skips the autoconfig pair
@@ -297,18 +363,28 @@ LibreWolf still shares `firefox/policies.json` (the structural updater/telemetry
 
 The arkenfox-derived profile and the Chromium flag sets are **vendored** — pinned snapshots embedded in `nomad-core` via `include_str!`, never fetched at runtime (runtime fetch would break offline / USB use and add a per-launch failure mode). They are bumped deliberately, tracking upstream arkenfox releases and ungoogled-chromium flag changes.
 
-The AMO-signed uBlock Origin XPI (Gecko) and the gorhill `uBlock0_X.X.X.chromium.zip` (Ungoogled Chromium) are the explicit runtime-fetch exceptions: the AMO XPI is downloaded because Gecko requires a Mozilla-signed artifact that Nomad cannot reproduce; the gorhill zip is fetched after the release tag's GPG signature is verified against the embedded gorhill key (`F5630CAE62A14316`) **and** the asset's upload timeline passes a tamper check (`github::asset_provenance_suspect`). The tag signature authenticates the release event only — GitHub release assets are mutable independently of the signed tag, gorhill publishes no asset checksums, and the zip bundles unpinned `uBlockOrigin/uAssets` content so it cannot be rebuilt from the signed tree — so an asset replaced or re-uploaded after publication is detected by its timeline and the update deferred. Nomad remains the sole updater for the extension binary.
+The AMO-signed uBlock Origin XPI (Gecko) and the gorhill `uBlock0_X.X.X.chromium.zip` (Ungoogled Chromium) are the explicit runtime-fetch exceptions.
+
+The AMO XPI is downloaded because Gecko requires a Mozilla-signed artifact that Nomad cannot reproduce. Nomad reads its version, exact file URL, and SHA-256 digest from one AMO add-on metadata response; the GUID must be `uBlock0@raymondhill.net` and the file status `public`. Missing/malformed hashes or mismatched XPI bytes fail before staging. The digest depends on AMO metadata over HTTPS, while Firefox performs Mozilla signature validation at installation. The local signature-file check is only a layout check. Version discovery no longer follows a mutable `/latest/` redirect or guesses from filenames.
+
+The gorhill ZIP is fetched only after its GitHub asset metadata supplies a valid `sha256:<64 hex characters>` digest, the release tag's GPG signature verifies against the embedded gorhill key (`F5630CAE62A14316`), and the upload timeline passes `github::asset_provenance_suspect`. ZIP bytes must match the digest before extraction; absent, malformed or mismatched digests leave the installed extension and cache untouched. The tag signature authenticates the tag/commit only. GitHub's asset digest provides archive integrity dependent on GitHub metadata, not a publisher signature over the ZIP; the timeline check remains additional evidence against asset replacement. Already-current installed files are not rehashed. Nomad remains the sole updater for the extension binary.
 
 ---
 
 ## 6. Branding
 
-v1 branding is limited to the launcher executables themselves:
+Branding covers launcher assets and the supported Ungoogled Chromium overlays:
 
 - Each launcher crate embeds a browser-branded `icon.ico` into its `.exe` at compile time via a `winresource` build script. `nomad-firefox.exe` carries a Firefox-branded icon, and so on.
 - The status window's identity card displays the browser's logo and brand colors (see §7), matching the Nomad mockups.
-
-Patching the **downloaded browser's** own icon/resource data (PE resource editing) is **deferred to post-v1**. v1 does not modify the browser binaries' resources.
+- Ungoogled Chromium uses [`core/src/branding.rs`](core/src/branding.rs) and
+  [`core/src/branding/chromium.rs`](core/src/branding/chromium.rs) to patch PE icon
+  resources and PAK logos after package verification. The mandatory staged
+  compatibility check verifies required files and overlays before promotion;
+  failure preserves the working installation. A `.branding-patched` fingerprint
+  controls repeat application. Cosmetic rebranding of an existing installation
+  logs failures and retries next launch; it does not bypass staged update checks.
+  Other launchers do not supply this branding configuration.
 
 ### PE Version Metadata (Windows exe Properties → Details)
 
@@ -334,7 +410,8 @@ There is no tray icon and no persistent window. Running `nomad-<browser>.exe` op
 
 ### Design language
 "Nomad dark" palette — the design tokens (palette + type/spacing/radius/motion
-scales) live in `core/src/ui/theme.rs`; see `DESIGN.md` for the full system.
+scales) live in [`core/src/ui/theme.rs`](core/src/ui/theme.rs); identity rendering
+is implemented in [`core/src/ui/identity.rs`](core/src/ui/identity.rs).
 Unified chrome across all nine launchers; per-browser differentiation is the
 identity card's logo + name, plus an optional accent override
 (`BrowserFamily::accent`, default = the family amber accent). The footer carries
@@ -378,12 +455,12 @@ A narrow window containing two stacked cards and a footer link.
   - **`<Browser>` version** — the browser's own version
   - **Build date** — build date, or `—` when unknown
 
-**3. Footer** — left: "Open upstream release page" link (`#E8B255`), opens the browser's upstream release page in the system default browser. Right: the shared Nomad brand lockup — the Nomad emblem + `NOMAD` wordmark (the family signature; emblem from `core/payloads/nomad/`, wordmark in the accent; see `DESIGN.md`).
+**3. Footer** — left: "Open upstream release page" link (`#E8B255`), opens the browser's upstream release page in the system default browser. Right: the shared Nomad brand lockup — the Nomad emblem + `NOMAD` wordmark (the family signature; emblem from `core/payloads/nomad/`, wordmark in the accent; see [`core/src/ui/identity.rs`](core/src/ui/identity.rs)).
 
 ### Behavior
 - **Auto-close** — once the browser process is spawned, the window closes itself automatically. No user interaction is required on the happy path.
 - **Update available, `auto_download = false`** — the status block shows the new version with two buttons: "Update" and "Launch current". The window waits for the user.
-- **Error** — on any failure (network, GPG, hash, extract) the window does *not* auto-close. It shows the error message and offers "Retry" and, where a usable install already exists, "Launch anyway" and "Close".
+- **Error** — on any failure (network, GPG, hash, extract) the window does *not* auto-close. It shows the error message and offers "Retry" and, where a usable install already exists, "Launch anyway" and "Close". If fallback process creation fails, the error remains visible with Retry/Close only; no cleanup watcher starts and success is not signaled. Retry returns to the existing pipeline loop. Successful process creation retains the normal auto-close behavior; it does not prove the browser completed startup.
 
 ### Taskbar progress
 While the window is open and a download is active, the taskbar button shows the Windows progress overlay via `ITaskbarList3` (`TBPF_NORMAL` during download → `TBPF_NOPROGRESS` on completion → `TBPF_ERROR` on failure).
@@ -415,15 +492,17 @@ nomad-<browser>.exe started
   │     └── on "Update" (or auto_download == true): go to DOWNLOAD
   │
   DOWNLOAD:
+  ├── require a signature URL when public_key() is Some:
+  │     missing → verification error before stage creation/download
   ├── status: "Downloading <version>…"   (progress bar driven by ProgressSink)
   │     downloader::fetch(url)  →  {tmp_pkg}
   │     if VersionInfo has a signature URL:
   │       downloader::fetch(sig_url)  →  {tmp_sig}
   ├── status: "Verifying signature…"
-  │     if public_key() is Some and a signature was fetched:
-  │       gpg::verify(tmp_pkg, tmp_sig, public_key())
-  │         Err  →  delete tmp files, show error state
-  │     else: log WARN "no GPG signature; SHA-256 only"
+  │     if public_key() is Some:
+  │       require tmp_sig and gpg::verify(tmp_pkg, tmp_sig, public_key())
+  │         missing/unreadable/invalid → error, no extraction or swap
+  │     else: use the adapter's hash/other verification path
   │     sha256::verify(tmp_pkg, expected_hash)
   │       Err  →  delete tmp files, show error state
   ├── status: "Extracting…"
@@ -444,12 +523,23 @@ nomad-<browser>.exe started
 
 Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are deleted at the start of the next launch.
 
+### Launch language
+
+`build_launch_args` adds a nonblank `launch.language` as one `--lang=<value>`
+argument for `Engine::Chromium` (Ungoogled Chromium and Helium), after trimming
+surrounding whitespace. This is independent of hardening. It precedes
+`extra_args`, so an explicit `--lang=...` there takes precedence. Unset/blank
+values add no switch; Gecko and Electron receive no generated language flag.
+The browser decides available locales and fallback; changing this preference
+requires a full browser restart. It does not install language packs or change
+Nomad's own UI language.
+
 ---
 
 ## 9. Signature & Hash Verification
 
 - Every download is verified against the expected SHA-256 hash before extraction.
-- Where the upstream publishes a GPG detached signature, the package is additionally verified against an embedded ASCII-armored public key using the `pgp` crate (pure Rust, MIT/Apache-2.0).
+- An adapter exposing a package-signing key requires a valid GPG detached package signature, verified with `pgp` against the embedded key. Missing signature metadata is rejected before stage creation/download; failed downloads and unreadable/invalid signatures abort before extraction. A matching hash cannot bypass this requirement. Firefox instead verifies the GPG signature over `SHA256SUMS` during release resolution, then verifies the downloaded package against that authenticated digest.
 - **GPG-verified browsers:** Firefox Stable, Firefox ESR (Mozilla release key) and Mullvad Browser (Tor Browser Developers key, plus the SHA-256 GitHub asset digest). Keys are embedded into `nomad-core` via `include_bytes!` from `core/keys/<browser>.asc`.
 - **Authenticode-verified apps:** Bitwarden. It publishes no GPG key, so in addition to the SHA-256 GitHub asset digest, `core/src/authenticode.rs` runs `WinVerifyTrust` (generic-verify policy, no UI, whole-chain revocation checking with a no-revocation fallback when the revocation status is undeterminable) and extracts the signer certificate's subject via `CryptQueryObject`/`CryptMsgGetParam`/`CertGetNameStringW`; the subject must equal `Bitwarden Inc.` (case-insensitive) or the package is rejected before staging. This is a publisher pin on top of the byte pin — the spirit of GPG verification for an artifact with no GPG key. Windows-only; `unsafe` is confined behind a safe wrapper.
 - **Hash-only browsers:** ungoogled-chromium, Floorp, Helium, LibreWolf (SHA-256) and Waterfox (SHA-512, from the `.sha512` file published beside each CDN installer). For these, `public_key()` returns `None`, `verify_signature` is not invoked, and the absence of a GPG signature is logged at `WARN` level on every download. For GitHub-released browsers the SHA-256 hash is taken from the release asset's `digest` field (`sha256:…`) recorded by GitHub. If no hash is available from any source, the package is rejected (fail-closed; see `updater::verify_package`).
@@ -460,20 +550,64 @@ Partial downloads do not survive a crash: any `.tmp` files in `install_dir` are 
 
 - Opt-in only: registration is not performed automatically. It is triggered by running the launcher with `--register-default` (and undone with `--unregister-default`).
 - Writes to `HKCU\Software\Classes\...` and `HKCU\Software\RegisteredApplications` only (no UAC, no `HKLM`).
-- On register: records written keys to a sidecar `nomad.reg-state.json` beside the `.exe`.
-- On unregister: reads the sidecar and removes exactly those keys (no guessing, no collateral damage).
-- The registered handler launches `nomad-<browser-id>.exe -- %1` so the launcher mediates URL opens.
+- On register: atomically saves the complete cleanup plan in
+  `Nomad/nomad.reg-state.json` before the first HKCU write. Reject invalid,
+  oversized, unknown-schema or different-browser prior state without replacing
+  it. Retain the record after a failed write for explicit retry or removal.
+- On unregister: validates the version-2 record against the current launcher location and exact
+  planned keys/values and removes those entries. Missing entries are harmless;
+  registry failures retain the record. Failure to remove the record is also an
+  error. The record describes a prepared attempt, not a completion marker.
+- Registration names derive from SHA-256 of the browser ID and canonical parent
+  plus launcher filename (ASCII case folded). ProgIDs use 24 digest hex characters
+  after `NomadPortable.`; capability roots and RegisteredApplications names use
+  the full digest. The version-2 record contains its bound launcher path and the
+  Windows picker label includes the folder. A copied record cannot authorize
+  removal at its original location.
+- A same-browser legacy or copied record is archived under
+  `Nomad/registration-history/` before replacing the active plan. No historical
+  registry entries are changed by migration. Version-1 records are accepted for
+  preservation, but refused for deletion. The user selects the new entry in
+  Windows Settings; Nomad never rewrites UserChoice.
+- The registered handler launches `"nomad-<browser-id>.exe" -- "%1"` so the
+  launcher mediates URL/file opens. Require exactly one non-empty target after
+  the separator; reject missing targets, additional arguments, and targets
+  whose first non-whitespace character is `-` or `/` (Windows Gecko also
+  treats `/` as a switch prefix; Chromium trims whitespace before parsing).
+  Validate before internal flag dispatch, configuration, ownership, update, or
+  browser work. Preserve an accepted target verbatim as one positional argument.
+  A separator without a target fails rather than falling back to direct-launch
+  provisioning. Error messages do not echo target contents.
 
 ### Self-registration repair (automatic, narrowly scoped)
 
-Browsers can register *themselves* as URL/HTML handlers (the "Make default" button in their own settings). For a Nomad-managed install that registration points straight at the browser exe inside the portable tree (e.g. `"...\Browser\chrome.exe" --single-argument %1`), bypassing the launcher entirely: the browser then starts with its default host-profile location (`%LOCALAPPDATA%`) instead of the portable `Data` dir. Every clicked link opens a second, empty-profile instance — and the trace scrub deletes that host profile on exit, which reads as "the browser deleted my logins".
+Browsers can register *themselves* as URL/HTML handlers (the "Make default" button in their own settings). For a Nomad-managed install that registration points straight at the browser exe inside the portable tree (e.g. `"...\Browser\chrome.exe" --single-argument %1`), bypassing the launcher entirely: the browser then starts with its default host-profile location (`%LOCALAPPDATA%`) instead of the portable `Data` dir. Every clicked link opens a second, empty-profile instance — and older cleanup could delete that host profile on exit, which read as "the browser deleted my logins". Shared host profiles are now preserved.
 
-`registry::repair_self_registration` therefore sweeps **every** ProgId under `HKCU\Software\Classes` (including the per-exe `Applications\<exe>` handlers) plus the `HKCU\Software\Clients\StartMenuInternet` clients, and rewrites any `shell\open\command` whose executable lives **strictly inside this launcher's `install_dir`** to route through the launcher (`"<launcher>" -- "%1"`). This is the one registry write permitted outside `--register-default`; it is `HKCU`-only, touches only commands that already point into Nomad's own install tree (never other browsers, other Nomad launchers, or system installs), and repairs state the browser itself wrote about Nomad's files. Combined with the launcher's stable `--user-data-dir`/`--profile`, a clicked URL reaches the already-running portable instance as a new tab (Chromium process singleton; Gecko per-profile remoting — which is also why Gecko launch commands must **not** pass `--no-remote`).
+`registry::repair_self_registration` therefore sweeps **every** ProgId under `HKCU\Software\Classes` (including the per-exe `Applications\<exe>` handlers) plus the `HKCU\Software\Clients\StartMenuInternet` clients, and repairs recognized browser `shell\open\command` values whose executable lives **strictly inside this launcher's `install_dir`** to route through the launcher (`"<launcher>" -- "%1"`). This is the one registry write permitted outside `--register-default`; it is `HKCU`-only, touches only commands that already point into Nomad's own install tree (never other browsers, other Nomad launchers, or system installs), and repairs state the browser itself wrote about Nomad's files. Combined with the launcher's stable `--user-data-dir`/`--profile`, a clicked URL reaches the already-running portable instance as a new tab (Chromium process singleton; Gecko per-profile remoting — which is also why Gecko launch commands must **not** pass `--no-remote`).
 
 Two properties of the sweep are load-bearing:
 
-- **It is not restricted to the ProgIds currently selected via `UserChoice`.** A third-party redirector (Winhance's `OpenWebSearch` stub, MSEdgeRedirect, …) commonly owns the `http`/`https` `UserChoice` slot and dispatches onward to the browser's own ProgId — so the command that actually launches the browser is frequently not the selected one. Scanning only `UserChoice` left those commands pointing straight at the browser exe. Safety comes entirely from the `install_dir` containment check, not from the narrowness of the candidate set; an empty `install_dir` is refused outright so containment can never degenerate into "every path".
-- **It runs after browser exit as well as before launch.** The user clicks "Make default" *inside* the browser, mid-session, when no launcher is running to notice. The launch-time pass alone leaves every clicked link misrouted until the next launch, so the detached cleanup watcher re-runs the repair once the browser tree is down, deriving `install_dir` from the launched browser executable's own path.
+- **It is not restricted to the ProgIds currently selected via `UserChoice`.** A third-party redirector (Winhance's `OpenWebSearch` stub, MSEdgeRedirect, …) commonly owns the `http`/`https` `UserChoice` slot and dispatches onward to the browser's own ProgId — so the command that actually launches the browser is frequently not the selected one. Scanning only `UserChoice` left those commands pointing straight at the browser exe. Safety requires validated command/key shapes, ordinary filesystem paths, install-directory containment and a durable repair journal; an empty `install_dir` is refused outright so containment can never degenerate into "every path".
+- **It runs before launch, during the session, and after browser exit.** The user clicks "Make default" *inside* the browser, mid-session. Until the command is rewritten, every clicked link starts a second browser on its host profile instead of opening a tab in the portable instance. The detached cleanup watcher therefore watches `HKCU\Software\Classes` with `RegNotifyChangeKeyValue` for as long as the browser runs and re-runs the repair once each burst of changes settles (`selfreg_watch.rs`). A per-install named mutex keeps this to one watcher when several link clicks have each spawned one. The watcher re-runs the repair once more after the browser tree is down. Both derive `install_dir` from the launched browser executable's own path.
+
+Automatic repair uses a separate versioned journal at
+`Nomad/nomad.registry-repairs.json`, with a persistent per-folder file lock shared
+by repair, register and unregister operations. Each original default value's raw
+bytes and type are saved atomically before compare/write. Only recognized
+Chromium/Gecko arguments with one URL placeholder (or an argument-free Start Menu
+command) are eligible; custom arguments, relative/traversing paths and filesystem
+aliases are refused. Command contents are not logged.
+
+`--unregister-default` durably disables automatic repair, then conditionally
+restores recorded commands and removes the Nomad picker registration. Only an
+exact recorded replacement is restored; later edits and missing values are
+preserved. Failures retain the disabled journal for retry. A successful undo
+retains an empty disabled journal; successful explicit registration reenables it.
+The helper must honor this state on its next sweep. A journal with outstanding
+records cannot be rebound to a moved/renamed launcher or changed installation
+path. Unregister before relocation, then register again. Legacy repairs without
+snapshots cannot be recovered. See [registry repair safety](docs/REGISTRY-SAFETY.md)
+for limits and testing.
 
 ---
 
@@ -487,14 +621,14 @@ Two properties of the sweep are load-bearing:
 - No `unwrap()` / `expect()` outside of launcher `main()` startup initialization.
 - All HTTP via `reqwest` with `native-tls` feature on Windows.
 - Public keys embedded via `include_bytes!` at compile time; no runtime file reads for keys. Launcher icons embedded at build time via `winresource`.
-- No `unsafe` except in the `taskbar.rs` COM interface calls, isolated behind a safe wrapper.
+- Isolate `unsafe` Windows API calls behind safe Rust interfaces and document their safety assumptions. Current uses include taskbar COM, Authenticode, PE resource branding, registry notifications/repair, cleanup, and launcher DLL-search configuration; they are not confined to `taskbar.rs`.
 
 ---
 
 ## 12. Testing Strategy
 
 ### Unit tests (`#[cfg(test)]` in each module of `nomad-core`)
-- `config.rs` — valid `nomad.toml` parses correctly; unknown keys return error; missing required fields return error; relative paths are preserved as-is.
+- `config.rs` — valid `nomad.toml` parses correctly; unknown keys return error; missing required fields return error; valid single folder names are preserved as-is; unsafe installation-folder settings fail before file changes.
 - `gpg.rs` — verify against known-good test fixture (real small signed file); known-bad signature returns `Err`; tampered payload returns `Err`; SHA-256 match/mismatch.
 - `hardening.rs` — the Gecko `user.js` is written marker-fenced with the curated safe profile and `policies.json` into `distribution/`; user prefs outside the fence are preserved; re-running is idempotent. Chromium `hardening()` yields the expected safe flag set.
 - Each `BrowserFamily` impl — `installed_version()` parses version from mock directory layout; `fetch_latest_version()` parses from a fixture JSON/HTML response.
@@ -512,8 +646,8 @@ Two properties of the sweep are load-bearing:
 ### CI (GitHub Actions, `windows-latest`)
 ```yaml
 - cargo fmt --check
-- cargo clippy --workspace --all-targets -- -D warnings
-- cargo test --workspace
+- cargo clippy --workspace --all-targets --locked -- -D warnings
+- cargo test --workspace --locked
 ```
 
 ---
@@ -535,11 +669,20 @@ Two properties of the sweep are load-bearing:
 - Downloading when `auto_download = false` (the window waits on the "Update" button).
 
 ### Never do
-- Delete a host directory that holds a **browser installation the user owns**. The brand dirs the trace scrub clears (`%LOCALAPPDATA%\Chromium`, `%LOCALAPPDATA%\imput\Helium`, the Gecko brand dirs) are also where a user-level install of the same browser lives, and the tree delete does not stop at profile data — it takes the binaries too, leaving Start Menu shortcuts, `App Paths`, and file associations pointing at nothing. `remove_runtime_dir_unless_installed` detects an installation (Chromium: `<dir>\Application\<exe>`; Gecko: the brand exe directly in `<dir>`) and skips the directory entirely, logging a `WARN` that names the remedy. The install's profile is left with it: it is the user's real profile and cannot be told apart from leakage. Accepting an unscrubbed privacy trace is the correct trade against destroying software the user installed.
+- Delete shared host browser directories, profiles, or Gecko `installs.ini`
+  maps. The absence of an executable does not prove ownership: system-wide
+  binaries can keep real profiles under `%LOCALAPPDATA%`. Automatic cleanup
+  requires a matching portable-instance marker and a browser image contained
+  in that owned folder. Only individual Recent shortcuts with unambiguous
+  resolved targets inside the folder and WER reports with one exact absolute
+  `AppPath` matching that browser image may be removed. Preserve unrelated
+  same-drive shortcuts, shared temp files, raw crash dumps, compound Jump
+  Lists, malformed/unreadable/oversized metadata, and reparse-point paths.
+  There is no automatic pre-launch deletion of host browser state.
 - Write to `HKLM` (requires elevation and breaks the portability promise).
 - Execute a downloaded binary that has not passed hash (and, where applicable, GPG or Authenticode) verification.
 - **Bitwarden:** use the `-x64.appx` (inert when unpacked), build it from source, or run any NSIS/web installer — only the official portable `.exe` is wrapped. Do not relocate the vault (`App\Data`) outside `install_dir` *without* keeping the `preserve_state_across_update` copy, and do not drop the Authenticode signer check.
-- Modify the downloaded browser's binaries or resources in v1 (PE resource patching is post-v1).
+- Modify downloaded binaries before verification, or bypass required staged overlay validation. The supported PE/PAK branding overlays in §6 are deliberate post-verification modifications.
 - Store credentials, tokens, or personally identifiable information anywhere.
 - Silently ignore config parse errors or unknown keys.
 - Apply aggressive, site-breaking hardening (full RFP / fingerprint-resistance, `--disable-webgl`, arkenfox `[SETUP-HARDEN]` / optional-section prefs); those are explicitly out of scope (§5).

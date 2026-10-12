@@ -101,6 +101,10 @@ impl Librewolf {
 }
 
 impl BrowserFamily for Librewolf {
+    fn package_target(&self) -> super::PackageTarget {
+        self.arch.into()
+    }
+
     fn id(&self) -> &'static str {
         "librewolf"
     }
@@ -111,6 +115,10 @@ impl BrowserFamily for Librewolf {
 
     fn engine(&self) -> Engine {
         Engine::Gecko
+    }
+
+    fn staged_install_layout(&self) -> super::StagedInstallLayout {
+        super::StagedInstallLayout::Gecko(EXECUTABLE)
     }
 
     fn public_key(&self) -> Option<&'static [u8]> {
@@ -462,7 +470,7 @@ mod tests {
         else {
             panic!("LibreWolf must return GeckoProfile hardening");
         };
-        assert!(!user_js.is_empty());
+        assert_ne!(user_js, "");
         assert!(policies.is_some());
         assert!(
             autoconfig.is_none() && cfg.is_none(),
@@ -489,6 +497,7 @@ mod tests {
         let browser = Librewolf::new(Arch::X64);
         assert!(browser.installed_version(dir.path()).is_none());
         let marker = InstalledVersion {
+            target: Some(crate::browsers::PackageTarget::X64),
             browser_version: "151.0-1".to_owned(),
             engine_version: "151.0-1".to_owned(),
         };

@@ -17,6 +17,8 @@ pub mod bitwarden;
 pub mod firefox;
 pub mod floorp;
 mod github;
+mod staged;
+pub use staged::StagedInstallLayout;
 pub mod helium;
 pub mod librewolf;
 pub mod mullvad;
@@ -55,38 +57,40 @@ pub(crate) const CHROMIUM_PORTABILITY_FLAGS: &[&str] = &[
     "--disable-features=DeviceBoundSessions",
 ];
 
-/// GitHub Releases API URL for uBlock Origin — used to provision the Firefox
-/// XPI locally so `policies.json` can reference it with a `file://` URL
-/// instead of the AMO endpoint at runtime.
-///
-/// AMO is used here instead of gorhill's GitHub releases because gorhill
-/// publishes only the unsigned `.firefox.xpi` to GitHub, which Firefox stable
-/// (and ESR) hardcode-reject at install time regardless of any `policies.json`
-/// or `lockPref` override. AMO returns the Mozilla-signed variant of the same
-/// release, which installs cleanly on every Gecko build.
+/// AMO add-on metadata binds the current version, download URL, and digest.
+/// AMO supplies the Mozilla-signed XPI required by Firefox stable and ESR.
 pub(crate) const UBLOCK_RELEASES_URL: &str =
-    "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/";
+    "https://addons.mozilla.org/api/v5/addons/addon/ublock-origin/";
 
-/// Fetches the latest Mozilla-signed uBlock Origin XPI from AMO into
-/// `<xpi_dir>/uBlock0.xpi`, returning the on-disk path.
-///
-/// The call is idempotent: a `HEAD` request resolves the `/latest/` redirect
-/// to a versioned CDN URL (e.g. `…/ublock_origin-1.70.0.xpi`); if that
-/// version matches the cached version and the file exists, the bytes are not
-/// re-downloaded.
-///
-/// `cache_path` is the path to `nomad-version-cache.toml`; the `ubo_version`
-/// field there is updated after a successful download. `auto_download` gates
-/// whether a discovered newer version is actually downloaded.
-///
-/// The downloaded XPI is sanity-checked for Mozilla signature files
-/// (`META-INF/*.rsa`, `*.sf`) before being kept; an unsigned XPI is treated
-/// as a verification failure and the temporary file is deleted.
+#[derive(Deserialize)]
+struct AmoAddon {
+    guid: String,
+    current_version: AmoVersion,
+}
+
+#[derive(Deserialize)]
+struct AmoVersion {
+    version: String,
+    file: AmoFile,
+}
+
+#[derive(Deserialize)]
+struct AmoFile {
+    url: String,
+    hash: Option<String>,
+    status: String,
+}
+
+/// Resolves AMO metadata and provisions its exact XPI after SHA-256 verification.
+/// Already-current files are not rehashed; `auto_download` gates new downloads.
+/// Signature-file presence is an additional layout check, not cryptographic
+/// Mozilla signature validation (which remains the browser's responsibility).
+/// The current XPI and version cache change only after successful promotion.
 ///
 /// # Errors
-/// Returns a [`BrowserError`] on network, I/O, or verification failure.
+/// Returns a [`BrowserError`] on network, metadata, I/O, or verification failure.
 pub(crate) async fn provision_gecko_ublock_xpi(
-    download_url: &str,
+    metadata_url: &str,
     xpi_dir: &std::path::Path,
     cache_path: &std::path::Path,
     auto_download: bool,
@@ -95,17 +99,32 @@ pub(crate) async fn provision_gecko_ublock_xpi(
 
     let xpi_path = xpi_dir.join("uBlock0.xpi");
 
-    // Resolve the /latest/ redirect to discover the current AMO-published
-    // version without downloading the 4-5 MB XPI body each launch.
-    let resolved_url = client
-        .head(download_url)
-        .send()
-        .await
-        .map_err(github::map_network_err)?
-        .url()
-        .to_string();
-    let version =
-        extract_ublock_version_from_url(&resolved_url).unwrap_or_else(|| "unknown".to_owned());
+    let metadata = crate::network::fetch_text(&client, metadata_url).await?;
+    let addon: AmoAddon = serde_json::from_str(&metadata)
+        .map_err(|e| BrowserError::Parse(format!("invalid AMO add-on metadata: {e}")))?;
+    let release = addon.current_version;
+    let version = release.version;
+    if addon.guid != "uBlock0@raymondhill.net"
+        || release.file.status != "public"
+        || version.trim().is_empty()
+        || version != version.trim()
+        || version.len() > 128
+        || version.chars().any(char::is_control)
+    {
+        return Err(BrowserError::Verification(
+            "AMO metadata must identify uBlock Origin and a public, versioned file".to_owned(),
+        ));
+    }
+    let digest = release
+        .file
+        .hash
+        .as_deref()
+        .and_then(|hash| hash.strip_prefix("sha256:"))
+        .filter(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| {
+            BrowserError::Verification("AMO file has no valid SHA-256 digest".to_owned())
+        })?;
+    validate_amo_file_url(&release.file.url)?;
 
     // Check version: prefer nomad-version-cache.toml, fall back to legacy marker.
     let cached_version = crate::version_cache::VersionCache::load(cache_path)
@@ -130,48 +149,45 @@ pub(crate) async fn provision_gecko_ublock_xpi(
         return Ok(xpi_path);
     }
 
-    let (progress_tx, _) = tokio::sync::watch::channel(0.0f32);
-    std::fs::create_dir_all(xpi_dir)?;
-    crate::downloader::download(download_url, &xpi_path, &progress_tx).await?;
-
-    // Refuse to keep an unsigned XPI: it would never install on Firefox
-    // stable / ESR and may indicate a compromised CDN response.
-    verify_signed_xpi(&xpi_path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&xpi_path);
-    })?;
+    // Buffer within the extension archive limit and verify before writing a stage.
+    let bytes = github::fetch_archive(&client, &release.file.url).await?;
+    crate::gpg::sha256::verify(&bytes, digest)
+        .map_err(|e| BrowserError::Verification(format!("AMO uBlock XPI: {e}")))?;
+    check_xpi_signature_files(&bytes)?;
+    crate::fs_safety::create_dir_all(xpi_dir)?;
+    let mut staged = crate::fs_safety::StagedFile::new(&xpi_path)?;
+    crate::fs_safety::write(staged.path(), &bytes)?;
+    staged.commit()?;
 
     crate::version_cache::update_ubo_version(cache_path, &version);
     // Also write the legacy marker so older launcher versions can read it.
-    let _ = std::fs::write(xpi_dir.join(".ublock-version"), &version);
+    let _ = crate::fs_safety::write(xpi_dir.join(".ublock-version"), &version);
 
-    tracing::info!(version = %version, ?xpi_path, "uBlock Origin XPI provisioned from AMO");
+    tracing::info!(version = %version, ?xpi_path, "uBlock Origin XPI provisioned (AMO SHA-256 verified)");
     Ok(xpi_path)
 }
 
-/// Extracts the uBlock version from a resolved AMO CDN URL.
-///
-/// AMO's `/latest/` endpoint redirects to a path like
-/// `…/file/<file-id>/ublock_origin-<version>.xpi` — we read the version off
-/// the final filename. Returns `None` if the URL does not follow this shape
-/// (e.g. AMO changed the filename convention).
-fn extract_ublock_version_from_url(url: &str) -> Option<String> {
-    let last_segment = url.rsplit_once('/').map_or(url, |(_, f)| f);
-    let trimmed = last_segment.split('?').next().unwrap_or(last_segment);
-    let no_ext = trimmed.strip_suffix(".xpi")?;
-    let after_prefix = no_ext.strip_prefix("ublock_origin-")?;
-    if after_prefix.is_empty() {
-        None
-    } else {
-        Some(after_prefix.to_owned())
+/// Require TLS for the initial request as well as subsequent redirects.
+fn validate_amo_file_url(value: &str) -> Result<()> {
+    let url = reqwest::Url::parse(value)
+        .map_err(|_| BrowserError::Verification("invalid AMO file URL".to_owned()))?;
+    let secure = url.scheme() == "https" && url.host_str().is_some();
+    // Local mock servers exercise the same download flow without TLS fixtures.
+    #[cfg(test)]
+    let secure = secure || (url.scheme() == "http" && url.host_str() == Some("127.0.0.1"));
+    if !secure || !url.username().is_empty() || url.password().is_some() || url.fragment().is_some()
+    {
+        return Err(BrowserError::Verification(
+            "AMO file URL must use HTTPS without credentials or a fragment".to_owned(),
+        ));
     }
+    Ok(())
 }
 
-/// Verifies the XPI carries Mozilla AMO signature files in `META-INF/`.
-/// Returns [`BrowserError::Verification`] when the archive is unsigned —
-/// such an XPI would be rejected by Firefox stable / ESR at install time.
-fn verify_signed_xpi(path: &std::path::Path) -> Result<()> {
-    let bytes = std::fs::read(path)?;
-    let cursor = std::io::Cursor::new(&bytes);
+/// Checks signature-file presence only; a hash verified against AMO metadata
+/// provides archive integrity. Firefox validates Mozilla signatures at install.
+fn check_xpi_signature_files(bytes: &[u8]) -> Result<()> {
+    let cursor = std::io::Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(cursor)
         .map_err(|e| BrowserError::Parse(format!("XPI is not a valid ZIP archive: {e}")))?;
     for i in 0..archive.len() {
@@ -225,6 +241,31 @@ impl Engine {
     }
 }
 
+/// Package selection identity. `Portable` denotes Bitwarden's single artifact,
+/// not a claim that its executable is architecture-neutral.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageTarget {
+    /// 64-bit x86 package selection.
+    X64,
+    /// 32-bit x86 package selection.
+    X86,
+    /// 64-bit ARM package selection.
+    Arm64,
+    /// A single portable artifact with no architecture selector.
+    Portable,
+}
+
+impl From<crate::config::Arch> for PackageTarget {
+    fn from(arch: crate::config::Arch) -> Self {
+        match arch {
+            crate::config::Arch::X64 => Self::X64,
+            crate::config::Arch::X86 => Self::X86,
+            crate::config::Arch::Arm64 => Self::Arm64,
+        }
+    }
+}
+
 /// A resolved upstream release: what to download and how to verify it.
 #[derive(Debug, Clone)]
 pub struct VersionInfo {
@@ -247,6 +288,9 @@ pub struct VersionInfo {
 /// Version metadata parsed from a local browser installation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstalledVersion {
+    /// Selected package target. Legacy markers omit this and remain unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<PackageTarget>,
     /// The browser's own version string.
     pub browser_version: String,
     /// The underlying engine version.
@@ -296,11 +340,11 @@ pub enum Hardening {
     /// Set `autoconfig` + `cfg` to `None` for forks that ship their own
     /// autoconfig bundle (e.g. `LibreWolf`), to avoid overwriting their files.
     ///
-    /// `ublock_xpi_releases_url`: AMO `/latest/` download URL used to
+    /// `ublock_xpi_releases_url`: AMO add-on metadata API URL used to
     /// provision the Mozilla-signed uBlock XPI locally so policies.json can
     /// reference it with a `file://` URL — this avoids a per-launch phone-home
     /// to AMO while still installing an XPI Firefox stable will accept.
-    /// `None` for browsers that already bundle uBlock (e.g. `LibreWolf`).
+    /// `None` for browsers that already bundle uBlock (e.g. `Mullvad`).
     GeckoProfile {
         user_js: &'static str,
         policies: Option<&'static str>,
@@ -356,6 +400,9 @@ pub trait BrowserFamily: Send + Sync {
     /// Stable identifier, e.g. `"ungoogled-chromium"`.
     fn id(&self) -> &'static str;
 
+    /// Target used by the adapter's package selector, cache and install marker.
+    fn package_target(&self) -> PackageTarget;
+
     /// Human-readable name for the identity card, e.g. `"Ungoogled Chromium"`.
     fn display_name(&self) -> &'static str;
 
@@ -371,8 +418,15 @@ pub trait BrowserFamily: Send + Sync {
     /// The rendering engine this browser is built on.
     fn engine(&self) -> Engine;
 
-    /// Embedded ASCII-armored GPG public key, or `None` when the upstream
-    /// publishes no detached signature (verification is then SHA-256 only).
+    /// Mandatory layout of the authenticated, extracted browser bundle.
+    /// The shared updater validates this before preparation, and again before
+    /// writing a version marker. Additional validation hooks cannot bypass it.
+    fn staged_install_layout(&self) -> StagedInstallLayout;
+
+    /// Embedded ASCII-armored package-signing key. `Some` requires a detached
+    /// package signature; missing signatures must never fall back to a hash.
+    /// `None` uses the adapter's hash/other verification path (Firefox verifies
+    /// a signed checksum manifest before returning release metadata).
     fn public_key(&self) -> Option<&'static [u8]>;
 
     /// Reads the version metadata of the installation in `install_dir`,
@@ -401,8 +455,9 @@ pub trait BrowserFamily: Send + Sync {
         Ok(())
     }
 
-    /// Validates required layout and overlays in the authenticated staging tree.
-    /// Called by every update path before writing a version marker or swapping.
+    /// Performs additional browser-specific compatibility/overlay checks.
+    /// The shared updater always checks `staged_install_layout` first, including
+    /// for adapters using this default. Called before markers or swapping.
     ///
     /// # Errors
     /// Returns an error if the staged browser is incompatible with this launcher.
@@ -515,8 +570,9 @@ pub trait BrowserFamily: Send + Sync {
     /// settings.
     ///
     /// # Errors
-    /// Returns a [`BrowserError`] if preparation could not complete. The core
-    /// launcher logs this and continues launching the browser.
+    /// Returns a [`BrowserError`] if required preparation could not complete.
+    /// The core launcher refuses to spawn the browser, including on "Launch
+    /// anyway". Optional staging should log its own failures and return `Ok`.
     fn prepare_launch(
         &self,
         install_dir: &Path,
@@ -590,7 +646,7 @@ pub const VERSION_MARKER: &str = ".nomad-version";
 /// [`BrowserError::Parse`] if `version` cannot be serialized.
 pub fn write_version_marker(install_dir: &Path, version: &InstalledVersion) -> Result<()> {
     let serialized = toml::to_string(version).map_err(|e| BrowserError::Parse(e.to_string()))?;
-    std::fs::write(install_dir.join(VERSION_MARKER), serialized)?;
+    crate::fs_safety::write(install_dir.join(VERSION_MARKER), serialized)?;
     Ok(())
 }
 
@@ -600,6 +656,7 @@ pub fn write_version_marker(install_dir: &Path, version: &InstalledVersion) -> R
 /// "no usable installation".
 #[must_use]
 pub fn read_version_marker(install_dir: &Path) -> Option<InstalledVersion> {
+    crate::fs_safety::ensure_file(install_dir.join(VERSION_MARKER)).ok()?;
     let raw = std::fs::read_to_string(install_dir.join(VERSION_MARKER)).ok()?;
     toml::from_str(&raw).ok()
 }
@@ -610,43 +667,120 @@ mod tests {
     use httpmock::prelude::*;
 
     #[test]
-    fn extracts_version_from_amo_cdn_url() {
-        let url =
-            "https://addons.mozilla.org/firefox/downloads/file/4721638/ublock_origin-1.70.0.xpi";
-        assert_eq!(
-            extract_ublock_version_from_url(url).as_deref(),
-            Some("1.70.0")
-        );
-    }
-
-    #[test]
-    fn extracts_version_when_url_has_query_string() {
-        let url = "https://example.invalid/ublock_origin-2.1.0.xpi?cache=bust";
-        assert_eq!(
-            extract_ublock_version_from_url(url).as_deref(),
-            Some("2.1.0")
-        );
-    }
-
-    #[test]
-    fn returns_none_when_url_does_not_match_ublock_pattern() {
-        for url in [
-            "https://example.invalid/some-other-extension-1.0.xpi",
-            "https://example.invalid/ublock_origin-.xpi", // empty version
-            "https://example.invalid/ublock_origin",      // missing .xpi
-            "https://example.invalid/",
+    fn package_targets_follow_each_adapter_selector() {
+        for arch in [
+            crate::config::Arch::X64,
+            crate::config::Arch::X86,
+            crate::config::Arch::Arm64,
         ] {
-            assert!(
-                extract_ublock_version_from_url(url).is_none(),
-                "expected None for url: {url}"
+            let expected: PackageTarget = arch.into();
+            assert_eq!(firefox::Firefox::new(arch).package_target(), expected);
+            assert_eq!(firefox::Firefox::new_esr(arch).package_target(), expected);
+            assert_eq!(floorp::Floorp::new(arch).package_target(), expected);
+            assert_eq!(helium::Helium::new(arch).package_target(), expected);
+            assert_eq!(librewolf::Librewolf::new(arch).package_target(), expected);
+            assert_eq!(mullvad::Mullvad::new(arch).package_target(), expected);
+            assert_eq!(
+                ungoogled::UngoogledChromium::new(arch).package_target(),
+                expected
+            );
+            assert_eq!(waterfox::Waterfox::new(arch).package_target(), expected);
+            assert_eq!(
+                bitwarden::Bitwarden::new(arch).package_target(),
+                PackageTarget::Portable
             );
         }
     }
 
+    #[test]
+    fn legacy_marker_keeps_unknown_target_and_user_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let install = temp.path().join("Browser");
+        std::fs::create_dir(&install).unwrap();
+        let marker = install.join(".nomad-version");
+        let contents = br#"browser_version = "2.0"
+engine_version = "2.0"
+"#;
+        std::fs::write(&marker, contents).unwrap();
+        let installed = read_version_marker(&install).unwrap();
+        assert_eq!(installed.target, None);
+        assert_eq!(installed.browser_version, "2.0");
+        assert_eq!(std::fs::read(marker).unwrap(), contents);
+    }
+
+    fn amo_metadata(version: &str, url: &str, bytes: &[u8]) -> serde_json::Value {
+        serde_json::json!({
+            "guid": "uBlock0@raymondhill.net",
+            "current_version": {
+                "version": version,
+                "file": {
+                    "url": url,
+                    "hash": format!("sha256:{}", crate::gpg::sha256::hex(bytes)),
+                    "status": "public"
+                }
+            }
+        })
+    }
+
+    fn mock_amo_metadata(server: &MockServer, version: &str, bytes: &[u8]) {
+        let metadata = amo_metadata(
+            version,
+            &server.url(format!("/ublock_origin-{version}.xpi")),
+            bytes,
+        );
+        server.mock(|when, then| {
+            when.method(GET).path("/addon");
+            then.status(200).json_body(metadata);
+        });
+    }
+
+    #[tokio::test]
+    async fn ublock_xpi_uses_metadata_version_and_file_url() {
+        let server = MockServer::start();
+        let bytes = make_xpi_with_signature_files();
+        let metadata = amo_metadata("2.0.0", &server.url("/file/123/extension.xpi"), &bytes);
+        let metadata_mock = server.mock(|when, then| {
+            when.method(GET).path("/addon");
+            then.status(200).json_body(metadata);
+        });
+        let download = server.mock(|when, then| {
+            when.method(GET).path("/file/123/extension.xpi");
+            then.status(200).body(&bytes);
+        });
+        let head = server.mock(|when, then| {
+            when.method(httpmock::Method::HEAD);
+            then.status(200);
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let extensions = dir.path().join("Gecko-extensions");
+        let cache = dir.path().join("cache.toml");
+        provision_gecko_ublock_xpi(&server.url("/addon"), &extensions, &cache, true)
+            .await
+            .expect("metadata must bind the version, URL, and digest");
+        assert_eq!(
+            std::fs::read(extensions.join("uBlock0.xpi")).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            crate::version_cache::VersionCache::load(&cache)
+                .unwrap()
+                .ubo_version
+                .as_deref(),
+            Some("2.0.0")
+        );
+        assert_eq!(
+            std::fs::read_to_string(extensions.join(".ublock-version")).unwrap(),
+            "2.0.0"
+        );
+        metadata_mock.assert_calls(1);
+        download.assert_calls(1);
+        head.assert_calls(0);
+    }
+
     // ── provision_gecko_ublock_xpi tests ──────────────────────────────────────
 
-    /// Builds a minimal signed XPI (ZIP with META-INF/mozilla.rsa).
-    fn make_signed_xpi() -> Vec<u8> {
+    /// Inert XPI-shaped fixture; the signature bytes are deliberately not valid.
+    fn make_xpi_with_signature_files() -> Vec<u8> {
         use std::io::Write;
         let mut buf = Vec::new();
         let cursor = std::io::Cursor::new(&mut buf);
@@ -660,16 +794,91 @@ mod tests {
         buf
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn locked_xpi_promotion_preserves_extension_and_version_cache() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let server = MockServer::start_async().await;
+        mock_amo_metadata(&server, "2.0.0", &make_xpi_with_signature_files());
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/ublock_origin-2.0.0.xpi");
+                then.status(200).body(make_xpi_with_signature_files());
+            })
+            .await;
+        let fixture = tempfile::tempdir().unwrap();
+        let extensions = fixture.path().join("Gecko-extensions");
+        std::fs::create_dir_all(&extensions).unwrap();
+        let path = extensions.join("uBlock0.xpi");
+        let old = make_xpi_with_signature_files();
+        std::fs::write(&path, &old).unwrap();
+        let cache = fixture.path().join("cache.toml");
+        crate::version_cache::update_ubo_version(&cache, "1.0.0");
+        let cache_bytes = std::fs::read(&cache).unwrap();
+        let handle = std::fs::File::options()
+            .read(true)
+            .share_mode(
+                windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
+                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
+            )
+            .open(&path)
+            .unwrap();
+        let result =
+            provision_gecko_ublock_xpi(&server.url("/addon"), &extensions, &cache, true).await;
+        assert!(matches!(result, Err(BrowserError::Io(_))), "{result:?}");
+        drop(handle);
+        assert_eq!(std::fs::read(&path).unwrap(), old);
+        assert_eq!(std::fs::read(&cache).unwrap(), cache_bytes);
+        assert_eq!(std::fs::read_dir(&extensions).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejected_xpi_update_preserves_existing_extension_and_cache() {
+        let server = MockServer::start_async().await;
+        mock_amo_metadata(&server, "2.0.0", &make_xpi_with_signature_files());
+        let mut tampered = make_xpi_with_signature_files();
+        tampered.push(0);
+        check_xpi_signature_files(&tampered).expect("fake signature files pass the layout check");
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/ublock_origin-2.0.0.xpi");
+                then.status(200).body(tampered);
+            })
+            .await;
+        let fixture = tempfile::tempdir().unwrap();
+        let extensions = fixture.path().join("Gecko-extensions");
+        std::fs::create_dir_all(&extensions).unwrap();
+        let old = make_xpi_with_signature_files();
+        std::fs::write(extensions.join("uBlock0.xpi"), &old).unwrap();
+        std::fs::write(extensions.join(".ublock-version"), "1.0.0").unwrap();
+        let cache = fixture.path().join("cache.toml");
+        crate::version_cache::update_ubo_version(&cache, "1.0.0");
+        let cache_bytes = std::fs::read(&cache).unwrap();
+        let result =
+            provision_gecko_ublock_xpi(&server.url("/addon"), &extensions, &cache, true).await;
+        assert!(
+            matches!(result, Err(BrowserError::Verification(_))),
+            "{result:?}"
+        );
+        assert_eq!(
+            std::fs::read_dir(&extensions).unwrap().count(),
+            2,
+            "a mismatched XPI must not reach staging"
+        );
+        assert_eq!(std::fs::read(extensions.join("uBlock0.xpi")).unwrap(), old);
+        assert_eq!(std::fs::read(&cache).unwrap(), cache_bytes);
+        assert_eq!(
+            std::fs::read_to_string(extensions.join(".ublock-version")).unwrap(),
+            "1.0.0"
+        );
+    }
+
     #[tokio::test]
     async fn ublock_xpi_downloads_when_newer_version_available() {
         let server = MockServer::start();
-        let xpi_bytes = make_signed_xpi();
-        // Both HEAD and GET are served from the same URL whose path encodes the version.
-        server.mock(|when, then| {
-            when.method(httpmock::Method::HEAD)
-                .path("/ublock_origin-1.71.0.xpi");
-            then.status(200);
-        });
+        let xpi_bytes = make_xpi_with_signature_files();
+        // Resolve the exact version and digest from a single metadata response.
+        mock_amo_metadata(&server, "1.71.0", &xpi_bytes);
         server.mock(|when, then| {
             when.method(GET).path("/ublock_origin-1.71.0.xpi");
             then.status(200)
@@ -680,7 +889,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let xpi_dir = dir.path().join("Gecko-extensions");
         let cache_path = dir.path().join("nomad-version-cache.toml");
-        let url = server.url("/ublock_origin-1.71.0.xpi");
+        let url = server.url("/addon");
 
         provision_gecko_ublock_xpi(&url, &xpi_dir, &cache_path, true)
             .await
@@ -701,11 +910,7 @@ mod tests {
     async fn ublock_xpi_skips_download_when_already_current() {
         let server = MockServer::start();
 
-        server.mock(|when, then| {
-            when.method(httpmock::Method::HEAD)
-                .path("/ublock_origin-1.71.0.xpi");
-            then.status(200);
-        });
+        mock_amo_metadata(&server, "1.71.0", &make_xpi_with_signature_files());
         let download_mock = server.mock(|when, then| {
             when.method(GET).path("/ublock_origin-1.71.0.xpi");
             then.status(500); // must never be hit
@@ -718,13 +923,13 @@ mod tests {
         std::fs::write(xpi_dir.join("uBlock0.xpi"), b"old xpi bytes").unwrap();
         std::fs::write(xpi_dir.join(".ublock-version"), "1.71.0").unwrap();
         let cache_path = dir.path().join("nomad-version-cache.toml");
-        let url = server.url("/ublock_origin-1.71.0.xpi");
+        let url = server.url("/addon");
 
         provision_gecko_ublock_xpi(&url, &xpi_dir, &cache_path, true)
             .await
             .expect("must not fail when already current");
         assert_eq!(
-            download_mock.hits(),
+            download_mock.calls(),
             0,
             "download must not be requested when XPI is current"
         );
@@ -744,11 +949,7 @@ mod tests {
             zip.finish().unwrap();
             buf
         };
-        server.mock(|when, then| {
-            when.method(httpmock::Method::HEAD)
-                .path("/ublock_origin-1.99.0.xpi");
-            then.status(200);
-        });
+        mock_amo_metadata(&server, "1.99.0", &unsigned_xpi);
         server.mock(|when, then| {
             when.method(GET).path("/ublock_origin-1.99.0.xpi");
             then.status(200)
@@ -759,7 +960,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let xpi_dir = dir.path().join("Gecko-extensions");
         let cache_path = dir.path().join("nomad-version-cache.toml");
-        let url = server.url("/ublock_origin-1.99.0.xpi");
+        let url = server.url("/addon");
 
         let err = provision_gecko_ublock_xpi(&url, &xpi_dir, &cache_path, true)
             .await
@@ -771,6 +972,242 @@ mod tests {
         assert!(
             !xpi_dir.join("uBlock0.xpi").exists(),
             "unsigned XPI must be cleaned up"
+        );
+    }
+
+    #[tokio::test]
+    async fn ublock_xpi_rejects_invalid_metadata_before_download() {
+        use serde_json::json;
+        let cases = [
+            ("/guid", json!("another-extension@example.invalid")),
+            ("/current_version", json!(null)),
+            ("/current_version/version", json!("")),
+            ("/current_version/version", json!("unknown\n")),
+            ("/current_version/file/status", json!("disabled")),
+            ("/current_version/file/hash", json!(null)),
+            ("/current_version/file/hash", json!("")),
+            (
+                "/current_version/file/hash",
+                json!(format!("sha512:{}", "a".repeat(64))),
+            ),
+            (
+                "/current_version/file/hash",
+                json!(format!("sha256:{}", "a".repeat(63))),
+            ),
+            (
+                "/current_version/file/hash",
+                json!(format!("sha256:{}", "a".repeat(65))),
+            ),
+            (
+                "/current_version/file/hash",
+                json!(format!("sha256:{}z", "a".repeat(63))),
+            ),
+            (
+                "/current_version/file/hash",
+                json!(format!("sha256:{} ", "a".repeat(64))),
+            ),
+            (
+                "/current_version/file/url",
+                json!("http://example.invalid/file.xpi"),
+            ),
+            (
+                "/current_version/file/url",
+                json!("file:///C:/extension.xpi"),
+            ),
+            ("/current_version/file/url", json!("/relative.xpi")),
+            (
+                "/current_version/file/url",
+                json!("https://user:pass@example.invalid/file.xpi"),
+            ),
+            (
+                "/current_version/file/url",
+                json!("https://example.invalid/file.xpi#fragment"),
+            ),
+        ];
+        for (pointer, value) in cases {
+            let server = MockServer::start();
+            let mut metadata = amo_metadata(
+                "2.0.0",
+                &server.url("/file.xpi"),
+                &make_xpi_with_signature_files(),
+            );
+            *metadata.pointer_mut(pointer).unwrap() = value;
+            server.mock(|when, then| {
+                when.method(GET).path("/addon");
+                then.status(200).json_body(metadata);
+            });
+            let archive = server.mock(|when, then| {
+                when.method(GET).path("/file.xpi");
+                then.status(500);
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let extensions = dir.path().join("Gecko-extensions");
+            let cache = dir.path().join("cache.toml");
+            let err = provision_gecko_ublock_xpi(&server.url("/addon"), &extensions, &cache, true)
+                .await
+                .expect_err("invalid metadata must fail closed");
+            assert!(
+                matches!(err, BrowserError::Verification(_) | BrowserError::Parse(_)),
+                "{pointer}: {err:?}"
+            );
+            archive.assert_calls(0);
+            assert!(!extensions.exists());
+            assert!(!cache.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn ublock_xpi_rejects_failed_metadata_http_responses() {
+        for status in [403, 404, 500] {
+            let server = MockServer::start();
+            server.mock(|when, then| {
+                when.method(GET).path("/addon");
+                then.status(status).json_body(amo_metadata(
+                    "2.0.0",
+                    &server.url("/file.xpi"),
+                    &make_xpi_with_signature_files(),
+                ));
+            });
+            let archive = server.mock(|when, then| {
+                when.method(GET).path("/file.xpi");
+                then.status(200).body(make_xpi_with_signature_files());
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let extensions = dir.path().join("Gecko-extensions");
+            let cache = dir.path().join("cache.toml");
+            let err = provision_gecko_ublock_xpi(&server.url("/addon"), &extensions, &cache, true)
+                .await
+                .expect_err("HTTP failure must not be treated as release metadata");
+            assert!(
+                matches!(err, BrowserError::Network(_) | BrowserError::Offline(_)),
+                "{err:?}"
+            );
+            archive.assert_calls(0);
+            assert!(!extensions.exists());
+            assert!(!cache.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn ublock_xpi_rejects_failed_downloads_without_staging() {
+        for status in [404, 500] {
+            let server = MockServer::start();
+            mock_amo_metadata(&server, "2.0.0", &make_xpi_with_signature_files());
+            let archive = server.mock(|when, then| {
+                when.method(GET).path("/ublock_origin-2.0.0.xpi");
+                then.status(status).body("failed transfer");
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let extensions = dir.path().join("Gecko-extensions");
+            let cache = dir.path().join("cache.toml");
+            let err = provision_gecko_ublock_xpi(&server.url("/addon"), &extensions, &cache, true)
+                .await
+                .expect_err("failed downloads must stop before staging");
+            assert!(matches!(err, BrowserError::Network(_)), "{err:?}");
+            archive.assert_calls(1);
+            assert!(!extensions.exists());
+            assert!(!cache.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn ublock_xpi_rejects_oversized_download_without_staging() {
+        use std::io::{Read, Write};
+        use std::time::{Duration, Instant};
+        // Raw headers avoid allocating a 128 MiB fixture; httpmock requires
+        // Content-Length to match its actual body and cannot model this case.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let file_url = format!("http://{}/file.xpi", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "archive request never arrived");
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(e) => panic!("{e}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = [0; 4096];
+            let bytes_read = stream.read(&mut request).unwrap();
+            assert!(bytes_read > 0, "expected an archive request");
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                crate::network::MAX_EXTENSION_ARCHIVE_BYTES + 1
+            )
+            .unwrap();
+        });
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/addon");
+            then.status(200).json_body(amo_metadata(
+                "2.0.0",
+                &file_url,
+                &make_xpi_with_signature_files(),
+            ));
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let extensions = dir.path().join("Gecko-extensions");
+        let cache = dir.path().join("cache.toml");
+        let result =
+            provision_gecko_ublock_xpi(&server.url("/addon"), &extensions, &cache, true).await;
+        worker.join().unwrap();
+        let err = result.expect_err("oversized archive must be refused at the headers");
+        assert!(matches!(err, BrowserError::Network(_)), "{err:?}");
+        assert!(err.to_string().contains("response exceeds"), "{err:?}");
+        assert!(!extensions.exists());
+        assert!(!cache.exists());
+    }
+
+    #[tokio::test]
+    async fn ublock_xpi_defers_when_auto_download_is_disabled() {
+        let server = MockServer::start();
+        mock_amo_metadata(&server, "2.0.0", &make_xpi_with_signature_files());
+        let archive = server.mock(|when, then| {
+            when.method(GET).path("/ublock_origin-2.0.0.xpi");
+            then.status(500);
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let extensions = dir.path().join("Gecko-extensions");
+        let cache = dir.path().join("cache.toml");
+        provision_gecko_ublock_xpi(&server.url("/addon"), &extensions, &cache, false)
+            .await
+            .unwrap();
+        archive.assert_calls(0);
+        assert!(!extensions.exists());
+        assert!(!cache.exists());
+    }
+
+    #[tokio::test]
+    async fn ublock_xpi_redownloads_when_current_cache_has_no_file() {
+        let server = MockServer::start();
+        let bytes = make_xpi_with_signature_files();
+        mock_amo_metadata(&server, "2.0.0", &bytes);
+        let archive = server.mock(|when, then| {
+            when.method(GET).path("/ublock_origin-2.0.0.xpi");
+            then.status(200).body(&bytes);
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let extensions = dir.path().join("Gecko-extensions");
+        let cache = dir.path().join("cache.toml");
+        crate::version_cache::update_ubo_version(&cache, "2.0.0");
+        provision_gecko_ublock_xpi(&server.url("/addon"), &extensions, &cache, true)
+            .await
+            .unwrap();
+        archive.assert_calls(1);
+        assert_eq!(
+            std::fs::read(extensions.join("uBlock0.xpi")).unwrap(),
+            bytes
         );
     }
 
@@ -792,7 +1229,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_signed_xpi_accepts_archive_with_meta_inf_signature() {
+    fn xpi_signature_file_check_accepts_archive_with_meta_inf_signature() {
         use std::io::Write;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("signed.xpi");
@@ -806,11 +1243,12 @@ mod tests {
             zip_w.write_all(b"\x00\x01\x02").unwrap();
             zip_w.finish().unwrap();
         }
-        verify_signed_xpi(&path).expect("signed XPI must be accepted");
+        check_xpi_signature_files(&std::fs::read(&path).unwrap())
+            .expect("signed XPI must be accepted");
     }
 
     #[test]
-    fn verify_signed_xpi_rejects_archive_without_signature_files() {
+    fn xpi_signature_file_check_rejects_archive_without_signature_files() {
         use std::io::Write;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("unsigned.xpi");
@@ -822,7 +1260,8 @@ mod tests {
             zip_w.write_all(b"{}").unwrap();
             zip_w.finish().unwrap();
         }
-        let err = verify_signed_xpi(&path).expect_err("unsigned XPI must be rejected");
+        let err = check_xpi_signature_files(&std::fs::read(&path).unwrap())
+            .expect_err("unsigned XPI must be rejected");
         assert!(matches!(err, BrowserError::Verification(_)));
     }
 }
