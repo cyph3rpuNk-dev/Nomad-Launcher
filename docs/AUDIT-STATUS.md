@@ -579,3 +579,92 @@ tests passed 30 repetitions each (90 executions). Logs are
 (`target/socket-fix-msrv.log`). Ignored HKCU/live-upstream/extraction tests were
 not run. The fix is local on `codex/fix-socket-fixtures`; publishing and fresh
 Chromium Compatibility results remain pending.
+
+## Socket fix delivery, signing-key coverage and Floorp Sandbox validation (2026-10-12)
+
+The socket-fixture correction merged as PR #71; main is `4c4071a`. CI, Chromium
+Compatibility, static analysis and Scorecard all passed on that commit, which
+supersedes the pending statement at the end of the previous section. Duplicate
+PR #65 was closed without merging.
+
+`scripts/check-signing-keys.sh` then passed against live upstream metadata with an
+isolated GPG home: Mullvad Browser's current signature issuer `316C1FACD62D07D9`
+and uBlock Origin 1.75.0's issuer `F5630CAE62A14316` are both present in the
+embedded keys. This compares issuer IDs with embedded keys; it downloads no
+browser and verifies no package. No trust anchor changed. Log:
+`target/signing-key-check-2026-10-12.log`.
+
+### Floorp in Windows Sandbox
+
+Earlier live Gecko evidence used the removed Firefox launcher, so Floorp was
+exercised in a fresh Windows Sandbox session (Windows 11 Enterprise 10.0.26100).
+The launcher was the unsigned `Nomad-Floorp.exe` built by Chromium Compatibility
+run 38280168531 from `4c4071a`, SHA-256
+`bd3b5c41d9d31dcaaa066bed2911479e5f1dff230c7100e900fb72391b1a76e7`, verified
+against that run's `SHA256SUMS` on the host and again inside the guest. Only one
+read-only input folder was mapped; clipboard, audio/video input and printers were
+disabled, networking and GPU sharing enabled. Guest commands were typed by the
+user. Results rest on host screenshots of the guest, and on the user's report
+where stated. Raw guest files were not exported.
+
+The launcher resolved Floorp 12.20.1, verified the installer's SHA-256, extracted
+it, and provisioned uBlock Origin 1.75.0 after AMO digest verification. Before
+that, two release lookups failed with `error sending request` and the launcher
+refused to continue with nothing installed. The user reports a slow host VPN at
+the time and that the download began once it was switched off; that cause was
+not independently verified.
+
+Two defects were found on the first start:
+
+- **Floorp cannot start on Windows without the Visual C++ runtime.**
+  `floorp.exe` exited with `0xC0000135` and Windows reported
+  `VCRUNTIME140_1.dll was not found`. `vcruntime140.dll`, `vcruntime140_1.dll`
+  and `msvcp140.dll` were absent from both the guest's `System32` and the
+  installed browser folder. The official 12.20.1 installer (GitHub digest
+  `5e76245db2af763c59bc53dcf06ab391869752e230fa93dfa905ac9baaa3184b`, matched
+  and listed on the host with the bundled 7-Zip without executing it) contains
+  none of them, so Nomad's extraction did not drop them. A host-side string
+  check of each installed portable browser's main executable found the same
+  dependency without bundled files only for Floorp; LibreWolf and Waterfox
+  bundle the three DLLs, and the Chromium, Helium and Mullvad executables do not
+  reference them. That check is a heuristic, not a dependency audit.
+- **The launcher reported that failed start as a success.** It logged
+  `browser launched`, exited 0 and showed no error. The watcher's `OpenProcess`
+  failed 26 ms after spawn and no Floorp process existed five seconds later; the
+  profile folder held only Nomad's own `user.js`.
+
+Neither defect was introduced by the launcher removals. Both remain open; how to
+address them before v1.0.9 is an owner decision.
+
+To continue, the Microsoft Visual C++ Redistributable x64 14.44.35211.0 was
+installed inside the guest only, from Microsoft's download link, after its
+Authenticode signature validated as Microsoft Corporation. Every result below is
+therefore for clean Windows 11 plus that runtime:
+
+| Check | Result |
+|---|---|
+| Start through the launcher | Pass. `about:support` shows the program at `C:\NomadSmoke\Production\Floorp\Browser\floorp.exe`, the profile at `...\Floorp\Data`, and enterprise policies active. |
+| Close and relaunch | Pass. Exit 0 and unchanged version marker on three relaunches; bookmark and enabled uBlock Origin retained (user report, later screenshot-confirmed). |
+| Hardening off/on | Pass. Off removed `nomad.cfg`, `autoconfig.js` and the managed `user.js` block and kept `policies.json`; on restored all of them and `nomad.toml` matched its saved original hash. Effective preference behavior was not inspected. |
+| Offline launch | Pass with cached release metadata: guest adapter disabled, launcher exit 0, browser launched, adapter restored. Only the extension update check reached the network path and fell back; an offline browser release lookup was not exercised. |
+| Registration | Pass. Exit 0; owner, location-scoped key plan and HKCU command/capabilities matched; the picker entry names the instance folder. The user selected it for `.htm`, `.html`, HTTP and HTTPS; Windows also assigned FTP, which was not verified. |
+| URL and local HTML handoff | Pass with the browser open (window process retained) and closed (no provisioning or update); pages opened in the same portable profile, shown by restored session tabs. Marker and executable unchanged. |
+| Unregistration | Pass. Exit 0; planned keys, registered-app value and sidecar absent; `floorp.exe`, version marker and `places.sqlite` hashes unchanged. |
+
+Floorp left `C:\ProgramData\Noraneko-1de4eec8-1241-4177-a864-e594e8d1fb38`
+(three small updater/shortcut records) and empty `Floorp` folders under the
+guest user's local and roaming application data. They were still present after
+the browser exited. This matches the documented conservative cleanup, which
+preserves shared browser directories it cannot attribute.
+
+Not exercised for Floorp: update from an older version, interrupted download and
+retry, post-replacement rollback, a second copy, an empty instance refusing
+protocol provisioning, extension blocking behavior, Windows 10 and software
+rendering. Waterfox, LibreWolf, Mullvad and Helium still have no live coverage.
+
+Evidence is preserved outside the repository at
+`Documents\Nomad-Launcher-Evidence\2026-10-12-floorp-4c4071a` on the owner's
+machine: 16 screenshots, the guest helper scripts and Sandbox configuration, the
+launcher manifest, a results README and a checksum list. These documentation
+changes are local on `docs/floorp-sandbox-validation`; commit, push and review
+remain pending. No release tag, signing or publication has been performed.
