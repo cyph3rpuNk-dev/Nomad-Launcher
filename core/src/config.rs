@@ -27,9 +27,8 @@ pub fn nomad_subdir(launcher_dir: &Path) -> PathBuf {
 }
 
 /// Canonical default config for browser launchers, written verbatim on first
-/// run. Non-browser apps supply their own via
-/// [`crate::browsers::BrowserFamily::default_config`] (e.g. Bitwarden ships a
-/// trimmed config without the browser-only privacy keys).
+/// run. Adapters can supply their own through
+/// [`crate::browsers::BrowserFamily::default_config`].
 pub(crate) const DEFAULT_NOMAD_TOML: &str = "\
 [browser]
 install_dir = \"Browser\"      # relative to the .exe directory

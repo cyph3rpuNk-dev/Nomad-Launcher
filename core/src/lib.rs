@@ -30,8 +30,6 @@ mod version_cache;
 mod version_order;
 
 pub use branding::{Branding, BrandingGroup, BrandingIcon, PakPatch};
-pub use browsers::bitwarden::Bitwarden;
-pub use browsers::firefox::{Channel as FirefoxChannel, Firefox};
 pub use browsers::floorp::Floorp;
 pub use browsers::helium::Helium;
 pub use browsers::librewolf::Librewolf;
@@ -3086,13 +3084,13 @@ mod tests {
     /// `about:config`.
     #[test]
     fn disabling_hardening_withdraws_the_gecko_payloads() {
-        use crate::browsers::firefox::Firefox;
+        use crate::browsers::floorp::Floorp;
         use crate::config::Arch;
 
         let temp = tempfile::tempdir().unwrap();
         let install_dir = temp.path().join("Browser");
         std::fs::create_dir_all(&install_dir).unwrap();
-        let browser = Firefox::new(Arch::X64);
+        let browser = Floorp::new(Arch::X64);
         let profile_dir = browser.profile_dir(&install_dir).unwrap();
 
         // A previously hardened install, plus a pref the user wrote themselves
@@ -3273,13 +3271,10 @@ mod tests {
         }
         check(&UngoogledChromium::new(Arch::X64), true);
         check(&Helium::new(Arch::X64), true);
-        check(&Firefox::new(Arch::X64), false);
-        check(&Firefox::new_esr(Arch::X64), false);
         check(&Floorp::new(Arch::X64), false);
         check(&Waterfox::new(Arch::X64), false);
         check(&Librewolf::new(Arch::X64), false);
         check(&Mullvad::new(Arch::X64), false);
-        check(&Bitwarden::new(Arch::X64), false);
     }
 
     #[test]

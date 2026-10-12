@@ -32,17 +32,18 @@ guidance are documented in [Update and instance safety](docs/UPDATE-SAFETY.md).
 
 | Launcher | Browser | Verification |
 |---|---|---|
-| `Nomad-Firefox.exe` | Firefox Stable | GPG + SHA-256 |
-| `Nomad-Firefox-ESR.exe` | Firefox ESR | GPG + SHA-256 |
 | `Nomad-Mullvad.exe` | [Mullvad Browser](https://mullvad.net/en/browser) | GPG + SHA-256 |
 | `Nomad-LibreWolf.exe` | [LibreWolf](https://librewolf.net) | SHA-256 |
 | `Nomad-Floorp.exe` | [Floorp](https://floorp.app) | SHA-256 |
 | `Nomad-Waterfox.exe` | [Waterfox](https://www.waterfox.net) | SHA-512 |
 | `Nomad-Chromium.exe` | [Ungoogled Chromium](https://github.com/ungoogled-software/ungoogled-chromium) | SHA-256 |
 | `Nomad-Helium.exe` | [Helium](https://github.com/imputnet/helium-windows) | SHA-256 |
-| `Nomad-Bitwarden.exe` | [Bitwarden](https://bitwarden.com) desktop (not a browser) | SHA-256 + Authenticode |
 
 ## Getting started
+
+Firefox, Firefox ESR, and Bitwarden launchers are no longer built. Existing
+installations, profiles, vaults, and Windows registrations are not removed or
+migrated; retain the old launcher if you need to unregister it.
 
 1. Download the launcher you want from the [latest release](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/releases/latest).
 2. [Verify the release](#verifying-a-release) before running it.
@@ -98,7 +99,7 @@ using `--lang=<value>`, even when hardening is disabled. Surrounding whitespace
 is trimmed; omitting the key or leaving it blank adds no language switch.
 `extra_args = ["--lang=de"]` overrides `language` because extra arguments come
 later ([Chromium switch handling](https://chromium.googlesource.com/chromium/src/+/main/base/command_line.cc)).
-Nomad does not apply this setting to Gecko browsers or Bitwarden; use their own
+Nomad does not apply this setting to Gecko browsers; use their own
 language settings. Available translations and fallback behavior belong to the
 browser. Fully exit the browser before relaunching to apply a changed value.
 Existing configs containing `language = "en-US"` now request English on Chromium
@@ -110,8 +111,7 @@ verified package replacement even when the version number is unchanged. Older ca
 refreshed; older install markers remain readable but their unknown target
 requires one verified replacement before Nomad can report them current.
 Automatic-download settings still apply, and offline/protocol launches can
-continue using the existing installation. Bitwarden selects one portable
-artifact independently of `arch`; its recorded target is `portable`.
+continue using the existing installation.
 Nomad refuses older releases even when changing targets or migrating an older
 install marker. Unknown version formats stop the update for review; they are
 not compared as plain text. Older cached releases trigger a fresh lookup.
@@ -166,9 +166,9 @@ What each browser family gets:
 
 **Chromium (Ungoogled Chromium, Helium):** launch flags disable sync, telemetry, and JumpList, and enable canvas/rects/measureText noise, WebRTC restriction, and referrer stripping. DoH is seeded to Quad9 secure mode. uBlock Origin is loaded via `--load-extension=`, sourced from [gorhill/uBlock](https://github.com/gorhill/uBlock) releases with a GPG-verified tag, a verified SHA-256 asset digest, and an upload-timeline check. The machine-ID and encryption switches are not part of this profile, for the reason given above.
 
-**Gecko (Firefox, Floorp, Waterfox):** a fenced `user.js` (a safe subset derived from arkenfox) and a `policies.json` that disables the updater, telemetry, and Pocket are written on every launch. uBlock Origin is provisioned from a locally cached AMO-signed `.xpi`, verified against the SHA-256 digest in AMO metadata before replacement. Firefox validates its Mozilla signature at installation.
+**Gecko (Floorp, Waterfox):** a fenced `user.js` (a safe subset derived from arkenfox) and a `policies.json` that disables the updater, telemetry, and Pocket are written on every launch. uBlock Origin is provisioned from a locally cached AMO-signed `.xpi`, verified against the SHA-256 digest in AMO metadata before replacement. The browser validates its Mozilla signature at installation.
 
-**LibreWolf** ships pre-hardened, so Nomad applies a lighter touch. It gets its own minimal `user.js` rather than the shared Firefox one, adding only what LibreWolf doesn't already do: Quad9 malware-blocking DoH, `geo.enabled` off, network prediction off, WebRTC restricted, and the shutdown sanitize block. LibreWolf's own `librewolf.cfg` and autoconfig pair are never touched, and `privacy.resistFingerprinting` is left intact. uBlock Origin is provisioned the same way as for Firefox, since the portable ZIP doesn't bundle it.
+**LibreWolf** ships pre-hardened, so Nomad applies a lighter touch. It gets its own minimal `user.js` rather than the shared Gecko one, adding only what LibreWolf doesn't already do: Quad9 malware-blocking DoH, `geo.enabled` off, network prediction off, WebRTC restricted, and the shutdown sanitize block. LibreWolf's own `librewolf.cfg` and autoconfig pair are never touched, and `privacy.resistFingerprinting` is left intact. uBlock Origin is provisioned the same way as for Floorp and Waterfox, since the portable ZIP doesn't bundle it.
 
 **Mullvad Browser** is launched as-is. It ships its own crowd-blending anti-fingerprinting stack, and any pref Nomad added would make its users distinguishable from the crowd.
 
@@ -235,7 +235,7 @@ execution records. Review the full threat model in [SECURITY.md](SECURITY.md).
 ## On-disk layout
 
 ```
-C:\Portables\Firefox\
+C:\Portables\Floorp\
 ├── Browser\              # browser install
 ├── Data\                 # browser profile
 ├── Nomad\
@@ -247,7 +247,7 @@ C:\Portables\Firefox\
 │   ├── nomad.reg-state.json      # present after default registration
 │   ├── nomad.registry-repairs.json # repair history and enabled/disabled state
 │   └── registry-repair.lock       # persistent lock file; do not delete
-└── Nomad-Firefox.exe
+└── Nomad-Floorp.exe
 ```
 
 A portable folder is owned by exactly one launcher family. Do not place
@@ -288,7 +288,7 @@ The canonical gate does this automatically; non-Windows tooling keeps its native
 OpenGL renderer and target. See [build and artifact checks](docs/BUILD-SAFETY.md).
 
 `dist.ps1` builds the explicit Windows x64 target with locked dependencies,
-requires all nine launchers and license inputs, and stages signing and packaging
+requires all six launchers and license inputs, and stages signing and packaging
 before promoting the distribution into `target/release`. Requested signing
 must succeed and verify. Unrequested signing remains optional for review/CI
 builds; release publication still requires the owner's offline manifest signature.
@@ -321,12 +321,12 @@ sha256sum --ignore-missing -c SHA256SUMS
 > believed compromised. Releases up to and including v1.0.1 remain verifiable
 > against that key ([announcement](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/releases/tag/v1.0.2)).
 
-On Windows PowerShell: `(Get-FileHash .\Nomad-Firefox.exe -Algorithm SHA256).Hash.ToLower()` and compare against the `SHA256SUMS` line.
+On Windows PowerShell: `(Get-FileHash .\Nomad-Floorp.exe -Algorithm SHA256).Hash.ToLower()` and compare against the `SHA256SUMS` line.
 
 Releases after v1.0.2 are also built from source by a GitHub Actions workflow ([release.yml](.github/workflows/release.yml)) that records signed build provenance. With the [GitHub CLI](https://cli.github.com/) installed, you can check that a binary was produced by that workflow from this repository's code rather than on someone's machine:
 
 ```bash
-gh attestation verify Nomad-Firefox.exe --repo cyph3rpuNk-dev/Nomad-Launcher
+gh attestation verify Nomad-Floorp.exe --repo cyph3rpuNk-dev/Nomad-Launcher
 ```
 
 The same command works for any of the launchers and for the `SHA256SUMS` file itself. Attestation is independent of the GPG key above, so the two checks back each other up.
@@ -348,7 +348,7 @@ existing assets if publication or another upload races the final check.
 
 1. Close the browser.
 2. Run the launcher once with `--register-default`, for example
-   `Nomad-Firefox.exe --register-default`.
+   `Nomad-Floorp.exe --register-default`.
 3. Open Windows **Settings → Apps → Default apps**, find the entry named
    "*Browser* (Nomad Launcher: *folder*)", and set it as the default. Pick that entry,
    not the browser's own entry.
@@ -357,8 +357,8 @@ Clicked links then always go through the launcher and open as a new tab in the
 browser that is already running, on your portable profile.
 
 ```powershell
-Nomad-Firefox.exe --register-default
-Nomad-Firefox.exe --unregister-default
+Nomad-Floorp.exe --register-default
+Nomad-Floorp.exe --unregister-default
 ```
 
 Writes to `HKCU` only, so there is no UAC prompt. State is tracked in `Nomad/nomad.reg-state.json`.
@@ -427,7 +427,7 @@ system-wide.
 **To retry Nomad-managed uBO provisioning:** close the browser and launcher,
 then rename the affected staged copy as a backup:
 
-- Firefox, Firefox ESR, LibreWolf, Floorp and Waterfox: rename
+- LibreWolf, Floorp and Waterfox: rename
   `Nomad/Gecko-extensions/uBlock0.xpi` to `uBlock0.xpi.saved`.
 - Ungoogled Chromium: rename `Browser/nomad-extensions/uBlock0/` to
   `Browser/nomad-extensions/uBlock0.saved/`. If the sibling
@@ -502,7 +502,7 @@ browser families must not share the same portable folder.
 
 Nomad builds on the work of these projects:
 
-- [Firefox](https://www.mozilla.org/firefox/) / Firefox ESR, [Floorp](https://floorp.app), [Waterfox](https://www.waterfox.net), [LibreWolf](https://librewolf.net), [Mullvad Browser](https://mullvad.net/en/browser), [Ungoogled Chromium](https://github.com/ungoogled-software/ungoogled-chromium), [Helium](https://github.com/imputnet/helium-windows), and [Bitwarden](https://bitwarden.com).
+- [Floorp](https://floorp.app), [Waterfox](https://www.waterfox.net), [LibreWolf](https://librewolf.net), [Mullvad Browser](https://mullvad.net/en/browser), [Ungoogled Chromium](https://github.com/ungoogled-software/ungoogled-chromium), [Helium](https://github.com/imputnet/helium-windows).
 - [arkenfox/user.js](https://github.com/arkenfox/user.js), the basis for the Gecko "safe subset" `user.js`.
 - [uBlock Origin](https://github.com/gorhill/uBlock), provisioned automatically for the Gecko launchers (AMO-signed XPI) and Ungoogled Chromium (GPG-verified gorhill tag and SHA-256-verified ZIP). Helium ships its own built-in fork, so Nomad doesn't provision it there.
 

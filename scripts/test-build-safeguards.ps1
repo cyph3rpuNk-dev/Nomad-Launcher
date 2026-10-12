@@ -6,7 +6,7 @@ $repoRoot=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'artifact-fixtures.ps1')
 $fixtureRoot=Join-Path ([IO.Path]::GetTempPath()) ('nomad-dist-test-'+[Guid]::NewGuid().ToString('N'))
 $global:BuildCalls=[Collections.Generic.List[object]]::new()
-$names=@('Nomad-Bitwarden.exe','Nomad-Chromium.exe','Nomad-Firefox.exe','Nomad-Firefox-ESR.exe','Nomad-Floorp.exe','Nomad-Helium.exe','Nomad-LibreWolf.exe','Nomad-Mullvad.exe','Nomad-Waterfox.exe')
+$names=@('Nomad-Chromium.exe','Nomad-Floorp.exe','Nomad-Helium.exe','Nomad-LibreWolf.exe','Nomad-Mullvad.exe','Nomad-Waterfox.exe')
 $global:FixtureLock=$null
 $global:FixtureLink=$null
 $inputs=@('LICENSE-MIT','core/payloads/fonts/OFL.txt','core/payloads/7zip/LICENSE.txt','core/payloads/chromium/logos/LICENSE','TRADEMARKS.md')
@@ -18,7 +18,7 @@ function global:cargo {
         foreach ($name in $global:BuildNames) {
             if ($global:BuildCase -eq 'missing-launcher' -and $name -eq 'Nomad-Waterfox.exe') {continue}
                         $bytes=New-LauncherPEFixture
-            if ($name -eq 'Nomad-Firefox.exe') {
+            if ($name -eq 'Nomad-Floorp.exe') {
                 if ($global:BuildCase -eq 'external-runtime') {$bytes=New-LauncherPEFixture 'VCRUNTIME140.dll'}
                 if ($global:BuildCase -eq 'missing-cfg') {Set-FixtureU16 $bytes 0xde 0}
                 if ($global:BuildCase -eq 'unsafe-dll-search') {Set-FixtureU16 $bytes 0x74e 0x1000}
@@ -27,6 +27,9 @@ function global:cargo {
             [IO.File]::WriteAllBytes((Join-Path $output $name),$bytes)
         }
         if ($global:BuildCase -eq 'extra-launcher') {[IO.File]::WriteAllText((Join-Path $output 'Nomad-Stale.exe'),'stale')}
+        if ($global:BuildCase -eq 'retired-firefox') {[IO.File]::WriteAllBytes((Join-Path $output 'Nomad-Firefox.exe'),(New-LauncherPEFixture))}
+        if ($global:BuildCase -eq 'retired-firefox-esr') {[IO.File]::WriteAllBytes((Join-Path $output 'Nomad-Firefox-ESR.exe'),(New-LauncherPEFixture))}
+        if ($global:BuildCase -eq 'retired-bitwarden') {[IO.File]::WriteAllBytes((Join-Path $output 'Nomad-Bitwarden.exe'),(New-LauncherPEFixture))}
         if ($global:BuildCase -eq 'empty-launcher') {[IO.File]::WriteAllText((Join-Path $output 'Nomad-Waterfox.exe'),'')}
     }
 }
@@ -99,6 +102,7 @@ function New-Fixture([string]$Case) {
     return $output
 }
 $cases=@('missing-guard','missing-config','missing-license','empty-license','directory-license','missing-lock','missing-launcher','empty-launcher','extra-launcher','external-runtime','missing-cfg','unsafe-dll-search','malformed-pe','cargo-failure','auth-missing-tool','auth-failure','auth-verify-failure','gpg-missing-tool','gpg-failure','gpg-no-output','gpg-verify-failure','password','auth-bad-timestamp','auth-bad-certificate','promotion-failure','promotion-corruption','build-busy','linked-output','outside-output','directory-output','linked-launcher')
+$cases+=@('retired-firefox','retired-firefox-esr','retired-bitwarden')
 if ($Baseline) {$cases=@('missing-license')}
 try {
     New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
@@ -128,7 +132,7 @@ try {
         $cargoCalls=@($global:BuildCalls | Where-Object {$_[0] -eq 'cargo'})
         if ($cargoCalls.Count -ne 1 -or -not ($cargoCalls[0] -contains '--locked')) {throw 'Build must use locked dependencies.'}
         $sums=[IO.File]::ReadAllText((Join-Path $output 'SHA256SUMS'))
-        if ($sums.Contains([char]13) -or @($sums.TrimEnd([char]10).Split([char]10)).Count -ne 9) {throw 'Wrong manifest format/set.'}
+        if ($sums.Contains([char]13) -or @($sums.TrimEnd([char]10).Split([char]10)).Count -ne $names.Count) {throw 'Wrong manifest format/set.'}
         foreach ($line in $sums.TrimEnd([char]10).Split([char]10)) {
             $hash,$name=$line -split '  ',2
             if ($names -cnotcontains $name -or (Get-FileHash -LiteralPath (Join-Path $output $name) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $hash) {throw 'Manifest misses final bytes.'}
@@ -138,7 +142,7 @@ try {
         }
         if ((Test-Path -LiteralPath (Join-Path $output 'SHA256SUMS.asc')) -ne ($case -eq 'signed-success')) {throw 'Wrong signature state.'}
         if ($case -eq 'signed-success') {
-            if (@($global:BuildCalls | Where-Object {$_[0] -eq 'signtool' -and $_[1] -eq 'sign'}).Count -ne 9 -or @($global:BuildCalls | Where-Object {$_[0] -eq 'signtool' -and $_[1] -eq 'verify'}).Count -ne 9) {throw 'All requested signatures must be verified.'}
+            if (@($global:BuildCalls | Where-Object {$_[0] -eq 'signtool' -and $_[1] -eq 'sign'}).Count -ne $names.Count -or @($global:BuildCalls | Where-Object {$_[0] -eq 'signtool' -and $_[1] -eq 'verify'}).Count -ne $names.Count) {throw 'All requested signatures must be verified.'}
             if (@($global:BuildCalls | Where-Object {$_[0] -eq 'gpg' -and $_ -contains '--verify'}).Count -ne 1) {throw 'Manifest signature must be verified.'}
         }
     }
