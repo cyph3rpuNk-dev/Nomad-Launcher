@@ -17,6 +17,8 @@ problems. It includes the changes merged in PR #68 and a workspace version updat
   case. Helium's built-in updater is disabled to keep updates in the portable folder.
 - Verification dependencies, bundled extraction tools, build validation, and
   release-upload safeguards have been refreshed.
+- A browser that Windows cannot load at start-up, for example because a system
+  DLL is missing, is reported as an error instead of a successful launch.
 
 ## Upgrading
 
@@ -26,6 +28,10 @@ release builds six launchers. Existing Firefox, Firefox ESR, and Bitwarden
 installations, profiles, vaults, and Windows registrations are not
 removed or migrated. Keep their old launcher for any needed unregistration;
 do not place a different launcher in an existing owned folder.
+
+Floorp needs the Microsoft Visual C++ Redistributable (x64) on the PC; Floorp's
+own installer does not include it. Most PCs already have it. See Troubleshooting
+in README.md if Floorp does not start.
 
 Close the browser and launcher, back up the portable folder, and replace only the
 matching Nomad launcher executable. Keep Browser, Data, and Nomad state together;
@@ -62,7 +68,16 @@ Rust 1.92 checks. The launcher-removal changes also passed the local canonical
 gate (466 Rust tests, including retained updater safety coverage), 36 build
 safeguard cases, and Rust 1.92 workspace/all-target checking. PR #70 merged after
 its checks passed; the subsequent main Chromium Compatibility run exposed a
-socket-fixture race, corrected in PR #71; all main checks then passed. The tagged
-release build remains pending.
+socket-fixture race, corrected in PR #71; all main checks then passed.
+
+A Floorp 12.20.1 smoke test in Windows Sandbox then passed install verification,
+portable profile, relaunch, hardening, cached offline launch, registration,
+URL/HTML handoff and unregistration once the Visual C++ runtime was installed in
+the guest. It also showed that Floorp cannot start without that runtime and that
+the launcher reported the failed start as a launch. The start-up watch added
+afterwards passed the local canonical gate (472 Rust tests) and Rust 1.92
+checks, but has not been exercised against a real browser. Waterfox, LibreWolf,
+Mullvad and Helium have no live coverage. The tagged release build remains
+pending.
 Downloaded release artifacts must be verified against the signed
 SHA256SUMS manifest and GitHub build provenance as described in README.md.
