@@ -448,7 +448,8 @@ A narrow window containing two stacked cards and a footer link.
 **3. Footer** — left: "Open upstream release page" link (`#E8B255`), opens the browser's upstream release page in the system default browser. Right: the shared Nomad brand lockup — the Nomad emblem + `NOMAD` wordmark (the family signature; emblem from `core/payloads/nomad/`, wordmark in the accent; see [`core/src/ui/identity.rs`](core/src/ui/identity.rs)).
 
 ### Behavior
-- **Auto-close** — once the browser process is spawned, the window closes itself automatically. No user interaction is required on the happy path.
+- **Auto-close** — once the browser process is spawned and has not failed during the start-up watch, the window closes itself automatically. No user interaction is required on the happy path.
+- **Start-up watch** — process creation alone is not a launch. The new process is polled for one second; if it ends in that time with a Windows NTSTATUS error (`0xC0000000`–`0xCFFFFFFF`, for example `0xC0000135` when a required DLL is missing), the launch is reported as an error, "browser launched" is not logged and the cleanup watcher is not started. This applies to the normal and "Launch anyway" paths. Ordinary exit codes are not failures, because a browser's first process may exit at once after handing over to a running instance. A process still alive after the watch, including one held open by a Windows error dialog, counts as launched.
 - **Update available, `auto_download = false`** — the status block shows the new version with two buttons: "Update" and "Launch current". The window waits for the user.
 - **Error** — on any failure (network, GPG, hash, extract) the window does *not* auto-close. It shows the error message and offers "Retry" and, where a usable install already exists, "Launch anyway" and "Close". If fallback process creation fails, the error remains visible with Retry/Close only; no cleanup watcher starts and success is not signaled. Retry returns to the existing pipeline loop. Successful process creation retains the normal auto-close behavior; it does not prove the browser completed startup.
 
@@ -508,6 +509,7 @@ nomad-<browser>.exe started
   ├── status: "Launching browser…"
   │     spawn browser.launch_command(install_dir, args)
   │       (Chromium-family: the safe hardening flags are appended here)
+  │     watch the new process for 1 s; an NTSTATUS exit is an error, not a launch
   └── auto-close the status window
 ```
 
