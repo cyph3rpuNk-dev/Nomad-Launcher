@@ -114,6 +114,8 @@ pub(crate) mod tests {
                     Err(error) => panic!("{error}"),
                 }
             };
+            // Windows accepted sockets inherit the listener's non-blocking mode.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
@@ -127,6 +129,31 @@ pub(crate) mod tests {
             let _ = stream.write_all(body); // client may already have aborted
         });
         (url, thread)
+    }
+
+    #[test]
+    fn socket_fixture_waits_for_delayed_request() {
+        let (url, server) = socket_fixture(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n",
+            b"ok",
+            Duration::ZERO,
+        );
+        let address = url
+            .strip_prefix("http://")
+            .unwrap()
+            .trim_end_matches("/fixture");
+        let mut client = std::net::TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        client
+            .write_all(b"GET /fixture HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        server.join().unwrap();
+        assert!(response.ends_with("\r\n\r\nok"), "{response:?}");
     }
 
     #[tokio::test]

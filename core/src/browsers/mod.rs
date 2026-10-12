@@ -1118,6 +1118,8 @@ engine_version = "2.0"
                     Err(e) => panic!("{e}"),
                 }
             };
+            // Windows accepted sockets inherit the listener's non-blocking mode.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
