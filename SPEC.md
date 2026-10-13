@@ -411,6 +411,9 @@ Each launcher's `build.rs` sets the following `winresource` fields in addition t
 
 There is no tray icon and no persistent window. Running `nomad-<browser>.exe` opens a single transient status window that lives only for the duration of the update-and-launch sequence, then closes itself.
 
+The window title is `Nomad Launcher - <DisplayName>`, using a plain hyphen
+(for example, `Nomad Launcher - Floorp`). All six launchers use this format.
+
 ### Design language
 "Nomad dark" palette — the design tokens (palette + type/spacing/radius/motion
 scales) live in [`core/src/ui/theme.rs`](core/src/ui/theme.rs); identity rendering
