@@ -465,7 +465,8 @@ A narrow window containing two stacked cards and a footer link.
 
 ### Behavior
 - **Auto-close** — once the browser process is spawned and has not failed during the start-up watch, the window closes itself automatically. No user interaction is required on the happy path.
-- **Start-up watch** — process creation alone is not a launch. The new process is polled for one second; if it ends in that time with a Windows NTSTATUS error (`0xC0000000`–`0xCFFFFFFF`, for example `0xC0000135` when a required DLL is missing), the launch is reported as an error, "browser launched" is not logged and the cleanup watcher is not started. This applies to the normal and "Launch anyway" paths. Ordinary exit codes are not failures, because a browser's first process may exit at once after handing over to a running instance. A process still alive after the watch, including one held open by a Windows error dialog, counts as launched.
+- **Start-up watch** — process creation alone is not a launch. The new process is polled for one second; if it ends in that time with a Windows NTSTATUS error (`0xC0000000`–`0xCFFFFFFF`, for example `0xC0000135` when a required DLL is missing), the launch is reported as an error, "browser launched" is not logged and the cleanup watcher is not started. This applies to the normal and "Launch anyway" paths. Ordinary exit codes are not failures, because a browser's first process may exit at once after handing over to a running instance. Before spawning, the launcher adds `SEM_FAILCRITICALERRORS` to its own error mode, which the browser inherits, so a load failure ends the new process at once instead of leaving it alive behind a Windows "System Error" dialog for as long as the user leaves that dialog open. A process still alive after the watch counts as launched.
+- **Error layout** — the window has a fixed size. The action buttons are laid out first and a message too long for the remaining space scrolls, so Retry, "Launch anyway" and Close are always reachable.
 - **Update available, `auto_download = false`** — the status block shows the new version with two buttons: "Update" and "Launch current". The window waits for the user.
 - **Error** — on any failure (network, GPG, hash, extract) the window does *not* auto-close. It shows the error message and offers "Retry" and, where a usable install already exists, "Launch anyway" and "Close". If fallback process creation fails, the error remains visible with Retry/Close only; no cleanup watcher starts and success is not signaled. Retry returns to the existing pipeline loop. Successful process creation retains the normal auto-close behavior; it does not prove the browser completed startup.
 
@@ -628,7 +629,7 @@ for limits and testing.
 - No `unwrap()` / `expect()` outside of launcher `main()` startup initialization.
 - All HTTP via `reqwest` with `native-tls` feature on Windows.
 - Public keys embedded via `include_bytes!` at compile time; no runtime file reads for keys. Launcher icons embedded at build time via `winresource`.
-- Isolate `unsafe` Windows API calls behind safe Rust interfaces and document their safety assumptions. Current uses include taskbar COM, Authenticode, PE resource branding, registry notifications/repair, cleanup, and launcher DLL-search configuration; they are not confined to `taskbar.rs`.
+- Isolate `unsafe` Windows API calls behind safe Rust interfaces and document their safety assumptions. Current uses include taskbar COM, Authenticode, PE resource branding, registry notifications/repair, cleanup, the pre-launch error mode, and launcher DLL-search configuration; they are not confined to `taskbar.rs`.
 
 ---
 
