@@ -359,6 +359,10 @@ exceptions for compatibility while keeping Strict mode. The values are not
 locked; the existing managed-profile mechanism reapplies them at startup with
 hardening enabled, including existing profiles. Browser version support and the
 effective checkbox state require live verification; uBlock rules are independent.
+The payload also sets `privacy.trackingprotection.allow_list.hasMigratedCategoryPrefs`
+to `true` before first browser startup. This records Nomad's explicit opt-in and
+prevents Gecko's one-time Strict/Custom migration from disabling both lists when
+the privacy settings are first opened.
 
 The arkenfox-derived profile and the Chromium flag sets are **vendored** — pinned snapshots embedded in `nomad-core` via `include_str!`, never fetched at runtime (runtime fetch would break offline / USB use and add a per-launch failure mode). They are bumped deliberately, tracking upstream arkenfox releases and ungoogled-chromium flag changes.
 
