@@ -1008,3 +1008,32 @@ one-use upload credential was removed. The permanent directory includes the
 archive, receipt, verification report, extracted records, helper snapshots,
 integration logs, and a checksum inventory. Original screenshot PNGs were not
 available at the supplied attachment paths and are not included.
+
+## PR #74 delivery and final CI artifact review (2026-10-13)
+
+The history-preserving integration was committed as `88be5b9`, pushed to the
+existing PR #74 branch, and merged with owner approval as
+`3202cce78dfb720070d4173359fbf83be0090140`. All nine PR checks passed. One live
+Chromium verification run initially returned HTTP 403 (rate limit exceeded);
+the other run for the same commit passed, and the failed job passed on rerun.
+No source change or verification bypass was needed for that failure.
+
+All four workflows for merged main passed: CI (38457591280), Chromium
+Compatibility (38457591311), Zizmor (38457591302), and Scorecard (38457591267).
+This supersedes the pending integration/CI statements above.
+
+The merged-main `chromium-compatible-launchers` artifact (ID 11844529286) was
+downloaded into `target/release-review-v1.0.9-3202cce`. Its 42,197,911-byte ZIP
+matched GitHub's SHA-256 digest before extraction:
+`5c4182ebf45c3f95f31f6d445052be884daef2d852bbe60c560871dde5622b8f`.
+Bounded archive/path checks passed. All six expected launchers (Chromium,
+Floorp, Helium, LibreWolf, Mullvad, Waterfox) matched `SHA256SUMS` and passed the
+PE artifact guard without execution. The artifact includes license files and
+third-party/trademark notices; `VERIFICATION.json` records the review.
+
+These are CI review builds, not a tagged or attested release. The published
+release remains v1.0.8. A v1.0.9 tag, release-workflow build, provenance review,
+owner's offline checksum-manifest signature, and publication remain pending.
+The documented live-platform, browser and post-replacement recovery gaps are
+unchanged. No launcher was executed or host configuration changed for this
+artifact review.
