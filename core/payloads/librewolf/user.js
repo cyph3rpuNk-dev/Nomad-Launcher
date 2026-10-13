@@ -49,6 +49,8 @@ user_pref("beacon.enabled", false);
 // --- ETP WebCompat allow-lists ("Fix site issues" under Strict) ---
 // Enable both major and minor site fixes while retaining LibreWolf's Strict
 // mode. These exceptions can restore blocked content that may contain trackers.
+// Record the opt-in before Gecko's first-use migration disables both lists.
+user_pref("privacy.trackingprotection.allow_list.hasMigratedCategoryPrefs", true);
 user_pref("privacy.trackingprotection.allow_list.baseline.enabled", true);
 user_pref("privacy.trackingprotection.allow_list.convenience.enabled", true);
 

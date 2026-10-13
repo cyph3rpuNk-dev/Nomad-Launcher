@@ -45,6 +45,8 @@ user_pref("privacy.trackingprotection.socialtracking.enabled", true);
 // --- ETP WebCompat allow-lists ("Fix site issues" under Strict) ---
 // Enable both major and minor site fixes. These exceptions can restore blocked
 // content that may contain trackers; they do not change the selected ETP mode.
+// Record the opt-in before Gecko's first-use migration disables both lists.
+user_pref("privacy.trackingprotection.allow_list.hasMigratedCategoryPrefs", true);
 user_pref("privacy.trackingprotection.allow_list.baseline.enabled", true);
 user_pref("privacy.trackingprotection.allow_list.convenience.enabled", true);
 
