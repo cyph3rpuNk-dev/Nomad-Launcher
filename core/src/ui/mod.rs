@@ -643,7 +643,7 @@ pub fn show_window_driven<F>(view: LauncherView, start_pipeline: F) -> Result<()
 where
     F: Fn(StateHandle, egui::Context) + Send + Sync + 'static,
 {
-    let title = format!("{} \u{2014} Nomad Launcher", view.display_name);
+    let title = format!("Nomad Launcher - {}", view.display_name);
     let accent = view.accent;
     let icon = view
         .icon_bytes
