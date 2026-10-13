@@ -79,9 +79,27 @@ portable profile, relaunch, hardening, cached offline launch, registration,
 URL/HTML handoff and unregistration once the Visual C++ runtime was installed in
 the guest. It also showed that Floorp cannot start without that runtime and that
 the launcher reported the failed start as a launch. The start-up watch added
-afterwards passed the local canonical gate (472 Rust tests) and Rust 1.92
-checks, but has not been exercised against a real browser. Waterfox, LibreWolf,
-Mullvad and Helium have no live coverage. The tagged release build remains
-pending.
+afterwards was checked in a second Sandbox session: it reported the failure when
+the launcher was started from PowerShell and raised no false error once the
+runtime was installed, but a launcher started from Explorer still let Windows
+show its own missing-DLL dialog and reported a launch. A follow-up sets the
+Windows error mode so that case is reported too, and keeps the error buttons
+inside the window. It passed the local canonical gate (475 Rust tests) and Rust
+1.92 checks. A fresh Sandbox check of the follow-up build then confirmed the
+Explorer-started missing-runtime error, visible buttons, and normal Floorp launch
+after installing Microsoft's verified runtime in the guest. The combined change
+with current main still requires refreshed CI.
+
+Corrected local builds of Floorp, LibreWolf, and Waterfox showed Strict and both
+ETP site-fix options selected on first start; the owner confirmed the settings,
+bookmark and enabled uBlock survived restart. LibreWolf used an imported browser
+bundle after a Sandbox download interruption, which the owner accepted as
+non-blocking. Its extension state is user-confirmed rather than independently
+corroborated by exported metadata. The actual merged-main Floorp window title
+`Nomad Launcher - Floorp` was also checked in Sandbox.
+
+Mullvad and Helium still lack a live startup campaign; command-line inspection
+does not establish that coverage. The remaining platform/recovery gaps above
+remain open. The tagged release build remains pending.
 Downloaded release artifacts must be verified against the signed
 SHA256SUMS manifest and GitHub build provenance as described in README.md.

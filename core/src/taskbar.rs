@@ -204,6 +204,15 @@ pub struct TaskbarProgress {
 }
 
 impl TaskbarProgress {
+    /// A progress handle with no COM object, for headless layout tests.
+    #[cfg(test)]
+    pub(crate) fn inert() -> Self {
+        Self {
+            #[cfg(windows)]
+            inner: None,
+        }
+    }
+
     /// Creates an `ITaskbarList3` COM object. Silently degrades on failure.
     #[must_use]
     pub fn new() -> Self {
