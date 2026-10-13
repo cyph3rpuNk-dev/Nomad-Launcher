@@ -17,6 +17,9 @@ problems. It includes the changes merged in PR #68 and a workspace version updat
   case. Helium's built-in updater is disabled to keep updates in the portable folder.
 - Verification dependencies, bundled extraction tools, build validation, and
   release-upload safeguards have been refreshed.
+- Floorp, LibreWolf, and Waterfox managed profiles enable ETP's major and minor
+  site fixes for compatibility while keeping Strict protection. These exceptions
+  may allow some tracking elements; uBlock Origin's rules are unchanged.
 - A browser that Windows cannot load at start-up, for example because a system
   DLL is missing, is reported as an error instead of a successful launch.
 

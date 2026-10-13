@@ -716,3 +716,31 @@ dependency audit with the documented RSA exception; Rust 1.92 workspace and
 all-target checking also passed. Four HKCU, six live-upstream and two extraction
 tests remain intentionally ignored. Logs: `target/startup-failure-gate.log` and
 `target/startup-failure-msrv.log`.
+
+## Gecko site-compatibility defaults (2026-10-13)
+
+The owner requested enabling both "Fix major site issues" and "Fix minor site
+issues" under Strict ETP for Floorp, LibreWolf, and Waterfox. Mozilla's preferences
+UI binds these to `privacy.trackingprotection.allow_list.baseline.enabled` and
+`privacy.trackingprotection.allow_list.convenience.enabled`. Floorp's shared
+payload previously enabled baseline but disabled convenience; the Waterfox and
+LibreWolf payloads did not explicitly set either preference. All three now set
+both to true. No ETP category or uBlock rule was changed. This permits browser
+compatibility exceptions that can allow tracking elements.
+
+The preferences are supplied through the existing fenced `user.js` mechanism
+with Nomad hardening enabled, for both new and existing profiles. They are not
+locked; managed values are reapplied at browser startup. A regression upgrades
+an older managed block with both values false, checks all three adapters'
+payloads, preserves surrounding user content, and verifies repeated writes are
+idempotent. Browser startup, upstream preference locks/migrations, and checkbox
+appearance were not exercised: these still need live validation for each browser.
+
+Local canonical validation passed with 473 Rust tests, formatting, Clippy, 36
+build safeguard cases, remaining safeguard fixtures, and dependency audit with
+the documented RSA exception. Rust 1.92 workspace/all-target checking passed.
+Logs: `target/gecko-site-compatibility-gate.log` and
+`target/gecko-site-compatibility-msrv.log`. Ignored HKCU and live upstream tests
+were not run. Changes are local on `codex/gecko-site-compatibility`; PR #74's
+Explorer startup/button fix remains separate. No commit, push, or CI run has
+been performed for this compatibility change.
