@@ -717,6 +717,61 @@ all-target checking also passed. Four HKCU, six live-upstream and two extraction
 tests remain intentionally ignored. Logs: `target/startup-failure-gate.log` and
 `target/startup-failure-msrv.log`.
 
+## Start-up watch in Sandbox and Explorer-launch follow-up (2026-10-12)
+
+The start-up watch merged as PR #73; main is `8cff3e8`, with CI, Chromium
+Compatibility, static analysis and Scorecard passing. The four merged working
+branches from this cycle were deleted after their tips were confirmed in main.
+
+The CI-built `Nomad-Floorp.exe` from `8cff3e8` (Chromium Compatibility run
+38314176711, SHA-256
+`a40be9278f81b86fb8990c7faef7008b55134a33b0e86b8195b01013b5e8edfa`) was
+exercised in a second fresh Windows Sandbox session without the Visual C++
+runtime, with the same isolation settings. Guest commands were typed by the
+user; results rest on host screenshots.
+
+| Case | Result |
+|---|---|
+| Launcher double-clicked in Explorer, runtime absent | Not caught. Windows showed `floorp.exe - System Error`, `VCRUNTIME140.dll was not found`. The launcher logged `browser launched` and started the cleanup watcher; the failed process stayed alive for 1 min 44 s until the dialog was dismissed. The profile held only Nomad's `user.js`. |
+| Launcher started from Windows PowerShell, runtime absent | Caught. The error screen showed the missing-runtime message; the log has `browser failed to start` and no launch or watcher line. The launcher still exited 0 after the user closed the error. The three-line message pushed Retry, "Launch anyway" and Close below the fixed-size window. |
+| Launcher double-clicked, runtime installed in the guest | Pass. Floorp started (11 processes, 116 profile files), `browser launched` was logged and the watcher ran. The first `floorp.exe` process had exited within about 25 ms of creation and was correctly treated as a launch. |
+
+The first two rows differ because of the inherited Windows error mode. Windows
+PowerShell reports `SEM_FAILCRITICALERRORS` (measured on the host as `0x8001`),
+and child processes inherit it, so a load failure ends the browser at once. A
+launcher started from Explorer has the default mode, so Windows shows its own
+dialog and keeps the failed process alive beyond the one-second watch. This
+confirms the limit recorded in the previous section.
+
+Follow-up changes:
+
+- `spawn_browser` now adds `SEM_FAILCRITICALERRORS` to the launcher's error mode
+  before creating the browser process, on both launch paths. The browser
+  inherits it. Microsoft recommends that applications set this mode; every
+  earlier Sandbox browser run in this audit already had it through the
+  PowerShell helpers. Windows' own dialog for this class of failure is no longer
+  shown for the launcher or the browser; Nomad's error screen replaces it.
+- The missing-runtime message is shortened to fit two lines.
+- The error screen reserves the button row first and lets a long message scroll,
+  so the buttons cannot leave the fixed-size window. A headless layout test at
+  the real window size measured the button row at 327-345 pt for a one-line
+  message, 341-359 pt for the missing-runtime message, and 351-369 pt for longer
+  messages, inside a body that ends at 372 pt.
+
+Three tests were added. The error-mode test failed with the call bypassed, and
+the layout test failed while the message area was unconstrained (buttons at
+355-373 pt); both pass with the changes. The layout test checks geometry, not
+rendered pixels.
+
+Local validation passed: the canonical gate with 475 Rust tests, formatting,
+Clippy, artifact guards, 36 build safeguard cases, release/CI safeguards and the
+dependency audit with the documented RSA exception; Rust 1.92 workspace and
+all-target checking also passed. Logs: `target/startup-dialog-gate.log` and
+`target/startup-dialog-msrv.log`. The follow-up has not been run in Sandbox: the
+Explorer-launch case with the runtime absent, and the visible error screen,
+still need a live check. Evidence for the session above is preserved outside the
+repository at `Documents\Nomad-Launcher-Evidence\2026-10-12-floorp-startup-8cff3e8`.
+
 ## Gecko site-compatibility defaults (2026-10-13)
 
 The owner requested enabling both "Fix major site issues" and "Fix minor site
@@ -876,3 +931,80 @@ These checks establish the requested defaults and persistence, not general
 website compatibility, upstream-list effectiveness, or all-browser validation.
 The LibreWolf bundle import and disabled guest update checks remain explicit
 limitations. The migration follow-up is still local, uncommitted and unpushed.
+
+## Delivered settings/title changes and PR #74 Explorer validation (2026-10-13)
+
+The migration follow-up merged in PR #76 as `f267a56`; all nine PR checks and
+merged-main workflows passed. PR #77 then merged the shared title format
+`Nomad Launcher - <DisplayName>` as `6acd935`, again with all PR/main checks
+passing. The actual CI-built Floorp title was observed in Sandbox, with exit 0,
+unchanged installed marker, and owner-confirmed bookmark/uBlock preservation.
+
+Session evidence is preserved at
+`Documents\Nomad-Launcher-Evidence\2026-10-13-final-session-6acd935`. Its guest
+archive is 58,060 bytes, SHA-256
+`6CCDA928B7A5DC3062A3783C014AA3EB27C07FB7384F10532F5724B71C357DE6`.
+All 27 exported files matched their manifest hashes, with 34 additional hash-only
+references. Scope/path checks passed before extraction. The temporary receiver
+closed and its upload credential was removed. Original screenshot PNGs were not
+available at their attachment paths; the host summary identifies the images and
+records conversation observations without claiming the PNGs were archived.
+Exported markers confirm Waterfox 6.7.5. Selected extension metadata corroborates
+active uBlock Origin 1.75.0 in Floorp and Waterfox; LibreWolf's selected export
+contained no matching add-on record, so its enabled-state result remains
+owner-confirmed. The owner accepted LibreWolf's Sandbox download interruption
+as non-blocking; the exact guest cause is unconfirmed and no downloader changed.
+
+PR #74's original CI build `6bf2b595b787512390337b2acc93a30e09fd6e41` was then
+tested in a fresh Windows Sandbox, using its run 38323528288 artifact. Floorp
+launcher SHA-256:
+`72F3DE7AECE2757444C6ED870BA5A052F74E5B095AA5FEC3DF4881D0A8AF3AF1`.
+This snapshot predates the title/settings changes; the old title in its
+screenshots does not indicate a regression in current main.
+
+- With `vcruntime140.dll`, `vcruntime140_1.dll` and `msvcp140.dll` absent, an
+  Explorer double-click produced Nomad's `0xC0000135` startup error. Retry,
+  Launch anyway, and Close were visible. The read-only status output confirmed
+  parent `explorer.exe`, zero Floorp processes, and `browser failed to start`
+  plus the pipeline error at 17:26 UTC. No successful-launch/watcher event was
+  recorded for that attempt. Screenshots 122709 and 123114 are the UI evidence.
+- The owner installed Microsoft Visual C++ x64 14.44.35211.0 inside the guest
+  only. The helper reported a valid Microsoft signature, installer exit 0,
+  SHA-256 `CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B`,
+  and all three DLLs present afterwards.
+- A subsequent Explorer launch produced `browser launched` at 17:46 UTC and
+  11 running Floorp processes. The watcher logged `OpenProcess failed` for the
+  initial PID, consistent with a short-lived startup process, then waited for the 11
+  remaining processes by executable path. The blank-titled Nomad process in
+  this status output was the cleanup watcher. Earlier error lines in the same
+  log belong to the pre-install attempt. The installed marker is Floorp 12.20.1.
+
+This validates the tested PR #74 build's missing-runtime Explorer path and normal
+launch with the runtime, plus the visible error buttons. It does not establish
+late-crash detection, every long-message scrolling case, or a new all-browser
+startup campaign. The follow-up is being integrated locally with `6acd935`,
+preserving its title and migration defaults. The refreshed PR checks have not
+run, and no GitHub merge or release has been performed.
+
+The local integration passed the canonical gate with 476 Rust tests, formatting,
+Clippy, 36 build safeguard cases, the remaining safeguard fixtures, and dependency
+audit with the documented RSA exception. Rust 1.92 workspace/all-target checking
+also passed. Logs: `target/pr74-integration-gate.log` and
+`target/pr74-integration-msrv.log`. Four native HKCU, six live-upstream, and two
+extraction tests remain intentionally ignored. The combined source retains
+`Nomad Launcher - <DisplayName>` and the migration marker in all three Gecko
+payloads. Changes are local on `codex/pr74-integration`, with a history-preserving
+merge prepared but not committed or pushed.
+
+Startup-session evidence is independently verified at
+`Documents\Nomad-Launcher-Evidence\2026-10-13-pr74-startup-6bf2b59`. The archive
+is 4,764 bytes, SHA-256
+`16FCC4B2786A7DE1CC15599ACFBC5F21F332A8418076687342601922961A528C`.
+All six exported files matched their manifest hashes, with eight hash-only
+references; scope/path checks passed before extraction. The guest was Windows 11
+Enterprise 10.0.26100, and all three runtime DLLs were present at export. The
+receiver completed and closed, its listening port was confirmed closed, and its
+one-use upload credential was removed. The permanent directory includes the
+archive, receipt, verification report, extracted records, helper snapshots,
+integration logs, and a checksum inventory. Original screenshot PNGs were not
+available at the supplied attachment paths and are not included.

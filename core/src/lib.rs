@@ -1275,12 +1275,34 @@ fn startup_failure_reason(code: i32) -> Option<String> {
     }
     Some(match status {
         0xC000_0135 => format!(
-            "Windows could not find a system file the browser needs \
-             (STATUS_DLL_NOT_FOUND, {status:#010X}). This usually means the \
-             Microsoft Visual C++ Redistributable (x64) is not installed."
+            "Windows could not find a system file it needs ({status:#010X}), \
+             usually the Microsoft Visual C++ Redistributable (x64)."
         ),
         _ => format!("it stopped immediately with Windows error {status:#010X}."),
     })
+}
+
+/// Asks Windows not to hold a program that cannot be loaded behind a system
+/// error box.
+///
+/// By default a missing DLL leaves the new process alive under a "System
+/// Error" dialog until the user dismisses it. That is far longer than
+/// [`STARTUP_WATCH`], so the failed start was still reported as a launch when
+/// the launcher was started from Explorer. `SEM_FAILCRITICALERRORS` makes the
+/// failure immediate, which lets [`spawn_browser`] report it. The mode is
+/// process-wide and inherited by the browser; Microsoft recommends that
+/// applications set it.
+fn fail_critical_errors_immediately() {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            GetErrorMode, SetErrorMode, SEM_FAILCRITICALERRORS,
+        };
+        // SAFETY: both calls only read or update this process's error-mode flags.
+        unsafe {
+            SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS);
+        }
+    }
 }
 
 /// Starts the prepared browser command and confirms it did not fail at once.
@@ -1295,6 +1317,7 @@ fn spawn_browser(
     cmd: &mut std::process::Command,
     watch: std::time::Duration,
 ) -> Result<std::process::Child, BrowserError> {
+    fail_critical_errors_immediately();
     let mut child = cmd.spawn()?;
     let deadline = std::time::Instant::now() + watch;
     loop {
@@ -3042,6 +3065,30 @@ mod tests {
         assert!(
             matches!(&error, BrowserError::Startup(reason) if reason.contains("0xC0000005")),
             "{error:?}"
+        );
+    }
+
+    /// Regression: started from Explorer, the launcher left a browser with a
+    /// missing DLL alive under Windows' own error box for as long as the user
+    /// left it open, so the one-second watch saw a running process.
+    #[cfg(windows)]
+    #[test]
+    fn starting_a_browser_makes_load_failures_immediate() {
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            GetErrorMode, SetErrorMode, SEM_FAILCRITICALERRORS,
+        };
+        // SAFETY: these calls only read or update this test process's
+        // error-mode flags; the original value is restored below.
+        let original = unsafe { GetErrorMode() };
+        unsafe { SetErrorMode(original & !SEM_FAILCRITICALERRORS) };
+        let mut child = spawn_browser(&mut exits_with(0), EXIT_WAIT).unwrap();
+        child.wait().unwrap();
+        let after = unsafe { GetErrorMode() };
+        unsafe { SetErrorMode(original) };
+        assert_ne!(
+            after & SEM_FAILCRITICALERRORS,
+            0,
+            "the browser must inherit an error mode that fails load errors at once"
         );
     }
 
