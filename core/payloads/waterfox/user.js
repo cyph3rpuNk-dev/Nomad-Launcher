@@ -42,6 +42,12 @@ user_pref("media.peerconnection.ice.default_address_only", true);
 user_pref("privacy.trackingprotection.enabled", true);
 user_pref("privacy.trackingprotection.socialtracking.enabled", true);
 
+// --- ETP WebCompat allow-lists ("Fix site issues" under Strict) ---
+// Enable both major and minor site fixes. These exceptions can restore blocked
+// content that may contain trackers; they do not change the selected ETP mode.
+user_pref("privacy.trackingprotection.allow_list.baseline.enabled", true);
+user_pref("privacy.trackingprotection.allow_list.convenience.enabled", true);
+
 // --- HTTPS-only mode ---
 user_pref("dom.security.https_only_mode", true);
 user_pref("dom.security.https_only_mode_ever_enabled", true);

@@ -11,6 +11,7 @@
 //
 // This file keeps ONLY the genuine additions LibreWolf does not already make;
 // everything else is deferred to LibreWolf's own (stronger or equal) defaults.
+// The site-compatibility exceptions below are a deliberate usability choice.
 // The full profile still lives in payloads/firefox/user.js for Firefox/Floorp.
 
 // --- DNS over HTTPS ---
@@ -44,6 +45,12 @@ user_pref("media.peerconnection.ice.default_address_only", true);
 // --- Hyperlink auditing & beacons (not set by LibreWolf) ---
 user_pref("browser.send_pings", false);
 user_pref("beacon.enabled", false);
+
+// --- ETP WebCompat allow-lists ("Fix site issues" under Strict) ---
+// Enable both major and minor site fixes while retaining LibreWolf's Strict
+// mode. These exceptions can restore blocked content that may contain trackers.
+user_pref("privacy.trackingprotection.allow_list.baseline.enabled", true);
+user_pref("privacy.trackingprotection.allow_list.convenience.enabled", true);
 
 // --- Windows taskbar Jump List (avoids recently-visited site traces on host) ---
 user_pref("browser.taskbar.lists.enabled", false);
