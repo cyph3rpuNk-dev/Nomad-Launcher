@@ -19,7 +19,8 @@ problems. It includes the changes merged in PR #68 and a workspace version updat
   release-upload safeguards have been refreshed.
 - Floorp, LibreWolf, and Waterfox managed profiles enable ETP's major and minor
   site fixes for compatibility while keeping Strict protection. These exceptions
-  may allow some tracking elements; uBlock Origin's rules are unchanged.
+  may allow some tracking elements; uBlock Origin's rules are unchanged. The
+  profile records the opt-in before Gecko's first-use migration can reset it.
 - A browser that Windows cannot load at start-up, for example because a system
   DLL is missing, is reported as an error instead of a successful launch.
 

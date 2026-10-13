@@ -744,3 +744,135 @@ Logs: `target/gecko-site-compatibility-gate.log` and
 were not run. Changes are local on `codex/gecko-site-compatibility`; PR #74's
 Explorer startup/button fix remains separate. No commit, push, or CI run has
 been performed for this compatibility change.
+
+## First-start ETP migration follow-up (2026-10-13)
+
+PR #75 merged the preference change as `8824273`. Its main Chromium Compatibility
+run 38375297765 initially failed with a GitHub 403 rate limit, then passed on the
+owner-approved rerun, including archive verification and artifact building.
+
+The CI-built Floorp launcher (SHA-256
+`8aa0550a47ad8ea73e567a35b2cd000bae18110369de45c179965e0065eb3a1f`)
+was used in a fresh Windows Sandbox with the Microsoft-signed Visual C++ x64
+runtime installed successfully in the guest. Floorp 12.20.1's first-start settings
+screenshot showed Strict selected but both site-fix checkboxes unchecked. The
+subsequent `about:config` screenshot showed both enabled preferences false,
+`hasMigratedCategoryPrefs` true, and no lock on the enabled preferences. These
+observations supersede any assumption that profile-file values prove the live UI.
+
+Mozilla's Firefox 157.0.1
+[exception-list service](https://github.com/mozilla-firefox/firefox/blob/FIREFOX_157_0_1_RELEASE/netwerk/url-classifier/UrlClassifierExceptionListService.sys.mjs)
+sets the migration marker and disables both lists for Strict/Custom profiles if
+that marker was previously false. Floorp's runtime lock identifies Firefox
+157.0.1. This source behavior is consistent with the observed first-start failure.
+The three Nomad payloads now record the explicit opt-in by setting
+`privacy.trackingprotection.allow_list.hasMigratedCategoryPrefs` true before
+startup, together with both enabled preferences. No preference is locked.
+
+The profile-upgrade regression failed before adding the marker and passes with
+it for Floorp, LibreWolf, and Waterfox. Canonical validation passed (473 Rust
+tests and all safeguard fixtures), as did Rust 1.92 workspace/all-target checking.
+Logs: `target/gecko-migration-regression-before.log`,
+`target/gecko-site-migration-gate.log`, and `target/gecko-site-migration-msrv.log`.
+The regression checks managed profile contents, not execution of Gecko's service.
+Fresh-profile and restart validation of the corrected build remain pending;
+LibreWolf and Waterfox effective behavior remains untested. Follow-up changes are
+local on `codex/gecko-site-fixes-migration`, uncommitted and unpushed.
+
+The owner then closed Floorp completely and used the same `8824273` launcher to
+relaunch. Screenshot `Screenshot 2026-10-13 060817.png` shows Strict selected and
+both site-fix checkboxes checked, with launcher exit 0 and the expected launcher
+hash. The helper also printed the previous on-disk `prefs.js` values as false;
+the running browser's settings UI is the effective-state evidence, since that
+file may retain the last saved session's values until clean exit. This confirms
+the existing build's settings apply after the migration has completed. It does
+not validate first startup with the corrected payload or the other two browsers.
+
+The corrected local Floorp build was then started in the separate, previously
+absent `C:\NomadSmoke\SiteFixes\FloorpMigration` instance. Screenshot
+`Screenshot 2026-10-13 061451.png` confirms Strict selected and both site-fix
+checkboxes checked on the first opening of Privacy & Security, with launcher
+exit 0 and all three preferences true in the managed `user.js`. The helper
+verified launcher SHA-256
+`C1F7F7C0418D4F66E2BDC8D6C2384F68AD8EFF2242BA69CD575A2CC4CB3EB5C9`.
+This is an unsigned local release-mode test build based on `8824273`, with patch
+SHA-256 `A9D55FEA0790E8BE7893E5D08DBB5CA68D70A6B96B726DDBCDCFFEE8AB6C06F7`;
+it is not a CI or published release artifact. The binary passed the artifact
+guard before being copied to the read-only Sandbox input. This establishes
+first-start behavior for Floorp 12.20.1; corrected-build restart/persistence and
+LibreWolf/Waterfox live coverage remain pending.
+
+After a full close and relaunch through `Test-Floorp-Migration.ps1 -Mode Relaunch`,
+the owner confirmed both checkboxes, the `Nomad site fixes test` bookmark, and
+enabled uBlock Origin remained intact. This completes the corrected local
+Floorp build's first-start and restart checks. The restart observations are
+user-confirmed; no additional screenshot or raw profile export was supplied.
+
+### LibreWolf settings verification and download limitation
+
+The direct Sandbox download of LibreWolf 157.0.1-1 was very slow and failed with
+`offline or rate-limited: error decoding response body`; two failures are visible
+in screenshot `Screenshot 2026-10-13 073350.png`. A ten-second file-growth sample
+had earlier received 12,910,592 bytes, so it was intermittently progressing.
+The owner reported no VPN. Bounded host probes of the official CDN showed marked
+route variation: Rome delivered approximately 8-300 KiB/s in curl/reqwest samples,
+while the observed Paris route delivered approximately 3-5 MiB/s. Nomad's
+reqwest/native-TLS client transferred 16 MiB from the Paris route in about five
+seconds. Its slow-route sample timed out with an underlying `operation timed out`
+error, exposed to the user as `error decoding response body`. These are host
+measurements; the guest route comparison did not complete, so the guest's exact
+route and underlying failure were not independently established. No permanent
+DNS override, endpoint replacement, or download-policy change was made.
+
+The owner instead completed the download in a new host test folder using
+`Nomad-LibreWolf.exe`. Its SHA-256 matched the original `8824273` CI artifact,
+`56511A43760C50ABC91E424D017D2A3EE0C0436C0E7A2FC73EBB263778DC8295`.
+The host screenshot showed both site-fix checkboxes selected. At the owner's
+request, only the downloaded `Browser` bundle and its authentic installed marker
+were copied into the read-only Sandbox input. All 61 copied files matched the
+source SHA-256 inventory. The host `Data` and `Nomad` folders were excluded.
+
+The corrected local launcher (SHA-256
+`7E5A498FB13E3E1A8413225359B5DB3CFDDC293D7972A4BAB2BE86B88D9F9787`)
+then launched the imported bundle in the previously absent guest instance
+`C:\NomadSmoke\SiteFixes\LibreWolfImportedMigration`, with a fresh profile and
+browser update checks disabled only in that disposable instance. Screenshot
+`Screenshot 2026-10-13 073350.png` shows launcher exit 0, all three managed
+preferences true, Strict selected, and both checkboxes checked. This validates
+LibreWolf's first-start effective settings with the corrected payload; it does
+not establish a successful Sandbox package download. Restart, bookmark/extension
+preservation, and Waterfox settings verification remain pending.
+
+The owner subsequently confirmed that both LibreWolf checkboxes, the
+`Nomad site fixes test` bookmark, and enabled uBlock Origin remained intact after
+a full close and relaunch through `Test-LibreWolf-Imported.ps1 -Mode Relaunch`.
+This completes first-start and restart settings checks for the corrected local
+LibreWolf launcher using the imported bundle. The restart result is user-confirmed;
+no additional screenshot was supplied. Waterfox verification remains pending.
+
+### Waterfox first-start check
+
+Screenshot `Screenshot 2026-10-13 074337.png` shows the corrected local Waterfox
+launcher (SHA-256
+`441EF7318B1229E7B485E844C6FA451450AE311AF36A9F6F48B530317E222019`)
+starting the previously absent `C:\NomadSmoke\SiteFixes\WaterfoxMigration`
+instance with exit 0. Its package SHA-512 and uBlock XPI AMO SHA-256 verification
+are visible in the console. All three managed allow-list preferences are true;
+the settings UI shows Strict and both site-fix checkboxes selected on first
+start. The screenshot also shows Waterfox's existing Resist Fingerprinting
+notice, which this change does not alter. Restart and bookmark/extension
+preservation remain pending. This is the unsigned local test build, not CI or
+release validation.
+
+The owner confirmed both Waterfox checkboxes, the `Nomad site fixes test`
+bookmark, and enabled uBlock Origin remained intact after a full close and
+relaunch through `Test-Gecko-Migration.ps1 Waterfox -Mode Relaunch`. The restart
+result is user-confirmed; the requested version-marker output was not supplied,
+so this record does not assert the exact installed Waterfox release.
+
+The corrected local builds now have first-start UI evidence and user-confirmed
+restart/bookmark/extension preservation for Floorp, LibreWolf, and Waterfox.
+These checks establish the requested defaults and persistence, not general
+website compatibility, upstream-list effectiveness, or all-browser validation.
+The LibreWolf bundle import and disabled guest update checks remain explicit
+limitations. The migration follow-up is still local, uncommitted and unpushed.
