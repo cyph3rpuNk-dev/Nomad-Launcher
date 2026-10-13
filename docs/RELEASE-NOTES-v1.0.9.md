@@ -22,7 +22,9 @@ problems. It includes the changes merged in PR #68 and a workspace version updat
   may allow some tracking elements; uBlock Origin's rules are unchanged. The
   profile records the opt-in before Gecko's first-use migration can reset it.
 - A browser that Windows cannot load at start-up, for example because a system
-  DLL is missing, is reported as an error instead of a successful launch.
+  DLL is missing, is reported as an error instead of a successful launch. Retry,
+  Launch anyway, and Close remain visible when the diagnostic is long.
+- Launcher window titles use `Nomad Launcher - <Browser Name>`.
 
 ## Upgrading
 
@@ -88,7 +90,10 @@ inside the window. It passed the local canonical gate (475 Rust tests) and Rust
 1.92 checks. A fresh Sandbox check of the follow-up build then confirmed the
 Explorer-started missing-runtime error, visible buttons, and normal Floorp launch
 after installing Microsoft's verified runtime in the guest. The combined change
-with current main still requires refreshed CI.
+passed the local gate with 476 Rust tests and Rust 1.92 checking, then merged in
+PR #74 as `3202cce`. All four merged-main workflows passed: CI, Chromium
+Compatibility, Zizmor, and Scorecard. The six CI-built launchers matched their
+checksum manifest and passed the PE artifact guard during independent review.
 
 Corrected local builds of Floorp, LibreWolf, and Waterfox showed Strict and both
 ETP site-fix options selected on first start; the owner confirmed the settings,
