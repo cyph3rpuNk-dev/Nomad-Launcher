@@ -585,6 +585,9 @@ mod tests {
             let upgraded = std::fs::read_to_string(dir.path().join("user.js")).unwrap();
             assert!(upgraded.starts_with(before) && upgraded.ends_with(after));
             for pref in [
+                // Gecko's first-use migration disables both lists under Strict
+                // unless the profile records that the category migration is done.
+                "privacy.trackingprotection.allow_list.hasMigratedCategoryPrefs",
                 "privacy.trackingprotection.allow_list.baseline.enabled",
                 "privacy.trackingprotection.allow_list.convenience.enabled",
             ] {

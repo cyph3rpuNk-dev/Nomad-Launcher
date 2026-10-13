@@ -45,6 +45,9 @@ user_pref("privacy.trackingprotection.socialtracking.enabled", true);
 // Enable both "Fix major site issues" and "Fix minor site issues". Strict ETP
 // stays selected; these curated exceptions can restore logins, videos and
 // comments by allowing some blocked elements that may contain trackers.
+// Record this explicit opt-in before Gecko's first-use Strict/Custom migration,
+// which otherwise disables both lists when opening the privacy settings.
+user_pref("privacy.trackingprotection.allow_list.hasMigratedCategoryPrefs", true);
 user_pref("privacy.trackingprotection.allow_list.baseline.enabled", true);
 user_pref("privacy.trackingprotection.allow_list.convenience.enabled", true);
 
