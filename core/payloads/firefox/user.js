@@ -42,14 +42,11 @@ user_pref("privacy.trackingprotection.enabled", true);
 user_pref("privacy.trackingprotection.socialtracking.enabled", true);
 
 // --- ETP WebCompat allow-lists ("Fix site issues" under Strict) ---
-// Strict ETP otherwise breaks logins / checkout / embeds on major sites. Enable
-// the BASELINE list ("Fix major site issues"): Mozilla un-blocks only a curated,
-// publicly-tracked set (etp-exceptions.mozilla.org) of trackers essential for
-// those sites to load — it does not broadly weaken protection and matches Nomad's
-// "safe" goal (max privacy without breaking sites). Keep the CONVENIENCE list
-// ("Fix minor site issues") OFF — it trades real protection for minor conveniences.
+// Enable both "Fix major site issues" and "Fix minor site issues". Strict ETP
+// stays selected; these curated exceptions can restore logins, videos and
+// comments by allowing some blocked elements that may contain trackers.
 user_pref("privacy.trackingprotection.allow_list.baseline.enabled", true);
-user_pref("privacy.trackingprotection.allow_list.convenience.enabled", false);
+user_pref("privacy.trackingprotection.allow_list.convenience.enabled", true);
 
 // --- HTTPS-only mode ---
 user_pref("dom.security.https_only_mode", true);
