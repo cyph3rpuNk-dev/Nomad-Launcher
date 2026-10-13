@@ -558,6 +558,49 @@ mod tests {
     }
 
     #[test]
+    fn site_fix_preferences_upgrade_all_three_gecko_profiles_without_clobbering_user_content() {
+        use crate::browsers::{floorp::Floorp, librewolf::Librewolf, waterfox::Waterfox};
+        use crate::{Arch, BrowserFamily, Hardening};
+
+        let profiles = [
+            ("floorp", Floorp::new(Arch::X64).hardening()),
+            ("librewolf", Librewolf::new(Arch::X64).hardening()),
+            ("waterfox", Waterfox::new(Arch::X64).hardening()),
+        ];
+        for (id, hardening) in profiles {
+            let Hardening::GeckoProfile { user_js, .. } = hardening else {
+                panic!("{id} must use a Gecko profile");
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let before = "user_pref(\"user.before\", 1);\n";
+            let after = "\nuser_pref(\"user.after\", 2);\n";
+            let old = "user_pref(\"privacy.trackingprotection.allow_list.baseline.enabled\", false);\n\
+                       user_pref(\"privacy.trackingprotection.allow_list.convenience.enabled\", false);";
+            std::fs::write(
+                dir.path().join("user.js"),
+                format!("{before}{MARKER_BEGIN}\n{old}\n{MARKER_END}{after}"),
+            )
+            .unwrap();
+            write_user_js(dir.path(), user_js).unwrap();
+            let upgraded = std::fs::read_to_string(dir.path().join("user.js")).unwrap();
+            assert!(upgraded.starts_with(before) && upgraded.ends_with(after));
+            for pref in [
+                "privacy.trackingprotection.allow_list.baseline.enabled",
+                "privacy.trackingprotection.allow_list.convenience.enabled",
+            ] {
+                let enabled = format!("user_pref(\"{pref}\", true);");
+                assert_eq!(upgraded.matches(&enabled).count(), 1, "{id}: {pref}");
+                assert!(!upgraded.contains(&format!("user_pref(\"{pref}\", false);")));
+            }
+            write_user_js(dir.path(), user_js).unwrap();
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("user.js")).unwrap(),
+                upgraded
+            );
+        }
+    }
+
+    #[test]
     fn write_user_js_creates_fenced_file_on_fresh_profile() {
         let dir = tempfile::tempdir().unwrap();
         let profile = dir.path().join("profile");
