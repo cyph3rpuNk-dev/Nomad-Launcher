@@ -187,7 +187,9 @@ pub fn remove_autoconfig(install_dir: &Path) -> Result<()> {
 ///   are made on the `<basename>` part before `@` so a user-modified
 ///   `<flag>@2` is left alone even when our default is `<flag>@1`.
 /// - **Scalars**: only set when the key is absent. Once a user has changed a
-///   value via the browser UI, we do not roll it back.
+///   value via the browser UI, we do not roll it back unless the key is in
+///   `LOCKED_SCALAR_PATHS`. Those required values (including `DoH` mode/resolver)
+///   are re-enforced from the payload on every enabled-hardening launch.
 ///
 /// Either `local_state_json` or `preferences_json` may be `None`. The
 /// `Default/` profile directory is created if absent so `Preferences` can be

@@ -1926,3 +1926,364 @@ Generated executables, logs, guest artifacts and unmapped evidence snapshots und
 The owner authorized this local commit only. Push/PR/merge, remote CI and release
 publication are separate actions. Remaining runtime/isolation/physical-durability/
 Windows 10 and Ungoogled CRLSet gaps keep the audit rating at 3/5 and v1.0.9 on hold.
+
+
+## Helium DNS observation preparation (2026-10-14)
+
+**Prepared only / verified in code:** The next runtime check observes a public
+nonce hostname with seeded Quad9 secure DoH, then an unreachable loopback DoH
+resolver in a fresh closed guest profile. Source-linked DNS/HTTPS response events
+are distinguished from saved preferences and unrelated requests. Raw NetLog stays
+in the guest; only bounded public observations and receipt/hash references are
+exported. No total packet-leak absence or browser DNS pass is claimed.
+The [runbook](BROWSER-DNS-QUALIFICATION.md) explains paths, endpoints, privacy,
+retention, restore/refusal behavior and measurement limits.
+
+**Tested:** Offline authored source-correlation, privacy filtering, config-argument,
+closed-browser/change-preservation, restore and evidence-integrity fixtures passed
+on PowerShell 5.1 and 7. Gate wiring rejects dependent Cargo work if DNS fixtures
+fail. These tests do not launch a browser or change host DNS. Changes are local/
+uncommitted on `codex/privacy-security-followup`, based on `920a829`.
+Fresh Sandbox observations and independent selected-output verification remain
+pending. Prior recovery/isolation/component limits, rating 3/5 and v1.0.9 hold
+remain. Full gate/build results will be recorded after execution; no push, PR,
+remote CI or release has been performed for this preparation.
+
+
+**Tested full local gate:** `pwsh -NoProfile -File scripts/check.ps1` passed:
+546 Rust tests, 16 ignored, formatting, strict Clippy, offline safety fixtures and
+clean dependency audit. Log: `target/helium-dns-preparation-check.log`.
+PowerShell 5.1/7 DNS fixtures passed; whitespace checks passed. No actual DNS
+observation or remote CI is established. The separate MSRV check is historical,
+not rerun for these PowerShell/documentation-only changes. Package compilation
+and input/source validation are preparation, not guest execution.
+
+
+## Helium baseline collector refusal (2026-10-14)
+
+**User-reported:** CollectBaseline in the first DNS package failed its finalized
+JSON/schema/correlation stage. No observation receipt or DNS success was recorded.
+The capture remains in the guest, and no failure-resolver mutation is authorized
+by this result. The root cause is not established by the generic error.
+
+**Prepared / tested scope:** A read-only `Inspect-Dns-Capture.ps1` diagnostic was
+added under the existing mapped Input/DnsDiagnostics directory. Original four
+inputs still match their frozen manifest. It reads only the bounded closed-browser
+capture, reports JSON conversion versus a whitelisted parser refusal or exception
+type/line, and suppresses raw values and arbitrary exception text. It exports
+nothing and performs no launch, DNS/profile write or cleanup. Syntax and host-
+execution refusal were checked; actual guest diagnostic/result remains pending.
+Earlier source inventory describes the original package, not this later diagnostic.
+The earlier full gate is historical; no new full-gate/native DNS pass is claimed.
+
+
+## Signed NetLog source-ID correction (2026-10-14)
+
+**User-reported diagnostic:** The original baseline is valid JSON (591,492 bytes,
+2,364 events), with event/phase dictionaries present. The original parser refused
+`Invalid event identity or phase`; no baseline DNS result is yet established.
+
+**Verified in code / upstream source:** The parser erroneously required source
+IDs to be nonnegative. Chromium initializes a separate partition at int32 minimum
+and serializes uint32 IDs via signed int32. Negative IDs can therefore be valid.
+[Source partition](https://raw.githubusercontent.com/chromium/chromium/main/net/log/net_log.cc)
+and [entry serialization](https://raw.githubusercontent.com/chromium/chromium/main/net/log/net_log_entry.cc).
+This is a confirmed parser defect; its role in this particular guest refusal
+still needs the existing-capture follow-up, not an assumed DNS pass.
+
+**Tested / prepared:** Signed int32 IDs and matching dependency IDs are now
+accepted without converting signs or merging identities. Zero selected IDs,
+non-integer/out-of-range IDs, wrong endpoints and unrelated requests remain
+refused. PowerShell 5.1/7 signed-partition and JSON-round-trip fixtures passed,
+alongside altered-correction-file/receipt refusal. A separately hashed collector
+can reprocess the original closed-browser capture, report negative-ID count and
+whether the frozen parser reproduced its refusal, export only selected observations
+and update collection bookkeeping. Original four package inputs/manifests remain
+unchanged. Browser, raw capture, DNS/profile choices are not rewritten or relaunched.
+Original build source identity and corrected analysis provenance are separate.
+Actual corrected guest result and independent host evidence checking remain pending.
+
+
+**Tested correction gate / prepared mapping:** Canonical local gate passed
+(`target/helium-dns-signed-id-check.log`): formatting, strict Clippy, 546 Rust tests
+passed / 16 ignored, offline safeguards and clean dependency audit. Windows
+PowerShell host execution of the recollector refused at its guest guard. Two
+correction inputs were copied/hash-checked under the existing readonly mapping;
+original four inputs still match the original build manifest. Correction manifest
+SHA256: `2749671A7E5C9E83B8D77B29762A3DF93E551AABB40B6EA82AD4B8F165670C43`.
+Guest reanalysis and host selected-output verification remain pending. Work stays
+local/uncommitted; no push, remote CI or release result is claimed.
+
+
+## Helium secure DNS baseline selected evidence verified (2026-10-14)
+
+**Guest observation / host-verified selected evidence:** Session
+`e68ca8a1ffab42afa571297eec5b6725` reports three source-correlated Quad9 DoH
+transactions and replies, with saved secure DNS choices matching the test. Host
+checks validated the selected observation/receipt hash, four original inputs,
+two corrected-analysis inputs and their correction manifest, provenance and the
+three selected begin -> DoH dependency -> reply sequences. Replies have rcode 0,
+net_error 0 and no answers; this establishes the observed DNS transport, not a
+working test web page. No recognized classic/system probe attempt was reported.
+Raw NetLog was not transferred/replayed independently and total packet-leak absence
+is explicitly false. Helium-services URL-job host names appear in the filtered
+inventory; this alone does not establish successful connections or telemetry.
+
+The capture contained 74 negative source-ID events, reproducing the original
+parser identity refusal; corrected analysis completed on those same guest bytes.
+Original browser source hash `A7CAB4C1A426D61A43413735038B0339F457FE224D64BBBFD9B6B29461DC29AD`
+and correction manifest `2749671A7E5C9E83B8D77B29762A3DF93E551AABB40B6EA82AD4B8F165670C43`
+remain distinct. Receipt SHA256:
+`930F422437DCF44E7D87F028FCEAE2139C2C8642A6C1D0E4C4C684BAA8F20AA3`.
+An unmapped `VerifiedEvidence/baseline-e68ca8a1ffab42afa571297eec5b6725-0ac94ab819554540a1e570ad044c3d18`
+snapshot retains unchanged selected files, original/correction script manifests
+and a scoped host verification record; the launcher is a checked hash-only
+reference and raw capture remains guest-only.
+
+**Next / prepared only:** A separately hashed existing-session continuation uses
+the corrected parser for controlled resolver failure, collection and restoration.
+Its source excludes Fresh/provisioning and preserves the validated resolver-
+mutation functions. PowerShell 5.1/7 continuation guards/syntax, identical safety
+functions and offline DNS fixtures passed. The original four inputs and baseline
+correction inputs are preserved. Controlled failure and subsequent restoration
+still require guest execution and host evidence review; no fail-closed runtime
+claim is made yet. All broader audit gaps/rating 3/5/release hold remain. Changes
+are local/uncommitted; no push or remote CI has run for this work.
+
+
+**Tested continuation gate / prepared inputs:** Canonical gate passed again
+(`target/helium-dns-continuation-check.log`): 546 tests passed, 16 ignored,
+formatting, strict Clippy, offline safety fixtures and clean dependency audit.
+The prepared DnsContinuation input manifest SHA256 is
+`F8AF10436C9CABE1217E3BB59EF9F75786E8A1C3C35D9A6EF559597B0BD4549E`.
+All four continuation copies match their sources; original inputs and baseline
+correction still verify. This reuses the original launcher bytes, with separately
+identified workflow inputs; no fresh compilation or guest failure/restore result
+is claimed. No production Rust change or host DNS/profile mutation occurred.
+
+
+## Prelaunch resolver-fault fixture invalid (2026-10-14)
+
+**Guest observation / host-verified selected evidence:** Failure session
+`e68ca8a1ffab42afa571297eec5b6725` produced an inconclusive result: three target
+transactions, zero correlated loopback DoH attempts, saved resolver mismatch,
+no recognized plain target attempt. Filtered URL-job hosts include Quad9/Helium
+services; this does not itself prove successful connections. Original receipt
+SHA256 `B6237D1DA2FC704D60F16F25F0978A1DF33556D7834A75D64DA6CE5FD6DD70B3`,
+observation and four continuation inputs matched their hashes. Six unchanged
+selected/provenance files plus a scoped HOST-VERIFICATION record are preserved
+in an unmapped VerifiedEvidence/failure snapshot; launcher is hash-only, raw
+capture is guest-only. No outage or fallback-absence test is qualified.
+
+**Verified in code / tested:** `hardening.rs:287-288` lists both DoH fields in
+`LOCKED_SCALAR_PATHS`; `merge_json_file` reapplies their payload values after
+merging. The existing exact locked-scalar regression passed (one test) on the
+Windows x64 target. **Inference supported by code and saved-choice mismatch:**
+Nomad replaced the helper's prelaunch loopback override with secure Quad9 before
+browser creation. The test design overlooked this enforcement; it is not evidence
+of a production secure-DNS failure. Production hardening is unchanged. The user
+reported Restore confirmed/restored Quad9; a read-only guest Status check remains
+pending rather than claiming independent restoration verification.
+
+Current source refuses the invalid FailClosed phase before state/profile/launch
+actions; historical mapped inputs are preserved unchanged. PowerShell 5.1/7
+refusal, syntax, restore and correlation fixtures passed. README/SPEC, the public
+writer comment and runbook now describe required DoH re-enforcement instead of
+implying all scalar/resolver choices survive the next hardened launch. The live
+runbook withdraws invalid outage instructions. A replacement must cause an actual
+transport failure while retaining required settings; it is not prepared/run yet.
+Baseline selected secure-reply evidence remains valid. Broader runtime/isolation/
+revocation gaps and rating 3/5/v1.0.9 hold remain. Changes stay local/uncommitted.
+
+
+**Validation after fixture retirement:** The first full gate stopped at a new
+Rust documentation-markdown lint before workspace tests; that log is retained.
+The comment lint and an encoding error in this edit were corrected, preserving
+unrelated Unicode text. Canonical rerun passed (`target/helium-dns-invalid-fixture-check-corrected.log`):
+546 tests passed, 16 ignored, formatting, strict Clippy, offline safety fixtures
+and clean dependency audit. Focused locked-scalar test and PowerShell 5.1/7
+fixture refusals passed. Production Rust behavior and historical mapped inputs
+are unchanged. Guest read-only restoration status and a replacement outage test
+remain pending; no remote CI, commit or publishing action occurred.
+
+
+## Replacement DNS transport-fault preparation (2026-10-14)
+
+**User observation:** The preserved continuation's read-only Status reported zero
+browser processes, secure mode and `https://dns.quad9.net/dns-query` after Restore.
+This confirms saved values in the user's console; it is not actual traffic proof.
+
+**Prepared / verified in code:** An existing-session, guest-only replacement
+keeps enforced secure Quad9 and original browser/launcher identity. Two exact
+owned program-scoped outbound TCP/UDP 443 block rules provide a transport fault;
+the helper does not block DNS 53 or change DNS/profile preferences. It requires
+usable enabled guest firewall policy, without enabling global settings. It uses a
+new probe/capture nonce, records restore intent and an owned config backup before
+changes, validates rules/filters in active and persistent stores, and restores
+only its rules/config. All rules are validated before deletion; changed/foreign
+rules, running browsers and user-changed config are refused. Historical inputs,
+receipts, baseline and invalid-attempt snapshots remain intact. The [runbook](BROWSER-DNS-QUALIFICATION.md#program-scoped-guest-https-outage-replacement-fixture)
+details data, scope, failure handling and limits. Blocking matching browser 443
+traffic is not a blanket DNS-leak or host-network claim.
+
+**Tested offline:** PowerShell 5.1/7 source-correlation/fallback, exact rule ownership,
+pre-deletion validation, restore/preservation and typed-fixture evidence regressions
+passed with local mocks and inert temporary files. Host execution refused before
+firewall/profile commands; no real host firewall rule or browser action ran. Native
+guest setup/outage/collection/rule removal remains pending. The 3/5 rating, broader
+privacy/security gaps and release hold remain. Changes are local/uncommitted;
+full-gate and separately hashed preparation results will be recorded after running.
+
+
+**Tested transport preparation gate / frozen inputs:** Canonical gate passed
+(`target/helium-dns-transport-preparation-check.log`): 546 tests passed, 16 ignored,
+formatting, strict Clippy, offline safety regressions and clean dependency audit.
+PowerShell 5.1/7 mocked ownership/restoration/fixture tests passed. Four new input
+copies under the existing readonly Input/DnsFault mapping were hash-checked.
+Manifest SHA256:
+`FABC8B78AD60626C6922D4420034BE459FEB79ABBD765DA59C48A4FDD7B3F0BB`.
+The original launcher is reused, not rebuilt; original/correction/continuation
+receipts and input hashes still verify. A separate user-confirmation record
+preserves the reported saved secure/Quad9 restoration without changing the prior
+failure receipt or host verification. No real firewall rule, browser launch or
+DNS/profile mutation ran on the host. Guest transport fault, collection and owned
+rule/config restoration are NOT RUN by preparation and remain pending.
+Changes stay local/uncommitted; no remote CI, push or release is claimed.
+
+
+## Transport fault restored before collection (2026-10-14)
+
+**User-reported / verified selected restoration:** The fault Start helper reported
+success, then the user invoked Restore before Collect. Restore exported token
+`8e215f4c4aa4489b8ff15b554f7d560f` / export
+`0e166f74dadb4a3e9ea9ae4740c9dc78`. Collect refused the restored intent, as designed.
+The host checked all four frozen fault inputs, receipt/result scope and hash,
+typed zero-rules/config-restored/secure-Quad9 fields and identical config hashes.
+Receipt SHA256 `9AB95EFFABEF5B7FC40EF0D815D3F4EF8AD81F6FA9867E709AA6C2A4C202EF81`.
+Six unchanged selected/provenance files are retained in an unmapped VerifiedEvidence
+restore snapshot, with a scoped host record and hash-only launcher reference.
+No live host firewall replay or outage/fallback qualification is claimed.
+
+**Prepared / tested offline:** A separate read-only post-restore capture recovery
+requires unchanged original inputs, restored/started/uncollected intent, closed
+browser, saved secure Quad9/config hash and no owned rules now in either store.
+It reanalyzes the existing bounded capture, exports selected fields and leaves
+state/profile/config/raw files alone. Historical startup checks are separated
+from unavailable active-at-collection checks; `qualified_fault_fixture` stays
+false. PowerShell 5.1/7 syntax/host-refusal, altered-restoration and false recovered-
+qualification fixtures passed. Original inputs/receipts remain frozen. The
+[runbook](BROWSER-DNS-QUALIFICATION.md#restore-before-collect-recovery) records scope
+and limits. Guest recovery/correlation and selected host checking remain pending.
+Current changes are local/uncommitted; no new browser or firewall action is run
+by host preparation. Full gate results are recorded after execution; broader
+privacy/security gaps, rating 3/5 and the release hold are unchanged.
+
+
+**Tested recovery gate / frozen mapped inputs:** Canonical local gate passed
+(`target/helium-dns-restored-recovery-check.log`): 546 tests passed, 16 ignored,
+formatting, strict Clippy, offline safeguards and clean dependency audit.
+PowerShell 5.1/7 post-restore scope, host refusal and altered-restoration fixtures
+passed. Four Input/DnsFaultRecovery copies matched their sources; manifest SHA256
+`BBB72783008F8A95DB1BD8D6D421923D8C0AD07BF20F554A19814768616D4DE7`.
+Original fault inputs/restore receipt rechecked unchanged. These are preparation
+results; actual recovered guest events and host selected-copy validation remain
+pending. Work remains local/uncommitted, without push, remote CI or release.
+
+
+## Recovered Helium DNS capture reviewed (2026-10-14)
+
+**Tested guest observation / verified selected copied records:** Post-restore
+recovery exported `failed_doh_no_plain_attempt_in_capture`: four target
+transactions, four correlated Quad9 DoH attempts, no recognized plain target
+attempt. Host `Test-DnsEvidenceExport` passed against frozen Input/DnsFaultRecovery;
+`Test-DnsRestoreExport` revalidated the original fault inputs and restoration
+record. Four selected begin/attempt/failed-end sequences and their ordering,
+source IDs, endpoint and negative results were independently checked in the
+selected export. Raw NetLog remains guest-only and was not independently replayed.
+
+Recovery receipt SHA256:
+`C4AEDA6FF61ABDD979BE4B504730F2FCF48BBE49577619C5CB56A83BEBBA1713`.
+Thirteen unchanged selected/provenance/verifier files are preserved outside the
+Sandbox mappings, with a scoped HOST-VERIFICATION.json and hash-only launcher/raw
+references. Original inputs, receipts and prior verification records were retained.
+The guest reports owned rules absent now, matching restored config and secure
+Quad9; host checks validate those typed copied assertions, not live firewall state.
+
+**Unqualified full fault:** Restore preceded Collect. Recovery retains
+`qualified_fault_fixture = false` and `rules_during_capture_rechecked = false`;
+historical startup checks do not substitute for capture-close rule verification.
+The result supports a capture-scoped failed-DoH observation without a recognized
+plain target attempt, not total packet-leak absence or complete outage qualification.
+See the [result and limits](BROWSER-DNS-QUALIFICATION.md#recovered-capture-result-2026-10-14).
+
+Evidence-only preservation/documentation adds no production behavior change.
+The prior canonical local gate remains the recorded validation for the workflow;
+it was not rerun for this evidence record. No remote CI or publication is claimed.
+Current DNS work remains local/uncommitted. Broader privacy/security gaps, rating
+3/5 and the release hold remain unchanged.
+
+
+## Fresh Helium DNS fixture completed (2026-10-14)
+
+**Tested guest / verified selected records:** A fresh Windows 11 Helium 0.19.2.1
+session completed Baseline, Start, normal browser closure, Collect and Restore
+in order. Normal operation recorded three Quad9 DoH replies. The outage capture
+recorded four correlated attempts: three QUIC protocol-error completions and one
+aborted operation, with no recognized plain target attempt. The aborted operation
+is retained separately rather than counted as another completed transport failure.
+Owned-rule/profile checks ran in the guest before collection; secure Quad9 remained
+configured. Restore reported zero owned rules and matching original/restored config
+hashes. The host verified both exports, frozen inputs, selected sequence ordering,
+reviewed browser/module identities and baseline/fault/restore session linkage.
+See [scope, upstream error definitions and receipts](BROWSER-DNS-QUALIFICATION.md#fresh-controlled-fixture-completed-2026-10-14).
+
+Base commit remains `920a8294afde63b4a9629433025a7f69a8eb6075`; the new package
+manifest includes the working changes and source inventory. Source SHA256:
+`04F93821D9466F2C4A033D2358DD0643545F8FA05A34B805CC2F1F6F87BE2A42`.
+Launcher SHA256:
+`D878000B40C578EAA48927A9C22CBD1F39B5862B1A1AB59265781B6EBCAC272B`.
+Fresh session: `5aaec5e79bce4cbdb7a3960f09833ffd`;
+fault: `eb40d791ba494fd78dc2d2b04fe3b70e`.
+Failure receipt SHA256:
+`79E0238858E985BF6C40F27EF23A86795CA2D9C539B414C4DDB4B20E5648BF43`.
+Restore receipt SHA256:
+`80DA05360A98560CCE882D9A38EA70C581EE4F50BD276375E999C0ADFD44421F`.
+Unmapped baseline/failure/restore snapshots each preserve eight unchanged files
+plus HOST-VERIFICATION.json; raw capture/profile stayed guest-only.
+
+**Scoped conclusion:** This closes the Collect-before-Restore guest-fixture gap
+for the exercised version/hostname/interval. It does not establish all-packet leak
+absence, live host firewall replay, indefinite outage behavior, resolver bootstrap
+privacy, other browser families/versions or other platforms/networks. Earlier
+invalid and Restore-before-Collect records remain unchanged and unqualified for
+their original scope. No production code changed. Evidence documentation and
+whitespace were checked; the prior canonical workflow gate remains historical.
+Current changes stay local/uncommitted on `codex/privacy-security-followup`.
+Broader audit gaps, rating 3/5, remote CI and release hold remain unchanged.
+
+
+## DNS commit checkpoint (2026-10-14)
+
+Commit scope: bounded DNS NetLog correlation, disposable Helium preparation,
+read-only diagnostics/recovery, exact-program transport-fault ownership and
+restoration helpers, offline failure/privacy regressions and canonical gate
+wiring. README/SPEC and the Rust comment now accurately describe DoH values as
+re-enforced at hardened launch. Production browser behavior is unchanged.
+The Windows 11 Helium baseline, Collect-before-Restore outage observation and
+restoration records are documented above; older partial/invalid records retain
+their original scope. Ignored local target evidence is not staged in the commit.
+
+**Tested:** `pwsh -NoProfile -File scripts/check.ps1` passed for this checkpoint:
+546 Rust tests passed, 16 ignored, formatting, strict Clippy, offline safety
+fixtures and clean structured dependency audit with the documented RSA advisory
+exception. Log: `target/helium-dns-precommit-check.log`. Windows 10, ignored live/
+registry tests and remote CI were not run by this gate. MSRV results from the
+prior production checkpoint are historical; no runtime Rust behavior changed.
+
+Publication is separate from this local commit. Next work is the outstanding
+Ungoogled Chromium CRLSet runtime gap: determine what the reviewed published
+build actually registers/loads and whether a supported authenticated refresh
+path exists. A newer browser bundle, a removed flag or a manually copied list
+cannot stand in for fresh verified revocation data. Independent-key recovery,
+genuine Windows 10/11 Recent/WER coverage and other browser/runtime checks remain
+separate gaps. The rating stays 3/5 and the release hold remains.
