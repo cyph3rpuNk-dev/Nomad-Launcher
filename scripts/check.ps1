@@ -50,6 +50,9 @@ try {
         Invoke-GateStep 'Recovery integration safety fixtures' {
             pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-recovery-integration.ps1')
         }
+        Invoke-GateStep 'DNS observation safety fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-dns-netlog.ps1')
+        }
         Invoke-GateStep 'Formatting' {
             cargo fmt --all -- --check
         }
