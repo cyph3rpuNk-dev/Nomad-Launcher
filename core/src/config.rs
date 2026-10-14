@@ -50,7 +50,7 @@ sanitize_on_shutdown = true  # false = disable clear-on-exit in Gecko user.js
 # profile is *stored* (machine-ID binding, cookie/token encryption, TPM session
 # binding) are applied on every launch regardless of this setting, so your
 # extensions, cookies, and sign-ins are unaffected either way.
-scrub_thumbnail_cache = false  # true = enable thumbcache scrub on exit (briefly restarts Explorer)
+scrub_thumbnail_cache = false  # true = try clearing unlocked thumbnail/icon caches; Explorer is never stopped
 clear_data_on_exit = false   # true = wipe Chromium cookies/sessions/history on exit (strong privacy, breaks \"stay signed in\")
 scrub_prefetch = false       # true = delete Windows Prefetch entries on exit (requires UAC prompt for non-admin accounts)
 
@@ -66,14 +66,13 @@ scrub_prefetch = false       # true = delete Windows Prefetch entries on exit (r
 # removes browser-level phishing and malware URL protection. Use a DNS-level
 # block list or a network-layer filter as a substitute if needed.
 
-# WEBRTC NOTE: WebRTC is disabled by default. This prevents sites from
-# discovering your real IP address via STUN — including when behind a VPN,
-# where WebRTC is one of the most common sources of IP leaks. For video or
-# audio calls (Google Meet, Teams, Discord, Zoom in-browser), use a different
-# browser. If you use a VPN, choose one that explicitly provides WebRTC and
-# IP leak protection, and verify it independently at https://browserleaks.com/webrtc
-# before relying on it. To re-enable WebRTC in this browser, set
-# disable_webrtc = false — but understand your real IP may become visible.
+# WEBRTC NOTE: On Floorp, LibreWolf and Waterfox this disables peer connections.
+# On Chromium and Helium it restricts non-proxied UDP; TCP and proxied UDP can
+# still work, so WebRTC is not fully disabled and IP anonymity is not guaranteed.
+# Mullvad keeps its own upstream behavior. Verify your actual network setup at
+# https://browserleaks.com/webrtc before relying on leak protection.
+# Set disable_webrtc = false to stop adding Nomad's override; persisted Gecko
+# preferences may also need adjustment in the browser.
 disable_webrtc = true
 
 # FINGERPRINTING NOTE: reduce_system_info adds the ungoogled ReducedSystemInfo
@@ -232,11 +231,10 @@ pub struct HardeningConfig {
     /// overridden to disabled. Has no effect when `enabled = false`.
     #[serde(default = "default_true")]
     pub sanitize_on_shutdown: bool,
-    /// When `true`, the cleanup watcher terminates Explorer briefly after the
-    /// browser exits to delete thumbnail and icon cache files that may record
-    /// file names from the portable drive. Explorer is restarted immediately.
-    /// Defaults to `false` (opt-in): the scrub restarts Explorer on every
-    /// exit, an acceptable trade-off only on forensics-sensitive machines.
+    /// When `true`, try deleting unlocked thumbnail/icon cache files after
+    /// browser exit. Never stop or restart Explorer; files in use are preserved.
+    /// Defaults to `false` (opt-in) because these caches contain shared host data.
+    /// Best-effort deletion does not guarantee complete cache clearing.
     #[serde(default)]
     pub scrub_thumbnail_cache: bool,
     /// When `true`, Chromium-engine browsers are launched with the
@@ -246,19 +244,12 @@ pub struct HardeningConfig {
     /// Has no effect on Gecko-engine browsers.
     #[serde(default)]
     pub clear_data_on_exit: bool,
-    /// When `true`, WebRTC is fully disabled rather than merely restricted to
-    /// the public-facing interface.  Prevents real public-IP exposure via STUN
-    /// even without a VPN, but breaks **all** WebRTC video/audio calls (Google
-    /// Meet, Teams, Discord video, etc.).
-    ///
-    /// Chromium: appends `--webrtc-ip-handling-policy=disable_non_proxied_udp`.
-    /// Gecko: adds `user_pref("media.peerconnection.enabled", false)` to the
-    /// managed `user.js` block.
-    ///
-    /// Has no effect when `enabled = false`. Defaults to `true` — WebRTC is
-    /// fully disabled by default because STUN exposes the real WAN IP even
-    /// through a VPN. Set `false` to restore the restricted mode (public
-    /// interface only; WAN IP still visible via STUN).
+    /// Chromium: restrict non-proxied UDP; TCP/proxied UDP may still work.
+    /// This does not fully disable WebRTC or guarantee IP anonymity.
+    /// Floorp/LibreWolf/Waterfox: disable peer connections through managed
+    /// user.js. Mullvad retains its upstream behavior. Defaults to `true`.
+    /// Has no effect when hardening is disabled. Setting this false stops
+    /// adding the override but does not reset persisted Gecko preferences.
     #[serde(default = "default_true")]
     pub disable_webrtc: bool,
     /// When `true`, Chromium-engine browsers add the `ReducedSystemInfo` feature

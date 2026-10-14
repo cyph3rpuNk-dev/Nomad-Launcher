@@ -25,9 +25,9 @@ Each browser (and channel) ships as its own launcher binary. v1 produces six bin
 |--------|---------|---------------|-----------|
 | `nomad-ungoogled-chromium.exe` | ungoogled-chromium | GitHub releases API (`ungoogled-software/ungoogled-chromium-windows`) | SHA-256 only |
 | `nomad-floorp.exe` | Floorp | GitHub releases API (`Floorp-Projects/Floorp`) | SHA-256 only |
-| `nomad-waterfox.exe` | Waterfox | GitHub releases API (`BrowserWorks/waterfox`) | SHA-256 only |
+| `Nomad-Waterfox.exe` | Waterfox | GitHub version metadata (`BrowserWorks/waterfox`), Waterfox CDN installer/checksum | SHA-512 only |
 | `nomad-helium.exe` | Helium | GitHub releases API (`imputnet/helium-windows`) | SHA-256 only |
-| `nomad-librewolf.exe` | LibreWolf | GitLab releases API (`librewolf-community/browser/windows`) | SHA-256 only |
+| `Nomad-LibreWolf.exe` | LibreWolf | Codeberg releases API (`librewolf/bsys6`), `dl.librewolf.net` packages/checksums | SHA-256 only |
 | `nomad-mullvad.exe` | Mullvad Browser | GitHub releases API (`mullvad/mullvad-browser`) | GPG + SHA-256 |
 
 Notes:
@@ -35,15 +35,6 @@ Notes:
 - **LibreWolf** — ships pre-hardened; Nomad applies its own minimal `user.js` and shared `policies.json`, preserving LibreWolf's autoconfig (see §5). No upstream GPG signing key usable for release asset verification. SHA-256 only.
 - **Mullvad Browser** — ships its own complete anti-fingerprinting stack (RFP, letterboxing, standardized UA / timezone / fonts) plus uBlock Origin and NoScript; Nomad applies **no** `user.js` and provisions **no** uBO, writing only a `DisableAppUpdate` `policies.json` (see §5) so its crowd-blending model stays intact. Verified with the Tor Browser Developers GPG key (`core/keys/mullvad.asc`) plus the SHA-256 GitHub asset digest.
 - Ungoogled Chromium receives verified PE icon and PAK logo overlays during staging; see §6.
-
-### Non-browser apps
-
-The same launcher pipeline (download → verify → stage → atomic-swap → launch) also wraps one non-browser application. It is a deliberate generalization: the value is the portable update/launch machinery, which is engine-agnostic.
-
-| Binary | App | Update Source | Signature |
-|--------|-----|---------------|-----------|
-
-Notes:
 
 ---
 
@@ -213,7 +204,7 @@ File: `Nomad/nomad.toml`, inside the `Nomad/` subfolder beside its launcher `.ex
 
 ```toml
 [browser]
-install_dir = "browser"      # one folder name beside the .exe directory
+install_dir = "Browser"      # one folder name beside the .exe directory
 arch = "x64"                 # "x64" | "x86" | "arm64"
 
 [update]
@@ -223,9 +214,14 @@ auto_download = true         # false = prompt in the status window before downlo
 [launch]
 language = "en-US"           # Chromium/Helium UI language; omit or blank for browser default
 extra_args = []              # additional command-line arguments
+incognito = false            # Chromium/Helium private windows
 
 [hardening]
-enabled = true               # false = launch with no privacy hardening applied (safe to toggle; profile storage is unaffected)
+enabled = true               # false = stop applying hardening; persisted profile values may remain
+sanitize_on_shutdown = true  # managed Gecko shutdown clearing
+scrub_thumbnail_cache = false  # try clearing unlocked caches; never stop Explorer
+disable_webrtc = true        # managed Gecko peer connections off; Chromium UDP restricted
+reduce_system_info = true    # Ungoogled Chromium only; defer to Helium Noise
 clear_data_on_exit = false   # true = wipe Chromium cookies/sessions/history on exit (Chromium-only; breaks "stay signed in")
 scrub_prefetch = false       # true = delete Windows Prefetch entries on exit (requires UAC prompt for non-admin accounts)
 ```
@@ -242,14 +238,14 @@ Rules:
   fail visibly without automatic migration or deletion.
 - There is no `channel` key — every browser has a single channel.
 - Unknown keys are rejected at startup with a descriptive error (no silent ignoring).
-- On first run with no `nomad.toml`, a default config is written beside the `.exe` and launch proceeds with defaults.
+- On first run with no `Nomad/nomad.toml`, default configuration is written in the `Nomad/` subfolder beside the `.exe` and launch proceeds with defaults.
 - Config is read once per launch; there is no live reload (the process is short-lived).
 
 ---
 
 ## 5. Privacy Hardening
 
-Automated privacy hardening is Nomad's core value. The browsers Nomad manages are privacy-respecting, but none ships fully hardened out of the box — each needs configuration to reach its privacy potential. Nomad applies a curated **"safe" hardening profile** on every launch. The goal is to maximize privacy and reduce tracking and fingerprinting **without breaking website functionality**. Nomad deliberately does *not* apply aggressive, site-breaking measures (e.g. full fingerprint-resistance / RFP, disabling WebGL); those are out of scope.
+Nomad applies browser-specific privacy defaults while preserving portable profiles. These settings reduce some tracking and fingerprinting but can break sites; there is no universal compatibility or anonymity guarantee. Mullvad retains its upstream privacy preferences. Waterfox explicitly enables RFP, LibreWolf retains its upstream RFP, and Helium retains its own noise framework. Browser-specific choices and security trade-offs are described below.
 
 Each `BrowserFamily` declares its hardening payload through `hardening()`, returning a `Hardening` value:
 
@@ -279,7 +275,7 @@ enum Hardening {
 
 Hardening runs on every launch (after extraction, and on launches where no update occurred), so a user-edited install is re-seeded each time. It is on by default and controlled by `[hardening] enabled` in `nomad.toml` (§4).
 
-**When disabled, the toggle must *withdraw* hardening, not merely stop applying it.** The two families differ because their hardening lives in different places:
+**Disabling hardening stops applying launch flags and removes managed Gecko files; it does not restore a pristine profile.** Gecko values already persisted to `prefs.js` can remain after the managed fence/autoconfig is removed. The two families differ because their hardening lives in different places:
 
 - **Chromium** hardening is launch flags, which simply stop being passed. The profile seeds (`Local State`, `Default/Preferences`) stay, because they were merged into the browser's own stores with user-wins semantics and cannot be cleanly un-merged; what stops is the re-enforcement of `LOCKED_SCALAR_PATHS`, which is the most that can be withdrawn. The profile-storage switches in `CHROMIUM_PORTABILITY_FLAGS` are unaffected either way — they are not hardening (see below).
 - **Gecko** hardening is files that persist between launches, so `remove_gecko_hardening` withdraws them: the Nomad-managed `user.js` fence (content outside the markers is preserved) and, for browsers that declare one, the autoconfig pair `defaults/pref/autoconfig.js` + `nomad.cfg`. Skipping the write alone left the previous fence and the locked `nomad.cfg` in force — a user who turned the setting off to unbreak a site saw no change at all, and `lockPref` values cannot be overridden from `about:config`. LibreWolf and Mullvad declare `autoconfig: None` and ship their own pair, which Nomad never writes and therefore never removes.
@@ -309,7 +305,7 @@ The command-line set is the **safe subset** of ungoogled-chromium's documented s
 
 - **Stock Chromium hygiene:** `--disable-sync`, `--disable-background-networking`, `--disable-breakpad`, `--disable-component-update`, `--disable-features=JumpList`, `--no-default-browser-check`, `--disable-top-sites`.
 - **Anti-tracking / fingerprinting:** `--disable-search-engine-collection`, `--fingerprinting-canvas-image-data-noise`, `--fingerprinting-canvas-measuretext-noise`, `--fingerprinting-client-rects-noise`, `--force-punycode-hostnames`.
-- **Network / TLS privacy:** `--no-pings`, `--disable-grease-tls`, `--http-accept-header=…` (Tor Browser's value, pairs with `--disable-grease-tls`), `--webrtc-ip-handling-policy=default_public_interface_only`.
+- **Network / TLS privacy:** `--no-pings`, `--webrtc-ip-handling-policy=default_public_interface_only`. Nomad deliberately does not supply a Tor Accept header or disable TLS GREASE. With `disable_webrtc = true`, Chromium uses `disable_non_proxied_udp`, which restricts UDP rather than disabling WebRTC; TCP and proxied UDP can remain available.
 - **Bundled features** (single `--enable-features=` because Chromium honours only the last one): `RemoveClientHints`, `SpoofWebGLInfo`, `MinimalReferrers` (strips cross-origin referrers, minimises same-origin to origin only — the single biggest passive-tracking mitigation).
 
 Flags upstream marks as **potentially breaking** are excluded from the default set — notably `--disable-webgl`, `disable-beforeunload`, `NoReferrers`, and `NoCrossOriginReferrers`. The one exception Nomad ships **on by default** is the `ReducedSystemInfo` feature (see `reduce_system_info` below): clamping `navigator.hardwareConcurrency` is in line with how Tor/Brave behave, its real-world impact is a modest perf trade-off rather than hard breakage, and it remains user-disablable.
@@ -318,7 +314,7 @@ Flags upstream marks as **potentially breaking** are excluded from the default s
 
 **`[hardening] reduce_system_info`** (default `true`, Chromium-family only) — Nomad merges the `ReducedSystemInfo` feature into the same `--enable-features=` bundle: system details exposed via headers/JS are reduced and `navigator.hardwareConcurrency` reports two cores, shrinking fingerprint entropy (CPU-core count is a stable identifier). On by default for the fingerprint reduction; set `false` to disable if you hit slowdowns in apps that size worker/thread pools from `hardwareConcurrency` (in-browser video encoders, some WASM workloads, heavy editors). The serde default is `true`, so configs that omit the key (including those written before the option existed) still get it.
 
-**`[hardening] scrub_prefetch`** (default `false`, all browsers) — when `true`, the cleanup watcher attempts to delete Windows Prefetch entries (`C:\Windows\Prefetch\`) for the launcher and browser executables after each browser exit. Prefetch entries record the full executable path and run timestamps, so removing them reduces forensic traces on the portable medium. Requires administrator privileges: a UAC elevation prompt appears on every browser close for non-admin accounts. Defaults to `false` (opt-in) — the per-exit UAC dialog is disruptive for regular use and would condition users to approve launcher-sourced elevation prompts. Enable only on forensics-sensitive machines where you control the account type. The cleanup watcher skips this step entirely when the flag is absent, so there is no performance cost on the default path. Automatic Recent cleanup is scoped to a corroborated target inside the owned portable folder on any drive; unrelated same-drive entries and compound Jump Lists are preserved.
+**`[hardening] scrub_prefetch`** (default `false`, all browsers) attempts host Prefetch deletion after browser exit. The current implementation matches broad executable-name prefixes under hard-coded `C:\Windows\Prefetch`, including removed Firefox/Bitwarden launchers; it cannot distinguish separate installed browsers with the same executable names. This scope is not instance-attributed and requires remediation. Prefetch records are host traces, not records on the portable medium. Deletion may require UAC elevation. One cleanup coordinator attempts it per owned browser session, and the setting remains opt-in. Automatic Recent cleanup is separate and scoped to corroborated targets inside the owned portable folder.
 
 **Helium exception.** Helium ships its own anti-fingerprinting framework ("Helium Noise") that already noises canvas pixels and AudioContext and **randomizes** `hardwareConcurrency` (2–16) by default — a more complete and less detectable approach than the ungoogled flags. So for Helium, Nomad defers those vectors to Helium Noise: it omits `--fingerprinting-canvas-image-data-noise` from Helium's flag set and never applies `ReducedSystemInfo` (gated by `BrowserFamily::has_builtin_fingerprint_noise()`), since `ReducedSystemInfo`'s clamp-to-`2` would override Helium's randomized value. Nomad still supplies the vectors Helium Noise does not cover (`measuretext`/`client-rects` noise, `SpoofWebGLInfo`, `RemoveClientHints`). Ungoogled Chromium has no Helium Noise and keeps the full set.
 
@@ -332,14 +328,14 @@ unwritable profile is not replaced with defaults: preparation fails and both
 normal launch and "Launch anyway" refuse to spawn Helium. Existing preferences
 are replaced through a sibling temporary file so a failed write leaves the
 original intact. The upstream updater DLL and helper are retained; the profile
-preference disables update access without removing a binary dependency.
+preference disables update access without removing a binary dependency. Upstream couples it to component updates as well, including CRLSet certificate-revocation data. Nomad does not currently provide a separate component-update path; this remains an unresolved security limitation even when hardening is disabled.
 
 ### Gecko-family (LibreWolf, Floorp, Waterfox) — layered profile
 
 Two layers, written to separate profile and installation locations:
 
 1. **`user.js`** — written to the portable profile returned by `profile_dir` (`Data/` for these browsers), outside the replaceable installation. A Nomad-curated "safe" profile derived from the arkenfox `user.js` template: the arkenfox core sections minus every preference arkenfox itself tags as site-breaking (`[SETUP-WEB]`), aggressive (`[SETUP-HARDEN]`), or optional (sections 4000+, including RFP). The Nomad-written block is fenced with marker comments; preferences outside the fence — including the user's own — are preserved, and the block is re-seeded idempotently on every launch.
-2. **`policies.json`** — written to `<install_dir>/distribution/policies.json`. Carries the structural locks `user.js` cannot enforce: disable the browser's built-in updater (Nomad is the sole updater), disable telemetry / studies / crash reporting, disable Pocket and Firefox accounts. This file is fully Nomad-managed.
+2. **`policies.json`** — written to `<install_dir>/distribution/policies.json`. Carries the structural locks `user.js` cannot enforce: disable the browser's built-in updater (Nomad is the sole updater), disable telemetry / studies / crash reporting, disable Pocket and Firefox accounts. This file is fully Nomad-managed. Shared autoconfig defaults general extension update checking and automatic updating to enabled without locking those preferences; other installed extensions retain their browser update path.
 
 ### LibreWolf — own minimal `user.js`, shares `policies.json`, skips the autoconfig pair
 
@@ -433,8 +429,8 @@ the shared Nomad mark + wordmark.
 | Accent / link | `#E8B255` | amber accent — progress-bar fill, links, Nomad mark, themed buttons. Family default; per-browser overridable. |
 | Eyebrow text | `#80868C` | Tiny uppercase section labels (WCAG AA on the card surface) |
 
-The title bar is the OS-drawn standard decoration reading "`<Browser>` — Nomad
-Launcher" (minimize / close); egui does not paint it, so there is no separate
+The title bar is the OS-drawn standard decoration reading "Nomad Launcher -
+`<Browser>`" (minimize / close); egui does not paint it, so there is no separate
 title-bar colour token. Font: **Atkinson Hyperlegible** (SIL OFL, Braille
 Institute) — vendored at `core/payloads/fonts/` and embedded; eframe is built
 without `default_fonts`, so the bundled Ubuntu/emoji/mono are *not* shipped
@@ -477,7 +473,7 @@ While the window is open and a download is active, the taskbar button shows the 
 
 ## 8. Update & Launch Flow
 
-Update checks happen only at launch time. There is no background interval loop and no long-lived process.
+Update checks happen only on direct launcher invocations. OS protocol launches are launch-only and skip browser/managed-extension checks. There is no background update interval; one detached cleanup coordinator remains while the owned browser session is running. Users who open only registered links must run the launcher directly to obtain updates.
 
 ```
 nomad-<browser>.exe started
@@ -520,7 +516,7 @@ nomad-<browser>.exe started
   PREP:
   ├── status: "Applying privacy hardening…"
   │     Gecko:    write the marker-fenced user.js + distribution/policies.json
-  │     Chromium: no files written — hardening flags are added at LAUNCH
+  │     Chromium: merge Local State/Preferences and write initial preferences; add hardening flags at LAUNCH
   │
   LAUNCH:
   ├── status: "Launching browser…"
@@ -673,7 +669,7 @@ for limits and testing.
 
 ### Ask user before (prompt in the status window, not silent)
 - Writing any registry key (even `HKCU`) — only via the explicit `--register-default` flag, with one automatic exception: the self-registration repair (§10), which rewrites only `HKCU` handler commands that already point inside the launcher's own install tree.
-- Deleting or replacing an existing browser installation directory during an update.
+- Downloading/replacing an existing browser installation when `auto_download = false`. The default `auto_download = true` permits verified replacement during a direct launcher invocation without another prompt. Protocol invocations never update.
 - Downloading when `auto_download = false` (the window waits on the "Update" button).
 
 ### Never do
@@ -690,8 +686,8 @@ for limits and testing.
 - Write to `HKLM` (requires elevation and breaks the portability promise).
 - Execute a downloaded binary that has not passed hash (and, where applicable, GPG or Authenticode) verification.
 - Modify downloaded binaries before verification, or bypass required staged overlay validation. The supported PE/PAK branding overlays in §6 are deliberate post-verification modifications.
-- Store credentials, tokens, or personally identifiable information anywhere.
+- Upload browser credentials, tokens, profile contents or personal browsing data through the launcher. Local browser profiles intentionally persist user data; local logs/registry journals can contain identifying paths. Nomad does not encrypt these records.
 - Silently ignore config parse errors or unknown keys.
-- Apply aggressive, site-breaking hardening (full RFP / fingerprint-resistance, `--disable-webgl`, arkenfox `[SETUP-HARDEN]` / optional-section prefs); those are explicitly out of scope (§5).
+- Add site-breaking hardening without a browser-specific rationale and disclosure. Waterfox explicitly enables RFP; LibreWolf retains its upstream RFP. Avoid describing all browser profiles as universally compatible (§5).
 - Hardcode or bundle a custom CA; use the system trust store.
 - Make any `.exe` depend on a DLL not present in a stock Windows 10/11 installation.

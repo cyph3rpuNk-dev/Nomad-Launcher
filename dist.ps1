@@ -132,7 +132,7 @@ Components bundled INSIDE the Nomad launcher binaries
 -----------------------------------------------------
 * Atkinson Hyperlegible font - SIL Open Font License 1.1
   -> licenses/AtkinsonHyperlegible-OFL.txt
-* 7-Zip 24.09 (7z.exe + 7z.dll, distributed unmodified) - GNU LGPL-2.1
+* 7-Zip 26.04 (7z.exe + 7z.dll, distributed unmodified) - GNU LGPL-2.1
   -> licenses/7-Zip-LICENSE.txt    Source: https://www.7-zip.org/
 * Chromium reference logos (used for compatibility checks) - BSD-3-Clause
   -> licenses/Chromium-logo-LICENSE.txt    Source: https://chromium.googlesource.com/chromium/src/

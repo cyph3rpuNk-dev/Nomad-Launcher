@@ -1706,6 +1706,29 @@ where
     B: BrowserFamily,
     F: FnOnce(Arch) -> B,
 {
+    let browser = make(Arch::X64);
+    let session = (|| {
+        let launcher = std::env::current_exe()?;
+        let base = launcher
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing launcher directory"))?;
+        let image = args
+            .browser_exe
+            .as_deref()
+            .ok_or_else(|| std::io::Error::other("missing browser image"))?;
+        cleanup::CleanupSession::acquire(base, Path::new(image), browser.id())
+    })();
+    let _session = match session {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            tracing::debug!("cleanup coordinator already owns this session");
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => {
+            tracing::warn!(%error, "cannot coordinate owned cleanup; preserving host traces");
+            return ExitCode::FAILURE;
+        }
+    };
     tracing::info!(
         pid = args.browser_pid,
         exe = args.browser_exe.as_deref().unwrap_or("(unknown)"),
@@ -1742,7 +1765,6 @@ where
         (std::env::current_exe(), args.browser_exe.as_deref())
     {
         if let Some(base) = launcher.parent() {
-            let browser = make(Arch::X64);
             cleanup::scrub_host_traces(base, Path::new(browser_exe), browser.id());
         }
     }
@@ -1817,7 +1839,7 @@ fn handle_prefetch_scrub_flag() -> ExitCode {
 /// Spawns this executable again as a detached cleanup watcher. The watcher
 /// waits for the browser (and its background-task children) to exit, then
 /// scrubs host-system traces. When `scrub_thumbnail_cache` is `true`, it also
-/// clears Windows thumbnail/icon caches (briefly restarts Explorer). When
+/// attempts to clear unlocked Windows thumbnail/icon caches without stopping Explorer. When
 /// `scrub_prefetch` is `true`, it attempts to delete Prefetch entries,
 /// elevating via UAC if needed.
 fn spawn_cleanup_watcher(
@@ -2141,132 +2163,24 @@ fn lnk_target_path(data: &[u8]) -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(s))
 }
 
-/// Clears Windows thumbnail and icon caches by terminating Explorer briefly,
-/// deleting `thumbcache_*.db` and `iconcache_*.db` from
-/// `%LOCALAPPDATA%\Microsoft\Windows\Explorer\`, then restarting Explorer.
-///
-/// The taskbar and desktop icons are absent for roughly one second. Called only
-/// when `[hardening] scrub_thumbnail_cache = true` in `nomad.toml`.
+/// Attempts opt-in thumbnail/icon cache deletion without stopping Explorer.
+/// Files in use are preserved, so this does not guarantee complete clearing.
 fn scrub_thumbnail_cache() {
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return;
     };
-    let cache_dir = std::path::PathBuf::from(local)
-        .join("Microsoft")
-        .join("Windows")
-        .join("Explorer");
-    if !cache_dir.exists() {
-        return;
-    }
-    tracing::info!("scrubbing thumbnail/icon cache (Explorer will restart briefly)");
-    kill_all_processes_named("explorer.exe");
-    // Brief pause so the OS releases file handles before we try to delete.
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
-        let mut count: usize = 0;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name();
-            let stem = name.to_string_lossy().to_ascii_lowercase();
-            if (stem.starts_with("thumbcache_") || stem.starts_with("iconcache_"))
-                && path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("db"))
-                && std::fs::remove_file(&path).is_ok()
-            {
-                count += 1;
-            }
-        }
-        if count > 0 {
-            tracing::info!(count, "removed thumbnail/icon cache files");
+    let cache_dir = std::path::PathBuf::from(local).join("Microsoft/Windows/Explorer");
+    match cleanup::scrub_unlocked_thumbnail_cache(&cache_dir) {
+        Ok(count) => tracing::info!(
+            count,
+            "removed unlocked thumbnail/icon cache files; files in use may remain"
+        ),
+        Err(error) => {
+            tracing::warn!(%error, "thumbnail/icon cache clearing incomplete; Explorer was not stopped");
         }
     }
-    restart_explorer();
 }
 
-/// Terminates all running instances of `exe_name` (case-insensitive) using
-/// `TerminateProcess`. Used exclusively by `scrub_thumbnail_cache` to stop
-/// Explorer before clearing its cache files.
-fn kill_all_processes_named(exe_name: &str) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStringExt;
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-            TH32CS_SNAPPROCESS,
-        };
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, TerminateProcess, PROCESS_TERMINATE,
-        };
-        // SAFETY: handle lifetimes are tightly scoped; snapshot is closed before return.
-        unsafe {
-            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-            if snapshot.is_null() || snapshot as isize == -1 {
-                return;
-            }
-            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-            #[allow(clippy::cast_possible_truncation)]
-            // PROCESSENTRY32W is ~568 bytes, well within u32
-            {
-                entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-            }
-            let target = exe_name.to_ascii_lowercase();
-            if Process32FirstW(snapshot, &raw mut entry) != 0 {
-                loop {
-                    let len = entry
-                        .szExeFile
-                        .iter()
-                        .position(|&c| c == 0)
-                        .unwrap_or(entry.szExeFile.len());
-                    let name = std::ffi::OsString::from_wide(&entry.szExeFile[..len])
-                        .to_string_lossy()
-                        .to_ascii_lowercase();
-                    if name == target {
-                        let h = OpenProcess(PROCESS_TERMINATE, 0, entry.th32ProcessID);
-                        if !h.is_null() {
-                            TerminateProcess(h, 1);
-                            CloseHandle(h);
-                        }
-                    }
-                    if Process32NextW(snapshot, &raw mut entry) == 0 {
-                        break;
-                    }
-                }
-            }
-            CloseHandle(snapshot);
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = exe_name;
-    }
-}
-
-/// Resolves the full path to the trusted Windows Explorer binary under
-/// `%SystemRoot%`, falling back to the conventional location. Using an absolute
-/// path prevents `CreateProcess` from resolving a planted `explorer.exe` from
-/// the launcher directory or the current working directory (CWE-426/427).
-fn system_explorer_path() -> std::path::PathBuf {
-    std::env::var_os("SystemRoot").map_or_else(
-        || std::path::PathBuf::from(r"C:\Windows\explorer.exe"),
-        |root| std::path::Path::new(&root).join("explorer.exe"),
-    )
-}
-
-/// Restarts Windows Explorer as the user's shell after `kill_all_processes_named`
-/// has terminated it for cache scrubbing.
-fn restart_explorer() {
-    match std::process::Command::new(system_explorer_path()).spawn() {
-        Ok(_) => tracing::info!("Explorer restarted"),
-        Err(e) => tracing::warn!(error = %e, "could not restart Explorer"),
-    }
-}
-
-/// Executable name prefixes that identify Nomad-managed browser processes in
-/// `C:\Windows\Prefetch\`. Each `.pf` filename has the form `<EXE>-<HASH>.pf`
-/// (uppercase); matching on the `<EXE>-` prefix avoids false positives.
 const PREFETCH_TOKENS: &[&str] = &[
     "CHROME.EXE-",
     "FIREFOX.EXE-",
@@ -3300,31 +3214,8 @@ mod tests {
         assert!(matches!(state.0.lock().unwrap().phase, WindowPhase::Done));
     }
 
-    #[test]
-    fn system_explorer_path_is_absolute_not_a_bare_name() {
-        // Must be an absolute path so CreateProcess cannot resolve a planted
-        // explorer.exe from the launcher dir or CWD (F-03 / CWE-426).
-        let p = system_explorer_path();
-        assert!(
-            p.is_absolute(),
-            "explorer path must be absolute, got {}",
-            p.display()
-        );
-        assert!(
-            p.file_name()
-                .is_some_and(|n| n.eq_ignore_ascii_case("explorer.exe")),
-            "must resolve to explorer.exe, got {}",
-            p.display()
-        );
-    }
-
-    /// `[hardening] enabled = false` must actually disable Gecko hardening.
-    ///
-    /// The hardening block writes files that persist between launches, so
-    /// skipping the write left the previous `user.js` fence and the locked
-    /// `nomad.cfg` in force: a user who turned the setting off to unbreak a
-    /// site saw no change, and `lockPref` cannot be overridden from
-    /// `about:config`.
+    /// Disabling hardening removes managed files, not values already persisted
+    /// by the browser in prefs.js. Content outside Nomad markers is preserved.
     #[test]
     fn disabling_hardening_withdraws_the_gecko_payloads() {
         use crate::browsers::floorp::Floorp;
