@@ -14,7 +14,8 @@ pub const CONFIG_FILE_NAME: &str = "nomad.toml";
 
 /// Name of the per-launcher subdirectory that houses every Nomad-managed
 /// file (`nomad.toml`, `nomad.log`, `nomad-version-cache.toml`,
-/// `nomad.reg-state.json`, plus the `Gecko-extensions/` XPI staging dir).
+/// `nomad.reg-state.json`, advisory check/reminder receipts, plus the
+/// `Gecko-extensions/` staging and `cleanup-pending/` protected intent records).
 /// Lives beside the launcher executable.
 pub const NOMAD_SUBDIR: &str = "Nomad";
 
@@ -37,6 +38,7 @@ arch = \"x64\"                 # \"x64\" | \"x86\" | \"arm64\"
 [update]
 check_on_launch = true       # false = skip the update check, launch immediately
 auto_download = true         # false = prompt in the status window before downloading
+remind_on_protocol = true    # local reminder; links never check or download updates
 
 [launch]
 language = \"en-US\"           # Chromium/Helium UI language; omit or leave blank for browser default
@@ -46,6 +48,7 @@ incognito = false            # true = launch Chromium browsers in --incognito mo
 [hardening]
 enabled = true               # false = launch with no privacy hardening applied
 sanitize_on_shutdown = true  # false = disable clear-on-exit in Gecko user.js
+recover_missed_cleanup = true # retry recorded attributed cleanup; false = opt out
 # Safe to toggle between launches: the switches that decide how the portable
 # profile is *stored* (machine-ID binding, cookie/token encryption, TPM session
 # binding) are applied on every launch regardless of this setting, so your
@@ -184,6 +187,9 @@ pub struct UpdateConfig {
     /// Whether to download a found update without prompting.
     #[serde(default = "default_true")]
     pub auto_download: bool,
+    /// Show local maintenance reminders on launch-only protocol invocations.
+    #[serde(default = "default_true")]
+    pub remind_on_protocol: bool,
 }
 
 impl Default for UpdateConfig {
@@ -191,6 +197,7 @@ impl Default for UpdateConfig {
         Self {
             check_on_launch: true,
             auto_download: true,
+            remind_on_protocol: true,
         }
     }
 }
@@ -216,7 +223,7 @@ pub struct LaunchConfig {
 /// The `[hardening]` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[allow(clippy::struct_excessive_bools)] // six distinct user-facing config toggles, not algorithm state
+#[allow(clippy::struct_excessive_bools)] // independent user-facing config toggles, not algorithm state
 pub struct HardeningConfig {
     /// Whether to apply Nomad's curated privacy-hardening profile.
     #[serde(default = "default_true")]
@@ -231,6 +238,10 @@ pub struct HardeningConfig {
     /// Best-effort deletion does not guarantee complete cache clearing.
     #[serde(default)]
     pub scrub_thumbnail_cache: bool,
+    /// Best-effort host/user-bound replay of attributed Recent/WER cleanup.
+    /// Independent of privacy hardening; shared cache actions are never replayed.
+    #[serde(default = "default_true")]
+    pub recover_missed_cleanup: bool,
     /// When `true`, Chromium-engine browsers are launched with the
     /// `ClearDataOnExit` feature enabled — cookies, history, downloads, and
     /// sessions are wiped on every exit. Defaults to `false` because it breaks
@@ -271,6 +282,7 @@ impl Default for HardeningConfig {
             enabled: true,
             sanitize_on_shutdown: true,
             scrub_thumbnail_cache: false,
+            recover_missed_cleanup: true,
             clear_data_on_exit: false,
             disable_webrtc: true,
             reduce_system_info: true,
@@ -573,6 +585,23 @@ mod tests {
                 "invalid defaults must not create Nomad or config files"
             );
         }
+    }
+
+    #[test]
+    fn protocol_freshness_reminders_default_on_and_allow_explicit_opt_out() {
+        let legacy = DEFAULT_NOMAD_TOML
+            .lines()
+            .filter(|line| !line.starts_with("remind_on_protocol"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(Config::parse(&legacy).unwrap().update.remind_on_protocol);
+        let off =
+            DEFAULT_NOMAD_TOML.replace("remind_on_protocol = true", "remind_on_protocol = false");
+        assert!(!Config::parse(&off).unwrap().update.remind_on_protocol);
+        assert!(Config::parse(
+            &DEFAULT_NOMAD_TOML.replace("remind_on_protocol = true", "remind_on_protocol = 1")
+        )
+        .is_err());
     }
 
     #[test]

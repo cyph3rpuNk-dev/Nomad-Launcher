@@ -109,6 +109,8 @@ pub struct LauncherView {
     /// override from [`crate::browsers::BrowserFamily::accent`]. Drives the
     /// progress bar, links, the logo fallback tile, and the Nomad mark.
     pub accent: egui::Color32,
+    /// Browser-specific limitation; does not claim to measure component state.
+    pub component_update_notice: Option<String>,
 }
 
 impl LauncherView {
@@ -143,6 +145,10 @@ pub enum WindowPhase {
     },
     /// Set by the window after the user decides: `true` = download, `false` = skip.
     UpdateDecided(bool),
+    /// Local advisory for a launch-only link; never offers an update action.
+    MaintenancePrompt { message: String },
+    /// User acknowledged the advice and wants the existing browser/link opened.
+    MaintenanceContinue,
     /// Browser spawned — window should close itself.
     Done,
     /// Pipeline failed — show error UI with action buttons.
@@ -277,10 +283,15 @@ impl NomadWindow {
 
         identity::identity_card(ui, view, self.logo.as_ref());
         ui.add_space(theme::space::MD);
-        runtime_details_card(ui, view);
-        ui.add_space(theme::space::MD);
+        if !matches!(phase, WindowPhase::MaintenancePrompt { .. }) {
+            runtime_details_card(ui, view);
+            ui.add_space(theme::space::MD);
+        }
 
         match phase {
+            WindowPhase::MaintenancePrompt { message } => {
+                Some(self.render_maintenance(ui, message))
+            }
             WindowPhase::UpdatePrompt { new_version } => {
                 self.render_update_prompt(ui, new_version);
                 None
@@ -299,6 +310,30 @@ impl NomadWindow {
                 None
             }
         }
+    }
+
+    /// Keeps acknowledgment and cancellation in reach without an update button.
+    fn render_maintenance(&self, ui: &mut egui::Ui, message: &str) -> egui::Rect {
+        let room = (ui.available_height() - ui.spacing().interact_size.y - 2.0 * theme::space::MD)
+            .max(0.0);
+        egui::ScrollArea::vertical()
+            .max_height(room)
+            .min_scrolled_height(0.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.label(message);
+            });
+        ui.add_space(theme::space::SM);
+        ui.horizontal(|ui| {
+            if ui.button("Continue opening link").clicked() {
+                self.signal_phase(WindowPhase::MaintenanceContinue);
+            }
+            if ui.button("Close").clicked() {
+                self.signal_phase(WindowPhase::Done);
+            }
+        })
+        .response
+        .rect
     }
 
     /// Renders the *Update available* prompt with Update / Launch-current buttons.
@@ -381,7 +416,7 @@ impl NomadWindow {
 
 // ── Helper widgets ────────────────────────────────────────────────────────────
 
-/// Renders the runtime details card (`RUNTIME DETAILS` eyebrow + four rows).
+/// Renders runtime details and any adapter-specific security-data disclosure.
 fn runtime_details_card(ui: &mut egui::Ui, view: &LauncherView) {
     let frame = egui::Frame::NONE
         .fill(theme::CARD)
@@ -406,6 +441,9 @@ fn runtime_details_card(ui: &mut egui::Ui, view: &LauncherView) {
         detail_row(ui, "Bundle mode", "Self-updating portable");
         detail_row(ui, &version_key, version_val);
         detail_row(ui, "Build date", date_val);
+        if let Some(notice) = &view.component_update_notice {
+            detail_row(ui, "Security data", notice);
+        }
     });
 }
 
@@ -770,6 +808,18 @@ mod tests {
     /// Lays out the error state headlessly at the real window size and
     /// returns the body bounds and the rectangle of the action buttons.
     fn error_layout(message: &str) -> (egui::Rect, egui::Rect) {
+        phase_layout(&WindowPhase::Error {
+            message: message.into(),
+            has_fallback: true,
+        })
+    }
+    fn phase_layout(phase: &WindowPhase) -> (egui::Rect, egui::Rect) {
+        phase_layout_with_notice(phase, None)
+    }
+    fn phase_layout_with_notice(
+        phase: &WindowPhase,
+        notice: Option<&str>,
+    ) -> (egui::Rect, egui::Rect) {
         let ctx = egui::Context::default();
         install_fonts(&ctx);
         setup_visuals(&ctx, theme::ACCENT);
@@ -786,10 +836,7 @@ mod tests {
             progress: ProgressState::Hidden,
             icon_bytes: None,
             accent: theme::ACCENT,
-        };
-        let phase = WindowPhase::Error {
-            message: message.to_owned(),
-            has_fallback: true,
+            component_update_notice: notice.map(str::to_owned),
         };
         let window = NomadWindow {
             state: Arc::new((
@@ -821,13 +868,43 @@ mod tests {
                     .show_inside(ui, |ui| {
                         let bounds = ui.max_rect();
                         let buttons = window
-                            .body(ui, &ctx, &phase, &view)
+                            .body(ui, &ctx, phase, &view)
                             .expect("the error state has action buttons");
                         layout = Some((bounds, buttons));
                     });
             });
         }
         layout.expect("the window body was laid out")
+    }
+
+    #[test]
+    fn ungoogled_component_disclosure_keeps_error_and_reminder_actions_reachable() {
+        for phase in [
+            WindowPhase::Error {
+                message: "failure details ".repeat(300),
+                has_fallback: true,
+            },
+            WindowPhase::MaintenancePrompt {
+                message: "Maintenance reminder ".repeat(300),
+            },
+        ] {
+            let (bounds, buttons) =
+                phase_layout_with_notice(&phase, Some("CRLSet refresh not assured"));
+            assert!(buttons.height() > 10.0 && buttons.width() > 100.0);
+            assert!(buttons.top() >= bounds.top() && buttons.bottom() <= bounds.bottom() + 0.5);
+        }
+    }
+
+    #[test]
+    fn protocol_freshness_reminder_actions_fit_fixed_window_even_with_long_text() {
+        for message in [
+            "Update check reminder".to_owned(),
+            "Close the browser and run Nomad directly. ".repeat(200),
+        ] {
+            let (bounds, buttons) = phase_layout(&WindowPhase::MaintenancePrompt { message });
+            assert!(buttons.height() > 10.0 && buttons.width() > 100.0);
+            assert!(buttons.top() >= bounds.top() && buttons.bottom() <= bounds.bottom() + 0.5);
+        }
     }
 
     fn assert_buttons_in_reach(message: &str) {

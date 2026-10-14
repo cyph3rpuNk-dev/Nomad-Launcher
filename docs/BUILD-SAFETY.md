@@ -1,7 +1,10 @@
 # Build and CI safeguards
 
 The canonical gate runs locked Clippy/tests plus offline distribution and CI
-regressions. CI also checks all workspace targets at Rust 1.92. Cargo's
+regressions, including read-only recovery-evidence metadata validation. Native
+Sandbox qualification tests stay explicitly ignored in the normal gate;
+[the separate runbook](CLEANUP-RECOVERY-QUALIFICATION.md) covers their opt-in
+execution. CI also checks all workspace targets at Rust 1.92. Cargo's
 [`--locked`](https://doc.rust-lang.org/cargo/commands/cargo-build.html#manifest-options)
 rejects missing or changed dependency resolution; intentional dependency updates
 must update and review `Cargo.lock` separately.

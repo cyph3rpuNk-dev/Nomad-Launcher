@@ -77,6 +77,10 @@ const HARDENING_FLAGS: &[&str] = &[
     "--disable-sync",
     "--disable-background-networking",
     "--disable-breakpad",
+    // Keep the broader component-registration block until its paths are reviewed.
+    // Upstream normal service endpoints are also neutralized. Neither a current
+    // browser bundle nor removing this flag establishes fresh CRLSet data.
+    // See docs/UNGOOGLED-COMPONENT-UPDATES.md for pinned source and limits.
     "--disable-component-update",
     // JumpList: prevents recently-visited site traces in the Windows taskbar.
     // DeviceBoundSessions: Chrome 146+ cryptographically binds sessions to the
@@ -302,11 +306,19 @@ impl BrowserFamily for UngoogledChromium {
         }
     }
 
+    fn component_update_notice(&self) -> Option<&'static str> {
+        Some("CRLSet refresh not assured")
+    }
+
     fn prepare_launch(
         &self,
         install_dir: &Path,
         hardening_config: crate::config::HardeningConfig,
     ) -> Result<()> {
+        // Pinned Windows/core source neutralizes the normal component endpoints.
+        // Removing the launcher switch alone does not restore CRLSet updates.
+        // This is a source-based limitation, not a measurement of profile data.
+        tracing::warn!("Ungoogled Chromium CRLSet refresh is not assured: Nomad supplies no revocation-data updater and the reviewed upstream normal endpoints are neutralized; disabling hardening does not establish freshness");
         // Chromium regenerates new profiles from this template. Gate privacy
         // defaults on the same toggle as the profile seed; keep Developer mode
         // from the base template in either case. Rewrite on each preparation
@@ -525,6 +537,7 @@ async fn update_ubo_from_gorhill(
 
     // gorhill tags are bare versions like "1.62.0" — no leading 'v'.
     let upstream_version = release.tag_name.clone();
+    crate::version_cache::record_ubo_check(cache_path, &upstream_version);
 
     if !installed_version.is_empty()
         && installed_version == upstream_version
@@ -1708,6 +1721,10 @@ J+Zu3X5lo7QO2O3KqJIO5kkGah4xBA==\n\
             update_ubo_from_gorhill(&install, &base_url, false, &cache_path, GORHILL_KEY)
                 .await
                 .expect("deferred update must not error");
+            let check =
+                crate::version_cache::extension_check(&dir.path().join("cache.toml")).unwrap();
+            assert_eq!(check.version, tag);
+            assert!(check.checked_at > 0);
             assert_eq!(
                 tag_ref_mock.calls(),
                 0,

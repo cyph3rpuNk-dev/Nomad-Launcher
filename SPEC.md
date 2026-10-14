@@ -52,6 +52,7 @@ nomad-launcher/
       config.rs               # nomad.toml load/save/validate
       updater.rs              # launch-time update check + atomic-swap driver
       version_cache.rs        # nomad-version-cache.toml (6 h TTL target-scoped release/uBO cache)
+      protocol_freshness.rs   # local metadata/cooldown advice for launch-only handlers
       downloader.rs           # HTTP download with progress
       gpg.rs                  # pure-Rust GPG verification + SHA-256 / SHA-512
       authenticode.rs         # WinVerifyTrust signer verification utility
@@ -210,6 +211,7 @@ arch = "x64"                 # "x64" | "x86" | "arm64"
 [update]
 check_on_launch = true       # false = skip the update check, launch immediately
 auto_download = true         # false = prompt in the status window before downloading
+remind_on_protocol = true    # local advisory on links; false = opt out
 
 [launch]
 language = "en-US"           # Chromium/Helium UI language; omit or blank for browser default
@@ -220,6 +222,7 @@ incognito = false            # Chromium/Helium private windows
 enabled = true               # false = stop applying hardening; persisted profile values may remain
 sanitize_on_shutdown = true  # managed Gecko shutdown clearing
 scrub_thumbnail_cache = false  # try clearing unlocked caches; never stop Explorer
+recover_missed_cleanup = true  # DPAPI-protected attributed retry; isolation qualification pending
 disable_webrtc = true        # managed Gecko peer connections off; Chromium UDP restricted
 reduce_system_info = true    # Ungoogled Chromium only; defer to Helium Noise
 clear_data_on_exit = false   # true = wipe Chromium cookies/sessions/history on exit (Chromium-only; breaks "stay signed in")
@@ -274,23 +277,37 @@ enum Hardening {
 
 Hardening runs on every launch (after extraction, and on launches where no update occurred), so a user-edited install is re-seeded each time. It is on by default and controlled by `[hardening] enabled` in `nomad.toml` (§4).
 
+Required file preparation runs on normal, fallback and protocol-style launches.
+Privacy/policy writes, declared autoconfig-pair completeness, hardening withdrawal,
+and adapter portability preparation propagate a typed `BrowserError::Preparation`.
+Failure prevents command creation, registry repair and a new cleanup watcher;
+the GUI offers Retry/Close and rejects a stale Launch anyway action. An ordinary
+update failure may still offer fallback, which must pass the same preparation.
+Malformed/nonobject JSON and nonobject containers blocking enforced scalar
+paths are errors; unreadable user.js withdrawal is an error too. Already-matching
+managed file contents are not rewritten; Chromium merges compare parsed values
+and retain original formatting when no update is needed. This is per-file
+validation/atomic replacement, not a multi-file transaction or proof that the
+browser accepts every setting. See [required-settings safety](docs/HARDENING-FAILURE-SAFETY.md).
+
+
 **Disabling hardening stops applying launch flags and removes managed Gecko files; it does not restore a pristine profile.** Gecko values already persisted to `prefs.js` can remain after the managed fence/autoconfig is removed. The two families differ because their hardening lives in different places:
 
 - **Chromium** hardening is launch flags, which simply stop being passed. The profile seeds (`Local State`, `Default/Preferences`) stay, because they were merged into the browser's own stores with user-wins semantics and cannot be cleanly un-merged; what stops is the re-enforcement of `LOCKED_SCALAR_PATHS`, which is the most that can be withdrawn. The profile-storage switches in `CHROMIUM_PORTABILITY_FLAGS` are unaffected either way — they are not hardening (see below).
 - **Gecko** hardening is files that persist between launches, so `remove_gecko_hardening` withdraws them: the Nomad-managed `user.js` fence (content outside the markers is preserved) and, for browsers that declare one, the autoconfig pair `defaults/pref/autoconfig.js` + `nomad.cfg`. Skipping the write alone left the previous fence and the locked `nomad.cfg` in force — a user who turned the setting off to unbreak a site saw no change at all, and `lockPref` values cannot be overridden from `about:config`. LibreWolf and Mullvad declare `autoconfig: None` and ship their own pair, which Nomad never writes and therefore never removes.
-- `distribution/policies.json` is deliberately **kept** when hardening is disabled. Nothing in the curated payload breaks a site (telemetry, updates, Pocket, first-run pages), so removing it does not serve the reason people turn hardening off; it carries the injected uBO `ExtensionSettings` entry, so deleting it would uninstall the user's ad blocker; and Nomad overwrites the vendor's own file on browsers that ship one, so the original could not be restored.
+- Existing `distribution/policies.json` is deliberately **kept** when hardening is disabled, including any injected uBO `ExtensionSettings`. Vendor policies overwritten earlier cannot be restored from this file. Disabled hardening does not refresh this policy overlay in a replacement browser bundle; retaining it in an existing bundle is not a guarantee it survives an update. Policy compatibility remains browser/version dependent.
 
 ### Chromium-family (ungoogled-chromium, Helium) — launch flags + state seed
 
 Chromium hardening uses three surfaces with distinct purposes:
 
 1. **Command-line flags** (`HARDENING_FLAGS` in each browser module) — re-applied every launch, cannot be disabled by the user via the browser UI. This is the **enforcement** layer.
-2. **`local_state.json` seed** (`payloads/chromium/local_state.json`) — written once into `<user-data-dir>/Local State`, surfaces in `chrome://flags`, and seeds DNS-over-HTTPS to Quad9 secure mode. Reserved for `chrome://flags` toggles that only accept value-typed settings (e.g. `extension-mime-request-handling@2`) and for non-flag config (DoH).
+2. **`local_state.json` seed** (`payloads/chromium/local_state.json`) — merged into `<user-data-dir>/Local State` on enabled-hardening launches, surfaces in `chrome://flags`, and seeds DNS-over-HTTPS to Quad9 secure mode. Reserved for `chrome://flags` toggles that only accept value-typed settings (e.g. `extension-mime-request-handling@2`) and for non-flag config (DoH).
 3. **`preferences.json` profile-pref seed** (`payloads/chromium/preferences.json`) — value-typed prefs with no `--flag` switch: HTTPS-Only mode, Do Not Track, network-prediction off, third-party-cookie block, the Sensors content-setting block, `canMakePayment`/Media Router off, search-suggest/translate/alternate-error-pages off, Privacy Sandbox m1. Merged into `<user-data-dir>/Default/Preferences` every launch with **"user-wins"** scalar semantics; a privacy-critical subset (`LOCKED_SCALAR_PATHS` — HTTPS-Only, Safe Browsing off, Privacy Sandbox m1, DoH) is force-re-applied so the browser or a tampered profile cannot silently re-enable it.
 
 **First-run clobber (why surface 3 also rides in `initial_preferences`).** Chromium's first-run pipeline *regenerates* `Default/Preferences` from the `initial_preferences` template next to `chrome.exe`, discarding whatever Nomad wrote to `Default/Preferences` beforehand. So on a brand-new profile the surface-3 seed alone is inactive for the entire first session and only "heals" on the second launch (when `--no-first-run` is set and Chromium loads Nomad's seeded file normally). When `[hardening] enabled = true`, `prepare_launch` merges `preferences.json` into the `initial_preferences` payload via `hardening::build_initial_preferences()` — the seed path Chromium honours on first profile creation, the same path that carries the MAC-protected `extensions.ui.developer_mode`. `preferences.json` remains the single source of truth (surface 3 still maintains established profiles); `Local State` is unaffected because Chromium merges that store rather than regenerating it. Verified end-to-end against ungoogled-chromium and guarded by `merged_initial_preferences_carry_developer_mode_and_profile_hardening`.
 
-With hardening disabled, both Chromium adapters rewrite the first-run seed with the base developer-mode template only; Helium also keeps its mandatory updater-disable preference. This replaces stale hardened seeds without resetting existing user profile preferences. Seed parse/write errors propagate from launch preparation rather than permitting a launch with stale defaults. Toggle and failed-replacement regressions use owned temporary fixtures; no browser is launched by those tests.
+With hardening disabled, both Chromium adapters rewrite the first-run seed with the base developer-mode template only; Helium keeps the updater-disable preference on unreviewed builds; the reviewed x64 0.19.2.1 flat capability preserves existing update choices and service consent. This replaces stale hardened seeds without resetting existing user profile preferences. Seed parse/write errors propagate from launch preparation rather than permitting a launch with stale defaults. Toggle and failed-replacement regressions use owned temporary fixtures; no browser is launched by those tests.
 
 **Profile-storage switches are not hardening and are never gated on `[hardening] enabled`.** `--disable-machine-id`, `--disable-encryption`, and `--disable-features=DeviceBoundSessions` live in `CHROMIUM_PORTABILITY_FLAGS` (`browsers/mod.rs`) and are applied by `launch_command`, beside `--user-data-dir`, on every launch. They decide *how the profile is stored*, not how private it is, and toggling them reformats an existing profile:
 
@@ -303,6 +320,14 @@ Gating these on the config toggle is what made `[hardening] enabled = false` →
 The command-line set is the **safe subset** of ungoogled-chromium's documented switches:
 
 - **Stock Chromium hygiene:** `--disable-sync`, `--disable-background-networking`, `--disable-breakpad`, `--disable-component-update`, `--disable-features=JumpList`, `--no-default-browser-check`, `--disable-top-sites`.
+  `--disable-component-update` is a security/privacy trade-off, not a protection
+  against revoked certificates. In the reviewed Chromium source it gates component
+  registration, including CRLSet. Ungoogled's normal service endpoints are also
+  neutralized upstream, so removing the flag alone is not a refresh fix. The
+  adapter supplies a standing security-data disclosure to the runtime details
+  card, independently of hardening, and logs it during required preparation.
+  No component downloader, custom update URL, policy/profile migration or flag
+  change is added by this disclosure. See [pinned source and limits](docs/UNGOOGLED-COMPONENT-UPDATES.md).
 - **Anti-tracking / fingerprinting:** `--disable-search-engine-collection`, `--fingerprinting-canvas-image-data-noise`, `--fingerprinting-canvas-measuretext-noise`, `--fingerprinting-client-rects-noise`, `--force-punycode-hostnames`.
 - **Network / TLS privacy:** `--no-pings`, `--webrtc-ip-handling-policy=default_public_interface_only`. Nomad deliberately does not supply a Tor Accept header or disable TLS GREASE. With `disable_webrtc = true`, Chromium uses `disable_non_proxied_udp`, which restricts UDP rather than disabling WebRTC; TCP and proxied UDP can remain available.
 - **Bundled features** (single `--enable-features=` because Chromium honours only the last one): `RemoveClientHints`, `SpoofWebGLInfo`, `MinimalReferrers` (strips cross-origin referrers, minimises same-origin to origin only — the single biggest passive-tracking mitigation).
@@ -468,6 +493,7 @@ A narrow window containing two stacked cards and a footer link.
 - **Auto-close** — once the browser process is spawned and has not failed during the start-up watch, the window closes itself automatically. No user interaction is required on the happy path.
 - **Start-up watch** — process creation alone is not a launch. The new process is polled for one second; if it ends in that time with a Windows NTSTATUS error (`0xC0000000`–`0xCFFFFFFF`, for example `0xC0000135` when a required DLL is missing), the launch is reported as an error, "browser launched" is not logged and the cleanup watcher is not started. This applies to the normal and "Launch anyway" paths. Ordinary exit codes are not failures, because a browser's first process may exit at once after handing over to a running instance. Before spawning, the launcher adds `SEM_FAILCRITICALERRORS` to its own error mode, which the browser inherits, so a load failure ends the new process at once instead of leaving it alive behind a Windows "System Error" dialog for as long as the user leaves that dialog open. A process still alive after the watch counts as launched.
 - **Error layout** — the window has a fixed size. The action buttons are laid out first and a message too long for the remaining space scrolls, so Retry, "Launch anyway" and Close are always reachable.
+- **Protocol maintenance reminder** — enabled by `[update] remind_on_protocol` (default true, including older configs that omit it). Unknown/seven-day-old relevant metadata checks or a recorded version differing from the installed record show Continue opening link / Close. Continue acknowledges the reminder for 24 hours; Close cancels without acknowledgment. No update/check/provisioning occurs. Runtime details are hidden in this phase and long advice scrolls so the action row remains reachable. The folder lock is held while awaiting the choice; a competing launcher may need Retry. Reminders are advisory, not a freshness guarantee. [Scope, records and limits](docs/PROTOCOL-UPDATE-FRESHNESS.md).
 - **Update available, `auto_download = false`** — the status block shows the new version with two buttons: "Update" and "Launch current". The window waits for the user.
 - **Error** — on any failure (network, GPG, hash, extract) the window does *not* auto-close. It shows the error message and offers "Retry" and, where a usable install already exists, "Launch anyway" and "Close". If fallback process creation fails, the error remains visible with Retry/Close only; no cleanup watcher starts and success is not signaled. Retry returns to the existing pipeline loop. Successful process creation retains the normal auto-close behavior; it does not prove the browser completed startup.
 
@@ -685,9 +711,30 @@ for limits and testing.
   in that owned folder. Only individual Recent shortcuts with unambiguous
   resolved targets inside the folder and WER reports with one exact absolute
   `AppPath` matching that browser image may be removed. Preserve unrelated
-  same-drive shortcuts, shared temp files, raw crash dumps, compound Jump
+  same-drive shortcuts, shared temp files, standalone crash dumps, compound Jump
   Lists, malformed/unreadable/oversized metadata, and reparse-point paths.
-  There is no automatic pre-launch deletion of host browser state.
+  Recent links may carry IDList, local LinkInfo and relative records; all
+  supported stored representations must identify the same existing ordinary
+  target strictly inside the owned folder. Reject unsupported namespace/override
+  records, network/environment targets and conflicting known-folder anchors.
+  Never call Shell Link Resolve, execute a shortcut, or search for moved targets;
+  see [Recent shortcut safety](docs/RECENT-SHORTCUT-SAFETY.md).
+  WER scanning covers the current user's Local AppData and ProgramData queues
+  and archives only. AppPath must pass the owned-folder boundary before any
+  filesystem lookup, and reparse/parent/device/network paths are refused. Remove
+  only flat report folders with at most 256 ordinary files; preflight all files
+  for Windows read/write sharing conflicts, reread attribution, remove ordinary
+  attachments including dumps, then delete Report.wer last and the empty folder.
+  Preserve nested/linked/unsupported trees and reports that fail access preflight.
+  Partial attachment deletion can leave a report for a later session's retry.
+  Recorded missed cleanup can be retried under the original Windows user/computer
+  and canonical portable path, after ownership and idle checks. There is still
+  no guarantee against concurrent path replacement or non-Nomad process starts.
+  Do not disable WER or request elevation. See [WER cleanup safety](docs/WER-CLEANUP-SAFETY.md).
+  Pre-launch missed-session recovery is restricted to individually attributed
+  Recent/WER records. It never deletes shared browser profiles, replays opt-in
+  cache actions, repairs registry state or starts/terminates a process. See
+  [missed-cleanup recovery](docs/MISSED-CLEANUP-RECOVERY.md).
 - Write to `HKLM` (requires elevation and breaks the portability promise).
 - Execute a downloaded binary that has not passed hash (and, where applicable, GPG or Authenticode) verification.
 - Modify downloaded binaries before verification, or bypass required staged overlay validation. The supported PE/PAK branding overlays in §6 are deliberate post-verification modifications.
