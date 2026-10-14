@@ -318,17 +318,23 @@ Flags upstream marks as **potentially breaking** are excluded from the default s
 
 **Helium exception.** Helium ships its own anti-fingerprinting framework ("Helium Noise") that already noises canvas pixels and AudioContext and **randomizes** `hardwareConcurrency` (2–16) by default — a more complete and less detectable approach than the ungoogled flags. So for Helium, Nomad defers those vectors to Helium Noise: it omits `--fingerprinting-canvas-image-data-noise` from Helium's flag set and never applies `ReducedSystemInfo` (gated by `BrowserFamily::has_builtin_fingerprint_noise()`), since `ReducedSystemInfo`'s clamp-to-`2` would override Helium's randomized value. Nomad still supplies the vectors Helium Noise does not cover (`measuretext`/`client-rects` noise, `SpoofWebGLInfo`, `RemoveClientHints`). Ungoogled Chromium has no Helium Noise and keeps the full set.
 
-**Helium updater portability rule.** `prepare_launch` forces
-`helium.services.browser_updates = false` into both the merged
-`Browser/initial_preferences` template and an existing
-`Data/Default/Preferences`, regardless of `[hardening] enabled`. This overrides
-an existing `true` on every launch while preserving unrelated preferences.
-Fresh profile creation stays with Chromium. An unreadable, malformed, or
-unwritable profile is not replaced with defaults: preparation fails and both
-normal launch and "Launch anyway" refuse to spawn Helium. Existing preferences
-are replaced through a sibling temporary file so a failed write leaves the
-original intact. The upstream updater DLL and helper are retained; the profile
-preference disables update access without removing a binary dependency. Upstream couples it to component updates as well, including CRLSet certificate-revocation data. Nomad does not currently provide a separate component-update path; this remains an unresolved security limitation even when hardening is disabled.
+**Helium updater portability rule.** The reviewed x64 0.19.2.1 release
+requires a normal flat Chromium layout before component updates are permitted.
+Its native WinSparkle guard rejects layouts without the installed/versioned
+module-directory structure, including Nomad's flat bundle. For this capability,
+Nomad omits `--disable-component-update`, seeds the native update preference
+to true for first-run profiles and preserves every byte of existing profile
+preferences, including off choices and service consent.
+
+Unknown/older/newer versions, missing target identity and unreviewed targets
+keep `helium.services.browser_updates = false` and the component-disable switch,
+independent of hardening. They can still launch/update through Nomad. A reviewed
+build with an incomplete or linked layout fails preparation before preference
+writes. Malformed existing preferences are preserved and fail visibly.
+Component access still requires native service/schema consent and the user's
+update preference; it is not proof that a component download succeeded.
+See [Helium component-update safety](docs/HELIUM-COMPONENT-UPDATES.md) for source
+revisions, endpoints, upgrade instructions and required live checks.
 
 ### Gecko-family (LibreWolf, Floorp, Waterfox) — layered profile
 
