@@ -1074,3 +1074,129 @@ visible freshness handling for users who only launch links, path-attributed
 Prefetch handling, real Recent/WER coverage, critical hardening failure reporting,
 cleanup recovery and effective browser/DNS/extension-update validation. This
 patch does not close the full independent review or raise its rating by itself.
+
+## Helium component capability follow-up (2026-10-13)
+
+The preceding patch was committed locally as
+`e5e6fa0d2d70bdfdd675ac5b5c2b1134c84096ee` on
+`codex/privacy-security-followup`; it has not been pushed.
+
+Source inspection of Helium Windows 0.19.2.1 found the newer native
+installer-eligibility guard introduced by upstream #408. The reviewed source
+requires an installed/versioned module directory and rejects Nomad's ordinary
+flat bundle for automatic checks, manual About-page checks and installer runs.
+See [Helium component-update safety](HELIUM-COMPONENT-UPDATES.md) for pinned
+source revisions, the published package digest and the live-validation gap.
+
+The next local patch permits components only for the reviewed x64 0.19.2.1
+marker plus validated flat layout. It removes the component-disable switch
+for that capability and seeds the native update default in first-run profiles.
+Existing Preferences and service/schema consent remain byte-for-byte unchanged.
+A false preference may be an old Nomad override or a user choice; enabling it
+requires an explicit browser-settings choice. Other versions/targets retain
+both the preference and command-line block. This does not block Nomad browser
+updates for unreviewed versions and does not add a component downloader.
+
+The Windows canonical gate passed: 471 core unit tests, 12 integration tests
+and 2 metadata regressions (485 total), plus safeguard fixtures and the completed
+structured dependency audit. A separate read-only live metadata check passed:
+`helium_release_is_verifiable` resolved 0.19.2.1 with required SHA-256. No browser
+or installer was launched and no component was downloaded by these checks.
+
+The capability patch is local/uncommitted. Release remains on hold pending
+Sandbox evidence that CRLSet refresh succeeds while automatic/manual installer
+updates remain ineligible, including first-run and existing profiles.
+Ungoogled Chromium component updates, link-only freshness handling and the
+other independent-review findings remain open.
+
+A local unsigned test launcher was built with
+`cargo build --release --locked --target x86_64-pc-windows-msvc -p nomad-helium`
+and passed the metadata-only PE guard. Its SHA-256 is
+`FAE26E64AFD0B49D8CB9633EE0E3D11297EFD2F3D0A5F8EEADD48B1F1456BA42`.
+The previous generated executable was preserved before building.
+
+Prepared fixture:
+`target/helium-components-e5e6fa0-ebfa255756cd43ee949f302d3a38e0f2/Nomad-Helium-Components.wsb`.
+The host payload is read-only and contains no host profile. It opens instructions
+only; a Sandbox-account-guarded helper invokes Nomad with freshly fetched, pinned
+0.19.2.1 release metadata. No installed-version marker or browser binaries are
+fabricated/imported. Relaunch preserves the guest instance and profile and
+refreshes the test's authentic pinned metadata. XML/PowerShell 5.1 syntax and
+the host-refusal path passed. No Sandbox/browser was started by preparation.
+
+### Partial live Helium observations
+
+User-provided Sandbox output and screenshots dated 2026-10-13 identify the
+unsigned test launcher above and reviewed Helium 0.19.2.1 / Chromium 155.0.8059.39.
+Initial service setup was incomplete and component access was disabled. After
+user-completed setup with service access/updates enabled, CRLSet changed from
+0.0.0.0 to **10833**, status **Updated**. This is a live component-refresh pass
+for this guest, not a universal installer-safety or release pass. The user also
+confirmed the test bookmark and built-in uBlock present. Widevine reported an
+update error and remains unverified. About showed the browser version without
+updater controls; native installer blocking, side effects, relaunch preservation,
+network destinations and an older blocked-profile migration remain pending.
+
+Screenshots were inspected as conversation attachments. Their supplied local
+paths were unavailable when archive copying was attempted; no screenshot files
+have been archived in the fixture. No personal browser profile was copied. These
+results do not close the other outstanding independent-review findings.
+
+The subsequent user-run Relaunch check shows the first browser exited fully
+and another launch used the same reviewed instance. CRLSet remained **10833 /
+Up-to-date**, the service update preference and schema acceptance persisted,
+and the user confirmed bookmark/uBlock and enabled service controls remained.
+This closes that observed relaunch check. Widevine remains an unexplained update
+error. Installer runtime evidence and previously blocked-profile migration are
+still pending. A Sandbox-guarded read-only helper was prepared to inspect the
+loaded executable/DLL paths against the reviewed upstream eligibility rule;
+the subsequent output and inference are recorded below.
+
+The user subsequently ran the read-only layout inspector: the main process
+loaded `Browser/chrome.dll` beside `Browser/chrome.exe`, the versioned child
+was absent, and no component-disable switch was present. Applying the reviewed
+upstream installer rule to those observed paths excludes this flat layout;
+this remains a **source-rule inference**, not an instrumented native-function
+result. No pending installer markers/helper were present in this snapshot.
+The user-provided transcript is preserved in the ignored fixture; About with
+services enabled, independent guest evidence transfer, network destination
+capture and a formerly blocked-profile migration remain pending. No broad
+absence of installer side effects or release clearance is claimed.
+
+The final supplied About/services screenshots show automatic updates and service
+access enabled while About has no update controls/status or visible installer
+UI. Together with the loaded-path snapshot and pinned upstream source, this
+supports the reviewed flat-layout separation. It is not an instrumented native
+function result or exhaustive installer/network history. A bounded Sandbox-only
+exporter (full profiles, cookies/history/bookmark contents and binaries excluded)
+passed syntax/host-refusal checks; the private single-upload receiver is ready.
+Independent archive transfer and validation remain pending, along with Widevine,
+network destination capture and previously blocked-profile migration.
+
+### Helium guest evidence independently preserved
+
+The guest exported 6 collected files plus manifest and 9 hash-only references.
+Host ZIP size is 4,011 bytes and SHA-256 matches the guest:
+`845A05D6B509588F9020DD29F2C4CE8AC0CDC9B10836AEF2C3F8E242E971D797`.
+Independent in-memory validation checked exact archive paths, every declared
+file size/digest, build/source identity, selected service settings and CRLSet
+manifest version 10833. Malformed/private archive refusal checks passed.
+No extraction or full profile/browser-binary copying was performed. The private
+single-upload receiver completed and exited; no firewall settings were changed.
+
+Evidence and `HOST-VERIFICATION.json` are preserved under the ignored fixture's
+`evidence-transfer-e6ab4c903be145bb8fc59bfbed21758b/received/` directory.
+The guest launcher hash matches test-build metadata, and runtime executable/DLL
+hash inventory agrees with the user's prior transcript. The source/lockfile still
+match the tested launcher metadata. Original screenshot files were unavailable
+at the supplied local paths and remain conversation-only evidence. The expected
+bookmark-file reference is absent; bookmark/uBlock preservation remains the
+user's UI confirmation. Hash-only references are not independently computed
+host hashes of the original guest files.
+
+This completes independent preservation for the observed CRLSet-refresh and
+relaunch session. The native installer conclusion remains a source-rule
+inference supported by loaded paths and About/marker snapshots. Widevine,
+older blocked-profile migration, live older-version handling and runtime network
+capture remain unverified. Capability changes remain local/uncommitted, the
+first patch remains unpushed, and release is still on hold.

@@ -37,6 +37,10 @@ const DEFAULT_RELEASES_URL: &str =
 /// Helium inherits the Chromium build system's binary name.
 const EXECUTABLE: &str = "chrome.exe";
 
+/// Reviewed Windows installer-eligibility guard: see
+/// docs/HELIUM-COMPONENT-UPDATES.md. Unknown versions/targets keep the old block.
+const REVIEWED_COMPONENT_VERSION: &str = "0.19.2.1";
+
 /// Local State JSON shared with ungoogled-chromium — Helium uses the same
 /// <chrome://flags> entries and DNS-over-HTTPS resolver.
 const LOCAL_STATE: &str = include_str!("../../payloads/chromium/local_state.json");
@@ -71,7 +75,6 @@ const HARDENING_FLAGS: &[&str] = &[
     "--disable-sync",
     "--disable-background-networking",
     "--disable-breakpad",
-    "--disable-component-update",
     // JumpList: prevents recently-visited site traces in the Windows taskbar.
     // DeviceBoundSessions: Chrome 146+ cryptographically binds sessions to the
     //   host device's TPM — directly conflicts with portability to other machines.
@@ -121,6 +124,25 @@ pub struct Helium {
 }
 
 impl Helium {
+    fn component_updates_supported(&self, install_dir: &Path) -> Result<bool> {
+        let Some(installed) = read_version_marker(install_dir) else {
+            return Ok(false);
+        };
+        if self.arch != Arch::X64
+            || installed.target != Some(super::PackageTarget::X64)
+            || installed.browser_version != REVIEWED_COMPONENT_VERSION
+        {
+            return Ok(false);
+        }
+        crate::fs_safety::ensure_directory(install_dir)?;
+        // The reviewed native guard requires the module in a versioned child
+        // directory. This ordinary flat layout puts chrome.exe and chrome.dll
+        // together, so it cannot be installer-update eligible. Refuse linked
+        // or incomplete layouts instead of inferring eligibility from a version.
+        self.staged_install_layout().validate(install_dir)?;
+        Ok(true)
+    }
+
     /// Creates a launcher targeting the given build architecture.
     #[must_use]
     pub fn new(arch: Arch) -> Self {
@@ -243,9 +265,10 @@ impl BrowserFamily for Helium {
         install_dir: &Path,
         hardening_config: crate::config::HardeningConfig,
     ) -> Result<()> {
-        // This is a portability invariant, independent of privacy hardening.
-        // Helium's WinSparkle updater can run a per-user installer outside the
-        // portable tree. Disable it in both first-run and established profiles.
+        // Reviewed flat builds are rejected by upstream's installer-eligibility
+        // guard, allowing component access without enabling installer updates.
+        // All other builds retain the conservative preference/CLI block.
+        let components_allowed = self.component_updates_supported(install_dir)?;
         let initial_prefs = if hardening_config.enabled {
             crate::hardening::build_initial_preferences(INITIAL_PREFERENCES, PREFERENCES)?
         } else {
@@ -253,7 +276,7 @@ impl BrowserFamily for Helium {
         };
         let mut initial: serde_json::Value = serde_json::from_str(&initial_prefs)
             .map_err(|e| BrowserError::Parse(format!("invalid Helium initial preferences: {e}")))?;
-        disable_browser_updates(&mut initial)?;
+        set_update_access(&mut initial, components_allowed)?;
         let initial = serde_json::to_string(&initial).map_err(|e| {
             BrowserError::Parse(format!("could not serialize Helium preferences: {e}"))
         })?;
@@ -262,7 +285,12 @@ impl BrowserFamily for Helium {
         let profile = self
             .profile_dir(install_dir)
             .unwrap_or_else(|| install_dir.join("profile"));
-        disable_existing_profile_updates(&profile)?;
+        configure_existing_profile_updates(&profile, components_allowed)?;
+        if components_allowed {
+            tracing::info!("reviewed flat Helium build: component updates permitted subject to browser service consent and existing update preference");
+        } else {
+            tracing::warn!("Helium component updates blocked: installer eligibility has not been reviewed for this build/target");
+        }
         // Helium ships its own uBlock fork built into the browser.
         Ok(())
     }
@@ -301,6 +329,14 @@ impl BrowserFamily for Helium {
         // --disable-features= bundle (a superset) still wins, and so a user's
         // extra_args can still override.
         cmd.args(super::CHROMIUM_PORTABILITY_FLAGS);
+        // Apply this independently of hardening. If the capability cannot be
+        // proved, component access stays disabled even on fallback launches.
+        if !self
+            .component_updates_supported(install_dir)
+            .unwrap_or(false)
+        {
+            cmd.arg("--disable-component-update");
+        }
         if default_apps_already_installed(&profile_dir) {
             cmd.arg("--no-first-run");
         }
@@ -313,9 +349,8 @@ impl BrowserFamily for Helium {
     }
 }
 
-/// Force only the updater preference; reject malformed containers rather than
-/// replacing unrelated user data or silently leaving the updater enabled.
-fn disable_browser_updates(prefs: &mut serde_json::Value) -> Result<()> {
+/// Set only the initial/legacy updater preference; reject malformed containers.
+fn set_update_access(prefs: &mut serde_json::Value, enabled: bool) -> Result<()> {
     let mut current = prefs;
     for key in ["helium", "services"] {
         let object = current.as_object_mut().ok_or_else(|| {
@@ -326,11 +361,11 @@ fn disable_browser_updates(prefs: &mut serde_json::Value) -> Result<()> {
     let services = current.as_object_mut().ok_or_else(|| {
         BrowserError::Parse("Helium services preferences must be a JSON object".to_owned())
     })?;
-    services.insert("browser_updates".to_owned(), false.into());
+    services.insert("browser_updates".to_owned(), enabled.into());
     Ok(())
 }
 
-fn disable_existing_profile_updates(profile: &Path) -> Result<()> {
+fn configure_existing_profile_updates(profile: &Path, components_allowed: bool) -> Result<()> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -345,10 +380,40 @@ fn disable_existing_profile_updates(profile: &Path) -> Result<()> {
     };
     let mut prefs: serde_json::Value = serde_json::from_slice(&original)
         .map_err(|e| BrowserError::Parse(format!("invalid Helium profile preferences: {e}")))?;
+    if components_allowed {
+        // Do not guess whether an existing false was Nomad's old override or
+        // the user's choice. Preserve all bytes and consent; the user can
+        // enable the browser preference explicitly after migration.
+        let mut current = &prefs;
+        for key in ["helium", "services"] {
+            let object = current.as_object().ok_or_else(|| {
+                BrowserError::Parse("Helium preferences must contain JSON objects".to_owned())
+            })?;
+            let Some(next) = object.get(key) else {
+                return Ok(());
+            };
+            current = next;
+        }
+        let services = current.as_object().ok_or_else(|| {
+            BrowserError::Parse("Helium services preferences must be a JSON object".to_owned())
+        })?;
+        if services
+            .get("browser_updates")
+            .is_some_and(|value| !value.is_boolean())
+        {
+            return Err(BrowserError::Parse(
+                "Helium update preference must be a boolean".to_owned(),
+            ));
+        }
+        if services.get("browser_updates") == Some(&serde_json::Value::Bool(false)) {
+            tracing::warn!("Helium component updates remain off in this profile; enable Allow automatic browser updates in Helium services to restore them for the reviewed flat build");
+        }
+        return Ok(());
+    }
     if prefs["helium"]["services"]["browser_updates"] == false {
         return Ok(());
     }
-    disable_browser_updates(&mut prefs)?;
+    set_update_access(&mut prefs, false)?;
     let bytes = serde_json::to_vec(&prefs)
         .map_err(|e| BrowserError::Parse(format!("could not serialize Helium preferences: {e}")))?;
 
@@ -550,6 +615,167 @@ mod tests {
         assert!(!temp.path().join("Data").exists());
         assert!(!crate::install::stage_dir(&install).exists());
         assert!(!crate::install::backup_dir(&install).exists());
+    }
+
+    fn reviewed_flat_bundle(temp: &tempfile::TempDir) -> std::path::PathBuf {
+        let install = temp.path().join("Browser");
+        std::fs::create_dir(&install).unwrap();
+        for name in [
+            "chrome.exe",
+            "chrome.dll",
+            "resources.pak",
+            "icudtl.dat",
+            "chrome_100_percent.pak",
+            "chrome_200_percent.pak",
+        ] {
+            std::fs::write(install.join(name), b"inert fixture").unwrap();
+        }
+        super::super::write_version_marker(
+            &install,
+            &InstalledVersion {
+                target: Some(super::super::PackageTarget::X64),
+                browser_version: REVIEWED_COMPONENT_VERSION.into(),
+                engine_version: REVIEWED_COMPONENT_VERSION.into(),
+            },
+        )
+        .unwrap();
+        install
+    }
+
+    #[test]
+    fn reviewed_flat_build_permits_components_and_preserves_existing_choice_and_consent() {
+        for hardening in [false, true] {
+            for choice in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                let install = reviewed_flat_bundle(&temp);
+                let path = temp.path().join("Data/Default/Preferences");
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                let original = format!("{{ \"helium\": {{\"services\": {{\"browser_updates\": {choice}, \"enabled\": false, \"schema_version\": 0}}}}, \"homepage\": \"keep\" }}");
+                std::fs::write(&path, &original).unwrap();
+                let browser = Helium::new(Arch::X64);
+                browser
+                    .prepare_launch(
+                        &install,
+                        crate::config::HardeningConfig {
+                            enabled: hardening,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+                let initial: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(install.join("initial_preferences")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(initial["helium"]["services"]["browser_updates"], true);
+                assert!(initial["helium"]["services"]
+                    .get("schema_version")
+                    .is_none());
+                let args: Vec<_> = browser
+                    .launch_command(&install, &[])
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect();
+                assert!(!args.iter().any(|arg| arg == "--disable-component-update"));
+            }
+        }
+    }
+
+    #[test]
+    fn reviewed_first_run_keeps_component_default_without_accepting_services() {
+        let temp = tempfile::tempdir().unwrap();
+        let install = reviewed_flat_bundle(&temp);
+        let browser = Helium::new(Arch::X64);
+        browser
+            .prepare_launch(&install, crate::config::HardeningConfig::default())
+            .unwrap();
+        assert!(!temp.path().join("Data").exists());
+        let initial: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(install.join("initial_preferences")).unwrap())
+                .unwrap();
+        assert_eq!(
+            initial["helium"]["services"],
+            serde_json::json!({"browser_updates":true})
+        );
+        assert!(!Helium::new(Arch::Arm64)
+            .component_updates_supported(&install)
+            .unwrap());
+        std::fs::remove_file(install.join(super::super::VERSION_MARKER)).unwrap();
+        assert!(!browser.component_updates_supported(&install).unwrap());
+    }
+
+    #[test]
+    fn unknown_or_mismatched_builds_keep_component_access_blocked() {
+        for (version, target) in [
+            ("0.18.3.1", Some(super::super::PackageTarget::X64)),
+            ("0.20.0.1", Some(super::super::PackageTarget::X64)),
+            (REVIEWED_COMPONENT_VERSION, None),
+            (
+                REVIEWED_COMPONENT_VERSION,
+                Some(super::super::PackageTarget::Arm64),
+            ),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let install = reviewed_flat_bundle(&temp);
+            super::super::write_version_marker(
+                &install,
+                &InstalledVersion {
+                    target,
+                    browser_version: version.into(),
+                    engine_version: version.into(),
+                },
+            )
+            .unwrap();
+            let browser = Helium::new(Arch::X64);
+            assert!(!browser.component_updates_supported(&install).unwrap());
+            let args: Vec<_> = browser
+                .launch_command(&install, &[])
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            assert!(args.iter().any(|arg| arg == "--disable-component-update"));
+        }
+    }
+
+    #[test]
+    fn reviewed_build_rejects_incomplete_or_linked_layout_before_preference_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let install = reviewed_flat_bundle(&temp);
+        std::fs::remove_file(install.join("chrome.dll")).unwrap();
+        let browser = Helium::new(Arch::X64);
+        assert!(browser
+            .prepare_launch(&install, crate::config::HardeningConfig::default())
+            .is_err());
+        assert!(!install.join("initial_preferences").exists());
+        std::fs::write(install.join("chrome.dll"), b"inert fixture").unwrap();
+        assert!(browser.component_updates_supported(&install).unwrap());
+        let alias = temp.path().join("alias");
+        crate::tests::owned_directory_link(&temp, &alias, &install);
+        assert!(browser
+            .prepare_launch(&alias, crate::config::HardeningConfig::default())
+            .is_err());
+        assert!(!install.join("initial_preferences").exists());
+    }
+
+    #[test]
+    fn reviewed_build_rejects_malformed_update_preferences_without_replacing_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let install = reviewed_flat_bundle(&temp);
+        let path = temp.path().join("Data/Default/Preferences");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for original in [
+            "{broken",
+            "[]",
+            r#"{"helium":null}"#,
+            r#"{"helium":{"services":false}}"#,
+            r#"{"helium":{"services":{"browser_updates":"true"}}}"#,
+        ] {
+            std::fs::write(&path, original).unwrap();
+            assert!(Helium::new(Arch::X64)
+                .prepare_launch(&install, crate::config::HardeningConfig::default())
+                .is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
     }
 
     fn prepared_preferences(enabled: bool) {
