@@ -84,6 +84,7 @@ arch = "x64"                 # "x64" | "x86" | "arm64"
 [update]
 check_on_launch = true       # false = skip update check
 auto_download = true         # false = prompt before downloading
+remind_on_protocol = true    # local reminders when opening links; false = opt out
 
 [launch]
 language = "en-US"           # Chromium/Helium UI language; omit or blank for browser default
@@ -152,8 +153,9 @@ trade-offs below. To manage the browser yourself, set `[hardening] enabled = fal
 Turning it off stops applying privacy defaults and launch flags while keeping
 portability settings. For new Chromium profiles, `initial_preferences` contains
 privacy defaults only while hardening is enabled. Switching it off replaces
-that seed with developer mode and, for Helium, the disabled browser updater.
-If the seed cannot be updated, launch preparation fails. Existing Chromium
+that seed with developer mode. Helium's updater block applies to unreviewed
+builds; the reviewed x64 0.19.2.1 flat bundle preserves existing component-update
+choices and service consent. If a required seed cannot be updated, launch stops. Existing Chromium
 profile preferences are not automatically reset; change previously saved
 values through the browser settings.
 
@@ -186,12 +188,20 @@ What each browser family gets:
 - Chromium profile encryption (DPAPI) is off so the profile stays usable on any machine. This applies whether or not hardening is enabled. Anyone who can read an unencrypted drive may recover browsing data and usable session cookies/tokens. Store sensitive portable profiles on an encrypted volume.
 - Nomad handles browser-bundle updates on direct launcher invocations. Gecko policies disable the built-in updater. For the reviewed x64 Helium 0.19.2.1 flat bundle, upstream rejects installer updates by layout, so Nomad permits the native security-component path instead of forcing its coupled update preference off. Other Helium versions/targets retain the preference and command-line block. Failed mandatory preparation prevents launch.
 - Floorp and Waterfox keep general extension updates enabled by default and user-configurable. Nomad provisions uBlock separately; other installed extensions use their browser update service. These update contacts are separate from telemetry.
-- OS link/file launches deliberately skip browser and Nomad-managed extension update checks. Open the launcher directly regularly to check for updates; using only registered links can leave the browser and managed extension outdated indefinitely.
-- Ungoogled Chromium component updates remain disabled. Helium component access is permitted only for the reviewed x64 0.19.2.1 flat bundle. It uses Helium services and the browser's signed-component verification, including CRLSet certificate-revocation data. Existing update choices and service consent are preserved: profiles left off by older Nomad versions need an explicit choice to enable "Allow automatic browser updates" in Helium services. The label covers components too; the reviewed flat bundle's native installer guard still rejects browser-installer updates. See [Helium component-update safety](docs/HELIUM-COMPONENT-UPDATES.md) for the exact scope and pending Windows validation.
+- OS link/file launches deliberately skip browser and Nomad-managed extension update checks. By default, a local reminder appears when a relevant check is unknown or at least seven days old, or cached metadata indicates an uninstalled version. Continue opens the link without updating; Close cancels it. Continue acknowledges reminders for 24 hours. Run Nomad directly with update checks enabled to maintain the browser and managed uBlock. `[update] remind_on_protocol = false` disables the reminders, independently of hardening. Seven days is a reminder interval, not a promise of security or automatic updating; ignored reminders can still leave software outdated indefinitely. See [link-launch update reminders](docs/PROTOCOL-UPDATE-FRESHNESS.md).
+- Ungoogled Chromium's CRLSet certificate-revocation refresh is not assured. Nomad's default component-disable flag suppresses component registration; the reviewed Windows build also neutralizes its normal service endpoints upstream. Removing the flag or disabling hardening alone does not restore that normal update path. The launcher shows **Security data: CRLSet refresh not assured** and logs the limitation. A current browser bundle does not prove fresh revocation data. See [Ungoogled Chromium component limits](docs/UNGOOGLED-COMPONENT-UPDATES.md).
+- Helium component access is permitted only for the reviewed x64 0.19.2.1 flat bundle. It uses Helium services and the browser's signed-component verification, including CRLSet certificate-revocation data. Existing update choices and service consent are preserved: profiles left off by older Nomad versions need an explicit choice to enable "Allow automatic browser updates" in Helium services. The label covers components too; the reviewed flat bundle's native installer guard still rejects browser-installer updates. See [Helium component-update safety](docs/HELIUM-COMPONENT-UPDATES.md) for the exact scope and pending Windows validation.
 - Mullvad retains upstream privacy behavior, with the updater policy and bundle changes described above.
 
 Settings updates use complete staged replacements rather than truncating active
-files. Unreadable or invalid existing preferences stop the write. Managed uBlock
+files. A required privacy/policy write, portability preparation, or managed
+Gecko-settings removal failure stops browser launch and shows **Retry** or
+**Close**. **Launch anyway** cannot bypass it; fallback after an update error
+runs the same required settings checks. Invalid existing Chromium JSON and unreadable user.js are preserved
+for repair instead of being treated as empty. These are file/preparation checks,
+not proof of effective browser preferences. See
+[required-settings failures and limits](docs/HARDENING-FAILURE-SAFETY.md).
+Managed uBlock
 updates retain the working copy until extraction/verification and replacement
 succeed; Chromium's managed extension also survives a browser-bundle update when
 the next extension check is offline. Interrupted extension swaps retain a backup
@@ -208,21 +218,56 @@ causes automatic host cleanup to be skipped.
 | Location | What gets removed automatically |
 |---|---|
 | `%APPDATA%\Microsoft\Windows\Recent\` | Individual `.lnk` files with an unambiguous local target resolved inside this portable folder |
-| `%ProgramData%\Microsoft\Windows\WER\{ReportQueue,ReportArchive}\` | Individual reports whose `Report.wer` identifies this exact browser executable with one absolute `AppPath` |
+| `%ProgramData%\Microsoft\Windows\WER\{ReportQueue,ReportArchive}\` and `%LOCALAPPDATA%\Microsoft\Windows\WER\{ReportQueue,ReportArchive}\` | Attributed flat report folders and their ordinary attachments, after one absolute `AppPath` matches this exact browser image and Windows file-access checks succeed |
 
 Shortcut cleanup is scoped to the portable folder, on fixed or removable
 drives. Other shortcuts on the same drive are preserved. Shortcuts with
 competing target records, unreadable or oversized metadata, and cleanup source
 paths through symlinks or junctions are left alone. Place the launcher in a dedicated folder;
-automatic cleanup is skipped at a drive root.
+automatic cleanup is skipped at a drive root. Common Windows IDList,
+Unicode and relative-path records are supported only when their stored targets
+agree. Unsupported formats and missing targets remain intact; Nomad does not
+search for moved files or execute shortcuts. See
+[Recent shortcut safety](docs/RECENT-SHORTCUT-SAFETY.md) for the bounded parser,
+Windows fixture coverage and remaining limits.
 
 Shared browser directories under `%LOCALAPPDATA%` and `%ProgramData%`, Gecko
-`installs.ini` files, shared `%TEMP%` files, raw `CrashDumps`, and compound Jump
+`installs.ini` files, shared `%TEMP%` files, standalone `CrashDumps`, and compound Jump
 List files are preserved. Browser names and missing executables do not prove
 that those files belong to Nomad: a system-wide browser keeps its profile in a
 different folder from its executable, and a Jump List can contain unrelated
 entries alongside a portable one. No shared profiles, cookies, registrations,
 or empty vendor parents are deleted before launch or after exit.
+
+WER cleanup checks the current user's Local AppData and machine-wide stores,
+not other users' profiles. Linked, nested and over-budget reports, and reports
+that fail file-access preflight, are preserved. At most 256 ordinary files per
+flat report are supported.
+Attachments inside an attributed report, including dump files, are deleted;
+standalone dumps such as `%LOCALAPPDATA%\CrashDumps` are preserved because a
+browser basename does not prove ownership. Memory dumps can contain sensitive
+browser memory, potentially including page content or account data
+([Microsoft minidump documentation](https://learn.microsoft.com/en-us/windows/win32/api/minidumpapiset/ne-minidumpapiset-minidump_type)).
+Cleanup does not disable Windows Error Reporting or undo reports already sent.
+An attachment deletion failure can leave a partially removed report;
+`Report.wer` stays for a later session's retry.
+Recorded cleanup missed after a worker crash, power loss or drive removal can
+be retried on a later launcher invocation, including a link launch. This defaults
+on independently of privacy hardening; set `[hardening] recover_missed_cleanup = false`
+to stop recording and retrying. `Nomad/cleanup-pending/` retains encrypted,
+records of the browser and original portable paths using nested Windows user/
+machine DPAPI protection, until a completed scoped attempt. Separation depends
+on Windows key contexts; a fresh-Sandbox check refused the nested record but
+decrypted a machine-only comparison blob. Different-user and independently
+keyed-machine validation remain pending. Recovery requires a decryptable record
+at its original path,
+a matching owned instance, both folder locks and a conservative idle check.
+Busy, unqueryable or ambiguously located same-name browser processes prevent
+cleanup. Moved folders and unreadable records are preserved; write failures and
+older sessions without records cannot be recovered. Shared cache clearing and
+registry actions are never replayed. See [missed-cleanup recovery](docs/MISSED-CLEANUP-RECOVERY.md)
+for retention, bounds, Windows validation gaps and remaining races.
+See [WER cleanup safety](docs/WER-CLEANUP-SAFETY.md) for checks and test limits.
 
 This conservative cleanup can leave host traces, including profiles created
 when a browser was launched outside Nomad. Use `--register-default` so links
@@ -264,6 +309,8 @@ C:\Portables\Floorp\
 │   ├── nomad.toml                # user configuration
 │   ├── nomad.log
 │   ├── nomad-version-cache.toml
+│   ├── managed-extension-check.json # latest successful managed-uBlock metadata lookup
+│   ├── protocol-update-reminder.json # last acknowledged local reminder
 │   ├── nomad.reg-state.json      # present after default registration
 │   ├── nomad.registry-repairs.json # repair history and enabled/disabled state
 │   └── registry-repair.lock       # persistent lock file; do not delete
@@ -434,6 +481,14 @@ for failure recovery and concurrency limits.
 
 **Nothing happens on launch.** First-run downloads take 30 to 90 seconds. Check `Nomad/nomad.log` for errors. If the log is empty, Windows SmartScreen may be quarantining the `.exe`; look in Windows Security → Protection History.
 
+**"Required browser settings failed".** Nomad stopped before creating a browser
+process because required settings could not be read, validated, written or
+removed. Close the browser fully, check the named path and permissions, and
+restore valid settings from your own backup where needed; then choose Retry.
+Launch anyway is unavailable for this error. Earlier files in the preparation
+sequence may already have changed; this is not a rollback of the whole profile.
+See [failure handling and validation scope](docs/HARDENING-FAILURE-SAFETY.md).
+
 **"The browser did not start", or a missing `VCRUNTIME140` / `MSVCP140` message.** The browser was installed, but Windows could not load it. Floorp depends on the Microsoft Visual C++ runtime and its installer does not ship it, so Floorp cannot start on a Windows where that runtime was never installed. Install the x64 [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) from Microsoft, then run the launcher again. In testing only Floorp was affected. Nomad asks Windows to end such a start immediately instead of showing its own "System Error" box, watches the new browser for one second, and shows this message if the start failed. A browser that fails later than that is not detected.
 
 **"Launch failed: window error" / won't start in a virtual machine.** The Windows status window uses Direct3D 12 through wgpu and the system FXC shader compiler. It can use an available hardware or Windows software adapter; an OpenGL driver or separate Visual C++ runtime installation is not required by the launcher. Check the guest graphics support and driver if window creation fails. See `Nomad/nomad.log` beside the launcher; setting `NOMAD_LOG=debug` for that launch records more diagnostics. See [validation scope and pending checks](docs/AUDIT-STATUS.md) for current Windows and VM coverage.
@@ -466,6 +521,18 @@ settings stored in the browser profile.
 **I lost my bookmarks.** You deleted `Data/` (the browser profile) instead of `Nomad/` (Nomad's bookkeeping). They are separate folders.
 
 **"No GPG signature" warning.** Informational. Floorp, Waterfox, Helium, LibreWolf, and Ungoogled Chromium don't publish a usable signing key, so those downloads are hash-verified: Waterfox uses SHA-512; the others use SHA-256.
+
+**"CRLSet refresh not assured".** This is a standing disclosure, not a measured
+component version. Nomad does not maintain Ungoogled Chromium's revocation data,
+and the reviewed upstream normal update endpoints are neutralized. Checking for
+a browser update does not check CRLSet freshness. See
+[component-update evidence and remaining gap](docs/UNGOOGLED-COMPONENT-UPDATES.md).
+
+**"Update check reminder" when opening a link.** This uses saved local metadata,
+without making an update request. Continue opens the link as before; Close cancels
+it. Close the browser and run Nomad directly with update checks enabled to perform
+maintenance. To opt out, set `[update] remind_on_protocol = false`. Acknowledging
+the reminder does not record a successful check or installation.
 
 **Behind a proxy / update check fails.** Set `[update] check_on_launch = false` in `nomad.toml`.
 

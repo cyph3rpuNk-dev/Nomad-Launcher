@@ -44,6 +44,12 @@ try {
         Invoke-GateStep 'CI safeguard regression fixtures' {
             pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-ci-safeguards.ps1')
         }
+        Invoke-GateStep 'Recovery evidence regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-cleanup-recovery-sandbox.ps1')
+        }
+        Invoke-GateStep 'Recovery integration safety fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-recovery-integration.ps1')
+        }
         Invoke-GateStep 'Formatting' {
             cargo fmt --all -- --check
         }

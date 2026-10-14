@@ -329,6 +329,7 @@ fn finalize_install<B: BrowserFamily>(
     layout.validate(stage_dir)?;
     browser.validate_staged_install(stage_dir)?;
     if hardening_enabled {
+        browser.hardening().validate()?;
         if let crate::browsers::Hardening::GeckoProfile {
             policies,
             autoconfig,
@@ -426,6 +427,7 @@ mod tests {
         let browser = StateFixture {
             validation_called: std::sync::atomic::AtomicBool::new(false),
             remove_executable: false,
+            hardening: None,
         };
         let latest = VersionInfo {
             browser_version: "2026.6.0".to_owned(),
@@ -583,6 +585,7 @@ mod tests {
             &StateFixture {
                 validation_called: std::sync::atomic::AtomicBool::new(false),
                 remove_executable: false,
+                hardening: None,
             },
             "app.exe",
             &[],
@@ -592,6 +595,7 @@ mod tests {
     struct StateFixture {
         validation_called: std::sync::atomic::AtomicBool,
         remove_executable: bool,
+        hardening: Option<crate::browsers::Hardening>,
     }
 
     impl BrowserFamily for StateFixture {
@@ -636,11 +640,12 @@ mod tests {
             panic!("no extraction in fixture")
         }
         fn hardening(&self) -> crate::browsers::Hardening {
-            crate::browsers::Hardening::LaunchFlags {
-                flags: &[],
-                local_state: None,
-                preferences: None,
-            }
+            self.hardening
+                .unwrap_or(crate::browsers::Hardening::LaunchFlags {
+                    flags: &[],
+                    local_state: None,
+                    preferences: None,
+                })
         }
         fn launch_command(&self, _: &Path, _: &[String]) -> std::process::Command {
             panic!("no browser launch in fixture")
@@ -667,6 +672,93 @@ mod tests {
     }
 
     #[test]
+    fn required_staged_hardening_failures_preserve_installed_browser_profile_and_marker() {
+        use crate::browsers::Hardening;
+        let good = Hardening::GeckoProfile {
+            user_js: "",
+            policies: Some(r#"{"policies":{}}"#),
+            autoconfig: Some("// pointer\n"),
+            cfg: Some("// config\n"),
+            ublock_xpi_releases_url: None,
+        };
+        let invalid_policy = Hardening::GeckoProfile {
+            user_js: "",
+            policies: Some(r#"{"policies":false}"#),
+            autoconfig: Some("// pointer\n"),
+            cfg: Some("// config\n"),
+            ublock_xpi_releases_url: None,
+        };
+        let incomplete = Hardening::GeckoProfile {
+            user_js: "",
+            policies: Some(r#"{"policies":{}}"#),
+            autoconfig: Some("// pointer\n"),
+            cfg: None,
+            ublock_xpi_releases_url: None,
+        };
+        for (payload, blocked_path) in [
+            (invalid_policy, None),
+            (incomplete, None),
+            (good, Some("distribution/policies.json")),
+            (good, Some("defaults/pref/autoconfig.js")),
+            (good, Some("nomad.cfg")),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let install = temp.path().join("Browser");
+            let stage = crate::install::stage_dir(&install);
+            let backup = crate::install::backup_dir(&install);
+            std::fs::create_dir_all(install.join("Data")).unwrap();
+            std::fs::create_dir_all(&stage).unwrap();
+            std::fs::write(install.join("app.exe"), b"working binary").unwrap();
+            std::fs::write(install.join("Data/data.json"), b"profile sentinel").unwrap();
+            let old = InstalledVersion {
+                target: Some(crate::browsers::PackageTarget::X64),
+                browser_version: "1.0".into(),
+                engine_version: "1.0".into(),
+            };
+            write_version_marker(&install, &old).unwrap();
+            let marker = std::fs::read(install.join(".nomad-version")).unwrap();
+            std::fs::write(stage.join("app.exe"), b"staged binary").unwrap();
+            if let Some(path) = blocked_path {
+                std::fs::create_dir_all(stage.join(path)).unwrap();
+            }
+            let browser = StateFixture {
+                validation_called: std::sync::atomic::AtomicBool::new(false),
+                remove_executable: false,
+                hardening: Some(payload),
+            };
+            let lock = crate::install::InstanceLock::acquire(&install).unwrap();
+            let result = finalize_install(
+                &browser,
+                &install,
+                &stage,
+                &backup,
+                &version_info("2.0", None),
+                true,
+                None,
+                &lock,
+            );
+            assert!(
+                result.is_err(),
+                "required stage settings must fail: {blocked_path:?}"
+            );
+            assert_eq!(
+                std::fs::read(install.join("app.exe")).unwrap(),
+                b"working binary"
+            );
+            assert_eq!(
+                std::fs::read(install.join("Data/data.json")).unwrap(),
+                b"profile sentinel"
+            );
+            assert_eq!(
+                std::fs::read(install.join(".nomad-version")).unwrap(),
+                marker
+            );
+            assert!(!stage.join(".nomad-version").exists());
+            assert!(!backup.exists());
+        }
+    }
+
+    #[test]
     fn custom_validation_hook_cannot_bypass_layout_gate_or_remove_required_files() {
         for initially_complete in [false, true] {
             let temp = tempfile::tempdir().unwrap();
@@ -682,6 +774,7 @@ mod tests {
             let browser = StateFixture {
                 validation_called: std::sync::atomic::AtomicBool::new(false),
                 remove_executable: true,
+                hardening: None,
             };
             let lock = crate::install::InstanceLock::acquire(&install).unwrap();
             let result = finalize_install(
@@ -1315,6 +1408,7 @@ mod tests {
         let browser = StateFixture {
             validation_called: std::sync::atomic::AtomicBool::new(false),
             remove_executable: true,
+            hardening: None,
         };
         let (progress, _rx) = watch::channel(0.0);
         let mut started = false;

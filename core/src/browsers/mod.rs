@@ -83,7 +83,8 @@ struct AmoFile {
 /// Already-current files are not rehashed; `auto_download` gates new downloads.
 /// Signature-file presence is an additional layout check, not cryptographic
 /// Mozilla signature validation (which remains the browser's responsibility).
-/// The current XPI and version cache change only after successful promotion.
+/// The installed XPI/version change only after promotion; successful metadata
+/// lookups independently record their time and available version.
 ///
 /// # Errors
 /// Returns a [`BrowserError`] on network, metadata, I/O, or verification failure.
@@ -123,6 +124,7 @@ pub(crate) async fn provision_gecko_ublock_xpi(
             BrowserError::Verification("AMO file has no valid SHA-256 digest".to_owned())
         })?;
     validate_amo_file_url(&release.file.url)?;
+    crate::version_cache::record_ubo_check(cache_path, &version);
 
     // Check version: prefer nomad-version-cache.toml, fall back to legacy marker.
     let cached_version = crate::version_cache::VersionCache::load(cache_path)
@@ -352,6 +354,22 @@ pub enum Hardening {
     },
 }
 
+impl Hardening {
+    pub(crate) fn validate(self) -> Result<()> {
+        if let Self::GeckoProfile {
+            autoconfig, cfg, ..
+        } = self
+        {
+            if autoconfig.is_some() != cfg.is_some() {
+                return Err(BrowserError::Parse(
+                    "incomplete Gecko autoconfig payload pair".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Errors produced by [`BrowserFamily`] operations.
 #[derive(Debug, thiserror::Error)]
 pub enum BrowserError {
@@ -384,6 +402,14 @@ pub enum BrowserError {
     /// A resolved upstream build has not been certified for this launcher.
     #[error("update compatibility check failed: {0}")]
     Compatibility(String),
+    /// Required privacy, withdrawal or portability settings could not complete.
+    /// This error must not offer an unhardened fallback launch.
+    #[error("Required browser settings failed ({step}): {source}. Browser launch was stopped.")]
+    Preparation {
+        step: &'static str,
+        #[source]
+        source: Box<BrowserError>,
+    },
     /// The browser process was created but failed before it could start.
     #[error("the browser did not start: {0}")]
     Startup(String),
@@ -546,6 +572,12 @@ pub trait BrowserFamily: Send + Sync {
     /// browser's own randomised (and more believable) value. Defaults to `false`.
     fn has_builtin_fingerprint_noise(&self) -> bool {
         false
+    }
+
+    /// Advisory security-data limitation shown in the launcher's details card.
+    /// This is a disclosure, not a runtime freshness check or permission change.
+    fn component_update_notice(&self) -> Option<&'static str> {
+        None
     }
 
     /// Accent colour for this browser's launcher window — progress-bar fill,
@@ -1178,6 +1210,9 @@ engine_version = "2.0"
         archive.assert_calls(0);
         assert!(!extensions.exists());
         assert!(!cache.exists());
+        let check = crate::version_cache::extension_check(&cache).unwrap();
+        assert_eq!(check.version, "2.0.0");
+        assert!(check.checked_at > 0);
     }
 
     #[tokio::test]
