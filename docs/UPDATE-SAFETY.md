@@ -411,10 +411,15 @@ and waits for Retry or Close. It does not automatically mark the attempt done,
 offer another fallback bypass, or start cleanup for a process that never existed.
 Retry hands control back to the existing pipeline loop; Close ends the attempt.
 
-Only a successful native spawn invokes the post-spawn callback, starts the
-cleanup watcher and signals the window to close. Success here means process
-creation, not a completed browser startup or a visible browser window. Existing
-preparation, branding and ownership rules still apply.
+Only a spawn that passes the one-second immediate-failure watch invokes the
+post-spawn callback, starts a cleanup worker and signals the window to close.
+An NTSTATUS failure during that interval is reported as failed startup. This
+is not proof of a usable browser window or successful navigation. Ordinary
+remoting exits can be successful. Cleanup workers acquire one owned per-folder
+`Nomad/cleanup.lock`; duplicates exit without repeating post-exit actions.
+The OS releases this coordination lock when its worker exits, including a
+crash; it does not replay cleanup lost to power failure or drive removal.
+Existing preparation, branding and ownership rules still apply.
 
 Tests use an absent absolute executable in an owned temporary folder and
 controlled error/success results with in-memory UI choices. The success result

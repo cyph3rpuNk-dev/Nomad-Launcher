@@ -558,6 +558,28 @@ mod tests {
     }
 
     #[test]
+    fn gecko_autoconfig_keeps_general_extension_security_updates_user_configurable() {
+        use crate::browsers::{floorp::Floorp, waterfox::Waterfox};
+        use crate::{Arch, BrowserFamily, Hardening};
+        for hardening in [
+            Floorp::new(Arch::X64).hardening(),
+            Waterfox::new(Arch::X64).hardening(),
+        ] {
+            let Hardening::GeckoProfile { cfg: Some(cfg), .. } = hardening else {
+                panic!("expected shared Gecko autoconfig");
+            };
+            for pref in [
+                "extensions.update.enabled",
+                "extensions.update.autoUpdateDefault",
+            ] {
+                assert!(cfg.contains(&format!("defaultPref(\"{pref}\", true);")));
+                assert!(!cfg.contains(&format!("lockPref(\"{pref}\",")));
+                assert!(!cfg.contains(&format!("defaultPref(\"{pref}\", false);")));
+            }
+        }
+    }
+
+    #[test]
     fn site_fix_preferences_upgrade_all_three_gecko_profiles_without_clobbering_user_content() {
         use crate::browsers::{floorp::Floorp, librewolf::Librewolf, waterfox::Waterfox};
         use crate::{Arch, BrowserFamily, Hardening};

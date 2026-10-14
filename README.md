@@ -66,8 +66,10 @@ Normal operation does not require administrator rights. The optional
 `scrub_prefetch = true` setting requests elevation when cleaning Prefetch.
 
 <p align="center">
-  <img src="docs/launcher.png" width="520" alt="Nomad Launcher downloading and updating Firefox">
+  <img src="docs/launcher.png" width="520" alt="Historical Nomad Launcher screenshot with the retired Firefox launcher">
 </p>
+
+Historical illustration: Firefox was removed; current titles use `Nomad Launcher - <Browser Name>`.
 
 ## Configuration
 
@@ -90,8 +92,8 @@ incognito = false
 [hardening]
 enabled = true
 sanitize_on_shutdown = true
-disable_webrtc = true        # WebRTC is off by default (STUN can leak your real IP through a VPN)
-scrub_thumbnail_cache = false  # opt-in: briefly restarts Explorer on exit
+disable_webrtc = true        # Gecko peer connections off; Chromium non-proxied UDP restricted
+scrub_thumbnail_cache = false  # opt-in: try clearing unlocked caches; never stop Explorer
 scrub_prefetch = false       # opt-in: needs elevation, prompts for UAC on every exit
 clear_data_on_exit = false   # Chromium only: wipe cookies/history/sessions on exit
 reduce_system_info = true    # Chromium only: ReducedSystemInfo fingerprint hardening
@@ -167,7 +169,7 @@ stays, because nothing in it breaks a site and it is what installs uBlock Origin
 
 What each browser family gets:
 
-**Chromium (Ungoogled Chromium, Helium):** launch flags disable sync, telemetry, and JumpList, and enable canvas/rects/measureText noise, WebRTC restriction, and referrer stripping. DoH is seeded to Quad9 secure mode. uBlock Origin is loaded via `--load-extension=`, sourced from [gorhill/uBlock](https://github.com/gorhill/uBlock) releases with a GPG-verified tag, a verified SHA-256 asset digest, and an upload-timeline check. The machine-ID and encryption switches are not part of this profile, for the reason given above.
+**Chromium (Ungoogled Chromium, Helium):** launch flags disable sync, telemetry, and JumpList, and enable fingerprint-noise features, WebRTC restriction, and referrer stripping. Helium keeps its own canvas-pixel noise and system-information behavior. DoH is seeded to Quad9 secure mode. Ungoogled Chromium loads uBlock Origin via `--load-extension=`, sourced from [gorhill/uBlock](https://github.com/gorhill/uBlock) releases with a GPG-verified tag, verified SHA-256 asset digest and upload-timeline check. Helium uses its built-in uBlock fork instead. The machine-ID and encryption switches are applied separately for portability.
 
 **Gecko (Floorp, Waterfox):** a fenced `user.js` (a safe subset derived from arkenfox) and a `policies.json` that disables the updater, telemetry, and Pocket are written on every launch. uBlock Origin is provisioned from a locally cached AMO-signed `.xpi`, verified against the SHA-256 digest in AMO metadata before replacement. The browser validates its Mozilla signature at installation.
 
@@ -175,15 +177,18 @@ What each browser family gets:
 
 **Site compatibility (Floorp, LibreWolf, Waterfox):** with Nomad hardening enabled, both Enhanced Tracking Protection options, "Fix major site issues" and "Fix minor site issues", are enabled in the managed profile. Strict mode remains selected. These browser exceptions can restore blocked logins, videos, or comments by permitting some elements that may contain trackers; they do not guarantee every site works or change uBlock Origin's rules. An updated launcher applies the preferences to new and existing profiles on the next launch. They are not locked, but Nomad's `user.js` reapplies them at browser startup while hardening is enabled.
 
-**Mullvad Browser** is launched as-is. It ships its own crowd-blending anti-fingerprinting stack, and any pref Nomad added would make its users distinguishable from the crowd.
+**Mullvad Browser** keeps its upstream anti-fingerprinting preferences. Nomad applies no managed `user.js` and provisions no uBlock package, but writes a `DisableAppUpdate` policy and removes auxiliary updater/crash-reporting executables from the extracted bundle. It is not a byte-for-byte untouched upstream installation.
 
 ### Trade-offs
 
-- Safe Browsing is off. As a partial substitute, DoH points at Quad9's malware-blocking resolver by default.
-- WebRTC is off, so video and audio calls (Meet, Teams, Discord) won't work out of the box. Set `disable_webrtc = false` to get restricted WebRTC back.
-- Chromium profile encryption (DPAPI) is off so the profile stays usable on any machine. This applies whether or not hardening is enabled. Keep the drive on an encrypted volume if that matters to you.
+- Safe Browsing is disabled by Nomad's hardening in Chromium and the managed Gecko profiles. DNS filtering does not replace browser-level phishing/malware protection. Chromium uses Quad9 secure DoH; Floorp and LibreWolf request Quad9 with system-DNS fallback. Waterfox's upstream DNS defaults interact with shared autoconfig and need separate effective-settings validation; do not assume Quad9 filtering is active there. Mullvad retains its upstream security preferences.
+- With `disable_webrtc = true`, Floorp, LibreWolf and Waterfox disable peer connections. Chromium and Helium restrict non-proxied UDP but still allow TCP/proxied UDP; WebRTC is not fully disabled and this does not guarantee IP anonymity. Mullvad retains its upstream behavior. Turning the option off stops adding the override; persisted Gecko preferences may need adjustment in the browser.
+- Chromium profile encryption (DPAPI) is off so the profile stays usable on any machine. This applies whether or not hardening is enabled. Anyone who can read an unencrypted drive may recover browsing data and usable session cookies/tokens. Store sensitive portable profiles on an encrypted volume.
 - Nomad handles browser updates when you run the launcher. Gecko update policies disable the built-in updater; Helium's `helium.services.browser_updates` preference is forced off before each launch, including when hardening is disabled, because its updater can run an installer outside the portable folder. If Nomad cannot write that preference, it refuses to launch Helium. Earlier Nomad versions did not disable Helium's updater.
-- Mullvad gets none of the above: no `user.js`, no uBO provisioning. Nomad defers entirely to Mullvad's stack.
+- Floorp and Waterfox keep general extension updates enabled by default and user-configurable. Nomad provisions uBlock separately; other installed extensions use their browser update service. These update contacts are separate from telemetry.
+- OS link/file launches deliberately skip browser and Nomad-managed extension update checks. Open the launcher directly regularly to check for updates; using only registered links can leave the browser and managed extension outdated indefinitely.
+- Chromium component updates are currently disabled. Helium also couples its forced-off browser-update preference to component updates, including certificate-revocation data. Nomad does not refresh that component data separately; this security-update gap still needs a targeted fix.
+- Mullvad retains upstream privacy behavior, with the updater policy and bundle changes described above.
 
 Settings updates use complete staged replacements rather than truncating active
 files. Unreadable or invalid existing preferences stop the write. Managed uBlock
@@ -223,8 +228,14 @@ This conservative cleanup can leave host traces, including profiles created
 when a browser was launched outside Nomad. Use `--register-default` so links
 reach the portable profile; review any old stray profiles separately.
 
+One owned cleanup coordinator handles a portable browser session. Additional
+link launches exit their duplicate cleanup workers without repeating exit
+actions. The first coordinator uses the opt-in settings from the launch that
+created it; configuration changes take effect in the next session.
+
 Thumbnail/icon cache clearing remains an explicit opt-in
-(`scrub_thumbnail_cache = true`) that briefly restarts Explorer. Prefetch
+(`scrub_thumbnail_cache = true`). It attempts to delete only unlocked cache
+files and never terminates or restarts Explorer; files in use remain. Prefetch
 clearing remains an explicit opt-in (`scrub_prefetch = true`) and may request
 UAC elevation. Both settings affect shared Windows trace caches as described
 in the configuration; they are separate from automatic attributed cleanup.
@@ -450,7 +461,7 @@ settings stored in the browser profile.
 
 **I lost my bookmarks.** You deleted `Data/` (the browser profile) instead of `Nomad/` (Nomad's bookkeeping). They are separate folders.
 
-**"No GPG signature" warning.** Informational. Floorp, Waterfox, Helium, LibreWolf, and Ungoogled Chromium don't publish a usable signing key, so those downloads are verified by SHA-256 only.
+**"No GPG signature" warning.** Informational. Floorp, Waterfox, Helium, LibreWolf, and Ungoogled Chromium don't publish a usable signing key, so those downloads are hash-verified: Waterfox uses SHA-512; the others use SHA-256.
 
 **Behind a proxy / update check fails.** Set `[update] check_on_launch = false` in `nomad.toml`.
 
@@ -468,7 +479,9 @@ and handler repair write only to `HKCU`.
 
 **Does it work from a USB drive?**
 Yes. Close the browser before moving the complete portable folder. If it was
-registered as the default browser, register it again from the new path.
+registered as the default browser, unregister it at the old path before moving
+and register again at the new path; location-bound records are not portable
+registration identities.
 
 **Does it leave anything behind after I delete it?**
 Not completely. Nomad performs best-effort cleanup, but Windows retains some
@@ -489,7 +502,7 @@ this change to migrate; meanwhile, **Launch anyway** opens your existing browser
 Actual incompatible resources still block an update and preserve the working copy.
 
 **What if I'm already on the latest version?**
-Nomad keeps a local version cache with a 6-hour TTL. Within that window it skips the network check entirely and launches immediately. An entry recorded at a moment when the upstream hash was unavailable is discarded rather than reused, so a temporary problem upstream doesn't leave updates failing verification until the cache expires.
+Nomad keeps a local version cache with a 6-hour TTL. Within that window it skips the browser-version metadata check. Extension checks can still contact their upstream services. An entry recorded at a moment when the upstream hash was unavailable is discarded rather than reused, so a temporary problem upstream doesn't leave updates failing verification until the cache expires.
 
 **Can each launcher have its own `nomad.toml`?**
 Each separate portable instance has its own `Nomad/nomad.toml`. Different

@@ -42,7 +42,7 @@ CLI and owned temporary artifacts. It never creates or changes a real release.
 - **Tampered browser downloads.** Every package is hash-verified (SHA-256, or SHA-512 for Waterfox). Where the upstream signs, the signature is verified against an embedded key: Mullvad via GPG, uBlock Origin's Chromium build via a GPG-verified release tag plus a required GitHub SHA-256 asset digest and an asset-timeline tamper check (the tag signature does not cover ZIP bytes). An adapter with an embedded package-signing key requires its detached signature: missing, unreadable, invalid or failed-to-download signatures cannot fall back to a matching hash. A package with no verifiable integrity material is refused. A failed verification aborts before extraction and leaves the existing install untouched.
 - **Gecko extension download integrity.** Nomad resolves uBlock Origin's version, file URL, and required SHA-256 digest together from AMO metadata, checks the add-on identity and public file status, and verifies bounded XPI bytes before staging. Invalid metadata or mismatched bytes cannot replace the cached extension. The digest trusts AMO over HTTPS; Nomad's signature-file check is only a layout sanity check. The browser performs cryptographic Mozilla signature validation at installation. Already-current cached files are not rehashed.
 - **Unintended browser downgrades.** Update decisions reject older or unorderable browser release versions before download, including target changes and legacy marker migration. Obsolete cached metadata is refreshed; rejected fresh metadata cannot replace the cache. This compares release metadata, not executable contents, and does not defeat a compromised host or drive writer. See [downgrade protection](docs/UPDATE-SAFETY.md#downgrade-protection).
-- **Casual inspection of the host after use.** Post-exit cleanup removes only individually attributed Recent shortcuts and WER reports after validating portable-folder ownership and the browser image path. Shared browser state, temp files, raw dumps, and compound Jump Lists are preserved because they cannot be attributed by name alone. Optional thumbnail/icon-cache and Prefetch clearing remains explicit opt-in. Host traces can remain; see the cleanup limits in README.md.
+- **Casual inspection of the host after use.** Post-exit cleanup removes only individually attributed Recent shortcuts and WER reports after validating portable-folder ownership and the browser image path. Shared browser state, temp files, raw dumps, and compound Jump Lists are preserved because they cannot be attributed by name alone. Optional thumbnail/icon-cache and Prefetch clearing remains explicit opt-in. One owned cleanup coordinator handles each session; thumbnail clearing never stops Explorer and preserves files in use. Host traces can remain; see the cleanup limits in README.md.
 - **Pre-existing filesystem aliases.** Portable-state writes and update roots reject symlinks and Windows reparse points before following them. Download basenames are fixed, staging is created exclusively, and temporary cleanup requires creation by the current operation. These metadata checks do not protect against a hostile writer replacing paths between checks and operations; drive write access and compromised hosts remain outside the threat model.
 - **Malicious archives and stalled endpoints.** Extraction rejects path traversal and drive-absolute entries. ZIP output and streamed downloads are size-capped; metadata and extension responses are bounded before buffering. HTTP clients have connect, read and total deadlines. Bundled 7-Zip extraction has a deadline and observed output/entry limits before promotion. Its output may overshoot between scans; these are not OS disk, CPU or memory quotas. See [network and extraction budgets](docs/UPDATE-SAFETY.md#network-and-extraction-budgets).
 
@@ -61,6 +61,7 @@ record. Migration preserves historical shared entries and archives their records
 
 - **Forensic examination of the host.** Windows keeps execution records Nomad cannot remove: Amcache and ShimCache, SRUM, the USN journal, event logs, and the pagefile. Prefetch scrubbing exists but requires a UAC elevation. If the host may be forensically examined, do not use it.
 - **A compromised host.** Malware on the machine sees everything the browser does, regardless of hardening.
+- **Read access to an unencrypted portable drive.** Profiles can retain history, account data and session cookies/tokens. Chromium OS-bound encryption is disabled for portability; use an encrypted volume for sensitive profiles.
 - **Write access to the portable drive.** The launcher, browser, and profile are not integrity-protected at rest, and Chromium profile encryption (DPAPI) is disabled for portability. Anyone who can write to the drive can compromise it; keep it on an encrypted volume.
 - **Network-level anonymity.** The hardening reduces fingerprinting and tracking. It does not hide your IP address or your traffic from the network operator. Use a VPN or Tor Browser for anonymity.
 - **Unsigned upstreams.** LibreWolf, Floorp, Waterfox, Ungoogled Chromium, and Helium publish no usable signing key, so their integrity chain is TLS to the distribution host plus the hash that host publishes. There is no publisher key to pin because none exists.
@@ -87,10 +88,13 @@ CI checkouts used only for validation do not persist credentials. See
 
 ## Dependency audit policy
 
-The canonical gate runs `cargo audit --deny warnings`, including yanked-crate
-checks. Unmaintained, unsound, and yanked dependency findings fail validation.
-`scripts/test-audit-gate.ps1` exercises clean and failure cases with mocked
-Cargo calls, so it requires no network or provisioning.
+The canonical gate runs `cargo audit --json --deny warnings`, including
+yanked-crate checks. Unmaintained, unsound, and yanked dependency findings fail
+validation. The gate requires a clean structured report and captures stderr:
+registry-check errors fail even if cargo-audit exits zero. Missing, malformed
+or unsafe reports cannot establish completed validation.
+`scripts/test-audit-gate.ps1` exercises these clean and failure cases with
+mocked Cargo calls, so it requires no network or provisioning.
 
 The only advisory exception is `RUSTSEC-2023-0071` (`rsa`, the Marvin private-key
 timing attack). Nomad's production OpenPGP path verifies detached signatures

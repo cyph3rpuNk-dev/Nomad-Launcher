@@ -49,6 +49,84 @@ impl Scope {
     }
 }
 
+/// One cleanup coordinator per owned portable folder. Keep the file handle
+/// alive until all exit actions finish; never unlink the shared lock file.
+/// The OS releases the lock if the worker dies, allowing a later launch to
+/// coordinate a new session. This is serialization, not crash-cleanup replay.
+pub(crate) struct CleanupSession {
+    _file: std::fs::File,
+}
+
+impl CleanupSession {
+    pub(crate) fn acquire(
+        launcher: &Path,
+        browser_exe: &Path,
+        browser_id: &str,
+    ) -> std::io::Result<Option<Self>> {
+        let scope = Scope::new(launcher, browser_exe, browser_id).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "cannot prove cleanup instance ownership",
+            )
+        })?;
+        let path = scope.launcher.join("Nomad/cleanup.lock");
+        crate::fs_safety::ensure_file(&path)?;
+        let mut options = std::fs::File::options();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.share_mode(
+                windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
+                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
+            );
+        }
+        let file = options.open(path)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Self { _file: file })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(error)) => Err(error),
+        }
+    }
+}
+
+/// Best-effort opt-in cache clearing. Never stop Explorer or any other process
+/// to obtain access: locked files, links and unreadable paths are preserved.
+pub(crate) fn scrub_unlocked_thumbnail_cache(cache_dir: &Path) -> std::io::Result<usize> {
+    crate::fs_safety::ensure_directory(cache_dir)?;
+    let mut removed = 0;
+    for entry in std::fs::read_dir(cache_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if (name.starts_with("thumbcache_") || name.starts_with("iconcache_"))
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("db"))
+            && crate::fs_safety::ensure_file(&path).is_ok()
+            && remove_unlocked_cache_file(&path).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// Hold a Windows handle that denies concurrent read/write access while
+/// allowing our own deletion. Existing readers/writers make open fail even
+/// when their handles allow deletion; do not unlink an actively used database.
+fn remove_unlocked_cache_file(path: &Path) -> std::io::Result<()> {
+    let mut options = std::fs::File::options();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE);
+    }
+    let _guard = options.open(path)?;
+    std::fs::remove_file(path)
+}
+
 /// All automatic deletion is gated by a claimed instance and its actual image
 /// path. There is intentionally no shared profile/temp/dump/JumpList scrub.
 fn scrub_host_traces_in(launcher: &Path, browser_exe: &Path, browser_id: &str, paths: &HostPaths) {
@@ -324,6 +402,88 @@ mod tests {
         fn run(&self) {
             scrub_host_traces_in(&self.launcher, &self.exe, "helium", &self.paths);
         }
+    }
+
+    #[test]
+    fn cleanup_session_coalesces_workers_and_releases_for_the_next_session() {
+        let f = Fixture::new();
+        let first = CleanupSession::acquire(&f.launcher, &f.exe, "helium")
+            .unwrap()
+            .unwrap();
+        assert!(CleanupSession::acquire(&f.launcher, &f.exe, "helium")
+            .unwrap()
+            .is_none());
+        let other = Fixture::new();
+        assert!(
+            CleanupSession::acquire(&other.launcher, &other.exe, "helium")
+                .unwrap()
+                .is_some()
+        );
+        drop(first);
+        assert!(CleanupSession::acquire(&f.launcher, &f.exe, "helium")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn cleanup_session_rejects_foreign_identity_and_linked_lock_without_writes() {
+        let f = Fixture::new();
+        assert!(CleanupSession::acquire(&f.launcher, &f.exe, "floorp").is_err());
+        let lock = f.launcher.join("Nomad/cleanup.lock");
+        assert!(!lock.exists());
+        let foreign = f.host("foreign");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("sentinel"), b"keep").unwrap();
+        crate::tests::owned_directory_link(&f.temp, &lock, &foreign);
+        assert!(CleanupSession::acquire(&f.launcher, &f.exe, "helium").is_err());
+        assert_eq!(std::fs::read(foreign.join("sentinel")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn thumbnail_cleanup_preserves_other_files_and_linked_cache_sources() {
+        let f = Fixture::new();
+        let dir = f.host("Explorer");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "thumbcache_32.db",
+            "iconcache_48.db",
+            "notes.db",
+            "thumbcache_32.txt",
+        ] {
+            std::fs::write(dir.join(name), b"fixture").unwrap();
+        }
+        assert_eq!(scrub_unlocked_thumbnail_cache(&dir).unwrap(), 2);
+        for name in ["notes.db", "thumbcache_32.txt"] {
+            assert_eq!(std::fs::read(dir.join(name)).unwrap(), b"fixture");
+        }
+        let link = f.host("linked");
+        crate::tests::owned_directory_link(&f.temp, &link, &dir);
+        assert!(scrub_unlocked_thumbnail_cache(&link).is_err());
+        assert_eq!(std::fs::read(dir.join("notes.db")).unwrap(), b"fixture");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn thumbnail_cleanup_preserves_active_readers_even_with_delete_sharing() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let locked = temp.path().join("thumbcache_locked.db");
+        std::fs::write(&locked, b"keep").unwrap();
+        for sharing in [0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE] {
+            let handle = std::fs::File::options()
+                .read(true)
+                .share_mode(sharing)
+                .open(&locked)
+                .unwrap();
+            assert_eq!(scrub_unlocked_thumbnail_cache(temp.path()).unwrap(), 0);
+            drop(handle);
+            assert_eq!(std::fs::read(&locked).unwrap(), b"keep");
+        }
+        assert_eq!(scrub_unlocked_thumbnail_cache(temp.path()).unwrap(), 1);
+        assert!(!locked.exists());
     }
 
     #[test]

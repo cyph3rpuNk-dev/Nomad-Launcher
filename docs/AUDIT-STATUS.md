@@ -1037,3 +1037,40 @@ owner's offline checksum-manifest signature, and publication remain pending.
 The documented live-platform, browser and post-replacement recovery gaps are
 unchanged. No launcher was executed or host configuration changed for this
 artifact review.
+
+## Privacy/security follow-up, first local patch (2026-10-13)
+
+Base tree: `e86307a944d98cae20d5d64dab5f4008c0eb69a3`, identical to
+release candidate `bc3f8891af4ae8e86de706c09a9b0896d8df785f`. This entry
+records local implementation/validation, not a pushed commit or release approval.
+
+- Floorp/Waterfox autoconfig now defaults general extension updates to enabled
+  without locking those preferences. Nomad's separate uBlock verification remains.
+- Cleanup workers acquire an owned per-folder `Nomad/cleanup.lock`; duplicate
+  workers exit before exit actions. The OS releases the lock when its worker dies.
+  This does not replay cleanup missed after power loss or drive removal.
+- Opt-in thumbnail clearing never terminates/restarts Explorer. On Windows it
+  holds a handle that denies readers/writers while deleting; active readers are
+  preserved even when their handles permit deletion. Shared unlocked cache files
+  can still be removed, and complete clearing is not guaranteed.
+- Dependency audit requires clean JSON output, captures stderr and rejects
+  registry diagnostics even with exit zero. Fixtures cover the observed timeout
+  behavior, malformed/missing output, vulnerabilities and warning categories.
+- Public/configuration descriptions now distinguish restricted Chromium WebRTC
+  from disabled Gecko peer connections and disclose retained profile data,
+  update bypass on protocol launches, component-update suppression and the broad
+  legacy Prefetch scope. The third-party notice identifies 7-Zip 26.04.
+
+`pwsh -NoProfile -File scripts/check.ps1` passed after these code changes:
+466 core unit tests, 12 integration tests and 2 upstream-metadata regressions,
+plus artifact, build, release, CI and audit fixtures. Dependency audit completed
+with a clean structured report and no registry diagnostics. Native registry and
+live-upstream tests remain ignored; no browser, real host cleanup or installer
+was run. Real Windows handles were tested only on owned temporary cache fixtures.
+
+Release remains on hold. Still open: a safe security-component update path
+(Helium couples component access to the disabled browser-updater preference),
+visible freshness handling for users who only launch links, path-attributed
+Prefetch handling, real Recent/WER coverage, critical hardening failure reporting,
+cleanup recovery and effective browser/DNS/extension-update validation. This
+patch does not close the full independent review or raise its rating by itself.
