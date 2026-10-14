@@ -62,8 +62,9 @@ The first direct run creates `Nomad/instance.toml` and a default `nomad.toml`,
 then downloads and launches the browser. A small status window shows progress
 and closes once the browser is up.
 
-Normal operation does not require administrator rights. The optional
-`scrub_prefetch = true` setting requests elevation when cleaning Prefetch.
+Normal launching, updating and cleanup do not request administrator rights.
+Windows Prefetch records are preserved; the legacy `scrub_prefetch` option
+is retired and has no effect.
 
 <p align="center">
   <img src="docs/launcher.png" width="520" alt="Historical Nomad Launcher screenshot with the retired Firefox launcher">
@@ -94,7 +95,6 @@ enabled = true
 sanitize_on_shutdown = true
 disable_webrtc = true        # Gecko peer connections off; Chromium non-proxied UDP restricted
 scrub_thumbnail_cache = false  # opt-in: try clearing unlocked caches; never stop Explorer
-scrub_prefetch = false       # opt-in: needs elevation, prompts for UAC on every exit
 clear_data_on_exit = false   # Chromium only: wipe cookies/history/sessions on exit
 reduce_system_info = true    # Chromium only: ReducedSystemInfo fingerprint hardening
 ```
@@ -235,14 +235,18 @@ created it; configuration changes take effect in the next session.
 
 Thumbnail/icon cache clearing remains an explicit opt-in
 (`scrub_thumbnail_cache = true`). It attempts to delete only unlocked cache
-files and never terminates or restarts Explorer; files in use remain. Prefetch
-clearing remains an explicit opt-in (`scrub_prefetch = true`) and may request
-UAC elevation. Both settings affect shared Windows trace caches as described
-in the configuration; they are separate from automatic attributed cleanup.
+files and never terminates or restarts Explorer; files in use remain. These
+shared caches are separate from automatic attributed cleanup.
+
+Prefetch clearing is retired: matching an executable name cannot distinguish
+this portable instance from unrelated installed browsers. Existing
+`scrub_prefetch = true` configurations still load, but only produce a retirement
+warning when cleanup is scheduled; no Prefetch files are deleted and no UAC
+prompt is requested. You can remove the obsolete key from your configuration.
 
 ### What Nomad cannot scrub
 
-Windows keeps execution records that Nomad does not remove, either because deleting them requires administrator rights or because removing them would harm the system: Amcache and ShimCache (program execution history), SRUM (per-application network usage), the NTFS USN journal's record of deleted files, Windows event logs, and the pagefile. Prefetch is the one Nomad can reach, and only with elevation (`scrub_prefetch`, opt-in).
+Windows keeps execution records Nomad does not remove: Prefetch, Amcache and ShimCache (program execution history), SRUM (per-application network usage), the NTFS USN journal's record of deleted files, Windows event logs, and the pagefile. Some require administrator rights to alter; others cannot be safely attributed or removed without harming the system. Nomad does not promise to hide execution paths or provide forensic erasure.
 
 Cleanup reduces some directly attributed traces. Shared and unattributed
 traces can remain visible during a casual inspection, and Windows keeps
@@ -469,7 +473,7 @@ settings stored in the browser profile.
 
 **Does this require administrator privileges?**
 Normal launching, updates, and default registration run as the current user.
-Only optional Prefetch cleanup requests elevation.
+Cleanup does not request elevation. The legacy Prefetch option is a no-op.
 
 **Where does the browser get installed?**
 Durable browser files and profile data stay in `Browser/` and `Data/` beside

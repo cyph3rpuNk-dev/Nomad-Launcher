@@ -1200,3 +1200,43 @@ inference supported by loaded paths and About/marker snapshots. Widevine,
 older blocked-profile migration, live older-version handling and runtime network
 capture remain unverified. Capability changes remain local/uncommitted, the
 first patch remains unpushed, and release is still on hold.
+
+## Prefetch retirement follow-up (2026-10-14)
+
+The verified Helium capability/evidence patch was committed locally as
+`dad9a993f4277ff7fd0fd0ba7b458afe9d9e5e3a` on
+`codex/privacy-security-followup`. It and the preceding first patch are unpushed.
+
+The next local patch retires Windows Prefetch deletion instead of attempting
+ownership attribution from an executable-name prefix. The prefix list,
+filesystem deletion routine and `ShellExecuteW` UAC path have been removed.
+New cleanup worker arguments cannot include the retired scrub request; old
+cleanup arguments ignore it, and a standalone legacy internal invocation only
+logs a retirement notice and exits successfully. Existing boolean config keys
+remain parseable without rewriting users' configuration. A true legacy value
+logs a warning when cleanup is scheduled; new defaults omit the obsolete key.
+
+Regression coverage checks legacy-config compatibility, both hardening modes,
+absence of the retired worker argument, preservation of the separate thumbnail
+request, legacy cleanup-flag parsing and the standalone no-op entry point.
+No real host Prefetch files, UAC prompts, browser launch or installers were used.
+The Windows canonical gate `pwsh -NoProfile -File scripts/check.ps1` passed:
+471 core unit tests, 12 integration tests, 2 metadata regressions (485 total),
+plus artifact/build/release/CI/audit fixtures and a completed clean dependency
+audit without registry-check diagnostics. Native registry/live-upstream tests
+remain ignored. `git diff --check` also passed.
+
+README, SECURITY, SPEC, generated-config notes and UPDATE-SAFETY now state that
+Windows Prefetch/execution paths remain and that cleanup does not request
+elevation. The UPDATE-SAFETY description of always blocking Helium's updater was
+also stale after the capability change: its file history last changed in the
+first patch (`e5e6fa0`), whereas `dad9a99` changed the reviewed capability.
+It now points to the exact consent/version/layout exception and live evidence.
+
+This closes the broad Prefetch-deletion/elevation defect in the current working
+tree; it does not provide forensic erasure. The retirement patch is local and
+uncommitted. Still open: real Recent shortcut/WER coverage, missed-cleanup
+recovery, critical hardening-write failure handling, link-only update freshness,
+Ungoogled Chromium component handling, browser/DNS/runtime verification and the
+remaining Helium limitations. Release remains on hold; no push/tag/release or
+CI success is claimed for these local changes.
