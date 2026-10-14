@@ -329,8 +329,10 @@ folders; they never install an extension into a running browser.
 
 Helium and Ungoogled Chromium seed `preferences.json` into
 `Browser/initial_preferences` only when `[hardening] enabled = true`. Disabled
-hardening writes the base developer-mode template; Helium additionally forces
-its built-in browser updater off, independently of privacy hardening. This
+hardening writes the base developer-mode template. Helium separately blocks
+component/updater access for unreviewed versions/targets; the reviewed x64
+0.19.2.1 flat layout permits consented component updates while the upstream
+installer eligibility guard excludes that layout. This
 matches the existing gating of Chromium privacy flags and profile-state seeds.
 The portable profile/storage switches remain required in either mode.
 
@@ -340,10 +342,13 @@ profile. Parse/write errors propagate and block preparation; the atomic writer
 preserves the old seed on replacement failure. Chromium consults this seed for
 new profiles. Disabling hardening does not reset values already saved in an
 existing profile, because Nomad cannot distinguish past defaults from the
-user's own choices. Existing preferences survive preparation except for
-Helium's mandatory updater-disable field. Tests cover fresh/existing profiles,
+user's own choices. Existing Helium preferences are preserved byte-for-byte
+for the reviewed component capability; unreviewed builds still force the
+updater-disable field. See [Helium component-update safety](HELIUM-COMPONENT-UPDATES.md)
+for the exact capability, consent rules and recorded Sandbox results.
+Tests cover fresh/existing profiles,
 false/true/false toggles, and read-only replacement failures using inert owned
-temporary files. Actual browser first-run behavior has not been retested here.
+temporary files. Live Helium results and their limits are recorded separately.
 
 ## Network and extraction budgets
 
@@ -453,5 +458,7 @@ Host browser/profile directories, Gecko install maps, shared temporary files,
 raw crash dumps, and whole compound Jump Lists are never automatic deletion
 targets. A matching brand name, filename, or missing executable is not proof
 that a file belongs to the portable instance. Unknown ownership means leaving
-a trace. Explicit thumbnail/icon-cache and Prefetch options keep their
-documented opt-in behavior; no real host cleanup runs in regression tests.
+a trace. Explicit thumbnail/icon-cache clearing keeps its documented opt-in
+behavior. Prefetch deletion and its UAC path are retired: the legacy config
+key and internal flag cannot delete host records. Regression tests cover old
+configuration/argument compatibility without real host cleanup or elevation.

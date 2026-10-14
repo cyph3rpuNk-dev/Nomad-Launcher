@@ -52,14 +52,8 @@ sanitize_on_shutdown = true  # false = disable clear-on-exit in Gecko user.js
 # extensions, cookies, and sign-ins are unaffected either way.
 scrub_thumbnail_cache = false  # true = try clearing unlocked thumbnail/icon caches; Explorer is never stopped
 clear_data_on_exit = false   # true = wipe Chromium cookies/sessions/history on exit (strong privacy, breaks \"stay signed in\")
-scrub_prefetch = false       # true = delete Windows Prefetch entries on exit (requires UAC prompt for non-admin accounts)
-
-# PREFETCH NOTE: Windows Prefetch (C:\\Windows\\Prefetch\\) records the full path
-# to each launched executable. Enabling scrub_prefetch removes those entries on
-# exit but requires administrator privileges — a UAC prompt appears on every
-# browser close for standard-user accounts. Only enable on forensics-sensitive
-# machines where you control the account type. To reduce exposure without the
-# UAC overhead, keep launcher paths short and non-identifying.
+# Windows Prefetch records are preserved. The legacy scrub_prefetch option is
+# accepted for compatibility but has no effect and never requests elevation.
 
 # SECURITY NOTE: When hardening is enabled, browser Safe Browsing is disabled
 # for privacy (it phones home to Google / Mozilla every ~30 minutes). This
@@ -264,12 +258,9 @@ pub struct HardeningConfig {
     /// `enabled = false`.
     #[serde(default = "default_true")]
     pub reduce_system_info: bool,
-    /// When `true`, the cleanup watcher attempts to delete Windows Prefetch
-    /// entries (`C:\Windows\Prefetch\`) for the launcher and browser executables.
-    /// Requires administrator privileges: a UAC elevation prompt will appear on
-    /// browser exit for non-admin accounts. Defaults to `false` (opt-in) because
-    /// the UAC prompt appears on every exit — only enable this on
-    /// forensics-sensitive machines where you control the account type.
+    /// Retired compatibility key. Both values are accepted so existing configs
+    /// continue loading, but no Prefetch deletion or elevation is performed.
+    /// A true value causes a retirement warning when cleanup is scheduled.
     #[serde(default)]
     pub scrub_prefetch: bool,
 }
@@ -651,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn scrub_prefetch_defaults_to_false_and_can_be_enabled() {
+    fn retired_prefetch_setting_remains_compatible_without_a_default_opt_in() {
         let minimal = Config::parse("[browser]\ninstall_dir = \"browser\"\n")
             .expect("minimal config must parse");
         assert!(
@@ -664,6 +655,7 @@ mod tests {
         )
         .expect("config must parse");
         assert!(enabled.hardening.scrub_prefetch);
+        assert!(!DEFAULT_NOMAD_TOML.contains("scrub_prefetch ="));
 
         // When [hardening] is present but the key is absent (pre-existing configs),
         // the serde default applies — must stay false, never enable silently.

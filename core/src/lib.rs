@@ -136,7 +136,7 @@ where
         return handle_cleanup_flag(make, cleanup);
     }
     if own_args.iter().any(|a| a == "--nomad-scrub-prefetch") {
-        return handle_prefetch_scrub_flag();
+        return handle_retired_prefetch_flag();
     }
 
     // Panics bypass the Result-based error arm below and would otherwise die
@@ -317,7 +317,6 @@ struct CleanupArgs {
     /// accepted and falls back to name-only matching (bounded wait).
     browser_exe: Option<String>,
     scrub_thumbnail_cache: bool,
-    scrub_prefetch: bool,
 }
 
 // ── Top-level wiring ──────────────────────────────────────────────────────────
@@ -1172,12 +1171,7 @@ fn do_launch<B: BrowserFamily>(
     })?;
     let pid = child.id();
     tracing::info!(browser = browser.id(), pid, exe = %browser_exe, "browser launched");
-    spawn_cleanup_watcher(
-        pid,
-        &browser_exe,
-        hardening.scrub_thumbnail_cache,
-        hardening.scrub_prefetch,
-    );
+    spawn_cleanup_watcher(pid, &browser_exe, hardening);
     signal_done(state, ctx);
     Ok(())
 }
@@ -1423,12 +1417,7 @@ fn handle_error<B: BrowserFamily>(
                         exe = %browser_exe,
                         "browser launched (fallback)"
                     );
-                    spawn_cleanup_watcher(
-                        child.id(),
-                        &browser_exe,
-                        hardening.scrub_thumbnail_cache,
-                        hardening.scrub_prefetch,
-                    );
+                    spawn_cleanup_watcher(child.id(), &browser_exe, hardening);
                 },
                 state,
                 ctx,
@@ -1675,8 +1664,8 @@ fn validate_forwarded_args(forwarded: &[String]) -> Result<(), BrowserError> {
 
 /// Parses cleanup-watcher arguments: `--nomad-cleanup-pid <pid>` (required),
 /// `--nomad-cleanup-exe <path>` (optional; full browser-executable path, a
-/// bare name is tolerated), `--nomad-scrub-thumbcache` (flag), and
-/// `--nomad-scrub-prefetch` (flag). Returns `None` when
+/// bare name is tolerated), and `--nomad-scrub-thumbcache` (flag). The legacy
+/// `--nomad-scrub-prefetch` flag is ignored. Returns `None` when
 /// `--nomad-cleanup-pid` is absent.
 fn parse_cleanup_pid(args: &[String]) -> Option<CleanupArgs> {
     let pos = args.iter().position(|a| a == "--nomad-cleanup-pid")?;
@@ -1686,12 +1675,10 @@ fn parse_cleanup_pid(args: &[String]) -> Option<CleanupArgs> {
         .position(|a| a == "--nomad-cleanup-exe")
         .and_then(|i| args.get(i + 1).cloned());
     let scrub_thumbnail_cache = args.iter().any(|a| a == "--nomad-scrub-thumbcache");
-    let scrub_prefetch = args.iter().any(|a| a == "--nomad-scrub-prefetch");
     Some(CleanupArgs {
         browser_pid,
         browser_exe,
         scrub_thumbnail_cache,
-        scrub_prefetch,
     })
 }
 
@@ -1771,10 +1758,6 @@ where
     if args.scrub_thumbnail_cache {
         scrub_thumbnail_cache();
     }
-    if args.scrub_prefetch && !scrub_prefetch() {
-        tracing::info!("Prefetch scrub needs elevation; requesting UAC prompt");
-        elevate_for_prefetch_scrub();
-    }
     ExitCode::SUCCESS
 }
 
@@ -1825,50 +1808,52 @@ fn install_dir_from_browser_exe(browser_exe: Option<&str>) -> Option<std::path::
         .map(std::path::Path::to_path_buf)
 }
 
-/// Entry point for the elevated Prefetch scrubber sub-process.
-///
-/// Spawned by `elevate_for_prefetch_scrub()` with the `runas` `ShellExecute` verb
-/// so it runs with an elevated token. Deletes Prefetch entries for all browser
-/// and launcher executables that Nomad manages, then exits.
-fn handle_prefetch_scrub_flag() -> ExitCode {
-    tracing::info!("elevated Prefetch scrubber started");
-    scrub_prefetch();
+/// Accept a legacy internal invocation without deleting host records or
+/// requesting elevation. Prefetch filenames cannot establish instance ownership.
+fn handle_retired_prefetch_flag() -> ExitCode {
+    tracing::warn!("Prefetch cleanup has been retired; no host Prefetch records are removed and no elevation is requested");
     ExitCode::SUCCESS
 }
 
-/// Spawns this executable again as a detached cleanup watcher. The watcher
-/// waits for the browser (and its background-task children) to exit, then
-/// scrubs host-system traces. When `scrub_thumbnail_cache` is `true`, it also
-/// attempts to clear unlocked Windows thumbnail/icon caches without stopping Explorer. When
-/// `scrub_prefetch` is `true`, it attempts to delete Prefetch entries,
-/// elevating via UAC if needed.
-fn spawn_cleanup_watcher(
+/// Build only the supported cleanup arguments. The legacy Prefetch setting is
+/// deliberately not forwarded, including when an existing config enables it.
+fn cleanup_watcher_args(
     browser_pid: u32,
     browser_exe: &str,
-    scrub_thumbnail_cache: bool,
-    scrub_prefetch: bool,
-) {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let mut cmd_args = vec![
+    hardening: HardeningConfig,
+) -> Vec<String> {
+    let mut args = vec![
         "--nomad-cleanup-pid".to_owned(),
         browser_pid.to_string(),
         "--nomad-cleanup-exe".to_owned(),
         browser_exe.to_owned(),
     ];
-    if scrub_thumbnail_cache {
-        cmd_args.push("--nomad-scrub-thumbcache".to_owned());
+    if hardening.scrub_thumbnail_cache {
+        args.push("--nomad-scrub-thumbcache".to_owned());
     }
-    if scrub_prefetch {
-        cmd_args.push("--nomad-scrub-prefetch".to_owned());
+    args
+}
+
+/// Spawn a detached coordinator for owned host-trace cleanup after browser exit.
+/// Opt-in thumbnail clearing preserves files in use and never stops Explorer.
+/// The legacy Prefetch option only logs a retirement notice; it cannot request
+/// deletion or elevation.
+fn spawn_cleanup_watcher(browser_pid: u32, browser_exe: &str, hardening: HardeningConfig) {
+    if hardening.scrub_prefetch {
+        tracing::warn!(
+            "scrub_prefetch is retired and has no effect; Windows Prefetch records are preserved"
+        );
     }
-    match std::process::Command::new(&exe).args(&cmd_args).spawn() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let args = cleanup_watcher_args(browser_pid, browser_exe, hardening);
+    match std::process::Command::new(&exe).args(&args).spawn() {
         Ok(w) => tracing::info!(
             watcher_pid = w.id(),
             browser_pid,
             exe = browser_exe,
-            scrub_thumbnail_cache,
+            scrub_thumbnail_cache = hardening.scrub_thumbnail_cache,
             "cleanup watcher spawned"
         ),
         Err(e) => tracing::warn!(
@@ -2177,108 +2162,6 @@ fn scrub_thumbnail_cache() {
         ),
         Err(error) => {
             tracing::warn!(%error, "thumbnail/icon cache clearing incomplete; Explorer was not stopped");
-        }
-    }
-}
-
-const PREFETCH_TOKENS: &[&str] = &[
-    "CHROME.EXE-",
-    "FIREFOX.EXE-",
-    "FLOORP.EXE-",
-    "LIBREWOLF.EXE-",
-    "MULLVADBROWSER.EXE-",
-    "WATERFOX.EXE-",
-    "BITWARDEN.EXE-",
-    "BITWARDEN-PORTABLE.EXE-",
-    "NOMAD-BITWARDEN.EXE-",
-    "NOMAD-FIREFOX.EXE-",
-    "NOMAD-FIREFOX-ESR.EXE-",
-    "NOMAD-FLOORP.EXE-",
-    "NOMAD-HELIUM.EXE-",
-    "NOMAD-LIBREWOLF.EXE-",
-    "NOMAD-MULLVAD.EXE-",
-    "NOMAD-UNGOOGLED-CHROMIUM.EXE-",
-    "NOMAD-WATERFOX.EXE-",
-];
-
-/// Attempts to remove Prefetch entries for all Nomad-managed browser and
-/// launcher executables from `C:\Windows\Prefetch\`.
-///
-/// Returns `true` if the scrub completed without any access-denied errors (or
-/// there was nothing to scrub), `false` if at least one deletion was blocked by
-/// insufficient privileges — the caller should then invoke
-/// `elevate_for_prefetch_scrub()` to retry under an elevated token.
-fn scrub_prefetch() -> bool {
-    scrub_prefetch_dir(std::path::Path::new(r"C:\Windows\Prefetch"))
-}
-
-fn scrub_prefetch_dir(dir: &std::path::Path) -> bool {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return false,
-        Err(_) => return true,
-    };
-    let mut need_elevation = false;
-    let mut count: usize = 0;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let n = name.to_string_lossy().to_ascii_uppercase();
-        if PREFETCH_TOKENS.iter().any(|&t| n.starts_with(t)) {
-            match std::fs::remove_file(entry.path()) {
-                Ok(()) => count += 1,
-                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                    need_elevation = true;
-                }
-                Err(e) => tracing::warn!(
-                    path = %entry.path().display(),
-                    error = %e,
-                    "Prefetch scrub: could not remove entry"
-                ),
-            }
-        }
-    }
-    if count > 0 {
-        tracing::info!(count, "removed Prefetch entries");
-    }
-    !need_elevation
-}
-
-/// Re-spawns this executable with `--nomad-scrub-prefetch` under an elevated
-/// token using `ShellExecuteW` with the `"runas"` verb. The UAC consent dialog
-/// appears once; on approval the elevated process deletes the Prefetch entries
-/// and exits silently.
-fn elevate_for_prefetch_scrub() {
-    #[cfg(windows)]
-    {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::UI::Shell::ShellExecuteW;
-        use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
-
-        fn wide(s: &OsStr) -> Vec<u16> {
-            s.encode_wide().chain(std::iter::once(0)).collect()
-        }
-
-        let Ok(exe) = std::env::current_exe() else {
-            tracing::warn!("elevate_for_prefetch_scrub: could not resolve current exe");
-            return;
-        };
-
-        let verb = wide(OsStr::new("runas"));
-        let file = wide(exe.as_os_str());
-        let params = wide(OsStr::new("--nomad-scrub-prefetch"));
-
-        // SAFETY: all three wide string vecs are valid null-terminated UTF-16.
-        // ShellExecuteW is a synchronous shell launch with no lifetime concerns.
-        unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                verb.as_ptr(),
-                file.as_ptr(),
-                params.as_ptr(),
-                std::ptr::null(),
-                SW_HIDE,
-            );
         }
     }
 }
@@ -3615,64 +3498,51 @@ mod tests {
     }
 
     #[test]
-    fn scrub_prefetch_dir_removes_matching_pf_files() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("FIREFOX.EXE-12345678.pf"), b"pf").unwrap();
-        std::fs::write(dir.path().join("CHROME.EXE-ABCDEF01.pf"), b"pf").unwrap();
-        std::fs::write(dir.path().join("NOMAD-WATERFOX.EXE-11223344.pf"), b"pf").unwrap();
-        std::fs::write(dir.path().join("NOTEPAD.EXE-99999999.pf"), b"pf").unwrap();
-
-        let ok = scrub_prefetch_dir(dir.path());
-        assert!(
-            ok,
-            "scrub must not report needing elevation on writable dir"
-        );
-        assert!(!dir.path().join("FIREFOX.EXE-12345678.pf").exists());
-        assert!(!dir.path().join("CHROME.EXE-ABCDEF01.pf").exists());
-        assert!(!dir.path().join("NOMAD-WATERFOX.EXE-11223344.pf").exists());
-        assert!(
-            dir.path().join("NOTEPAD.EXE-99999999.pf").exists(),
-            "non-browser .pf must be preserved"
-        );
-    }
-
-    #[test]
-    fn scrub_prefetch_dir_returns_true_for_missing_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let ok = scrub_prefetch_dir(&dir.path().join("nonexistent"));
-        assert!(ok, "missing directory is not a permission error");
-    }
-
-    #[test]
-    fn scrub_prefetch_dir_matches_all_nomad_tokens() {
-        let dir = tempfile::tempdir().unwrap();
-        let cases = [
-            "CHROME.EXE-00000001.pf",
-            "FIREFOX.EXE-00000002.pf",
-            "FLOORP.EXE-00000003.pf",
-            "WATERFOX.EXE-00000004.pf",
-            "MULLVADBROWSER.EXE-0000000B.pf",
-            "NOMAD-FIREFOX.EXE-00000005.pf",
-            "NOMAD-FIREFOX-ESR.EXE-00000006.pf",
-            "NOMAD-FLOORP.EXE-00000007.pf",
-            "NOMAD-WATERFOX.EXE-00000008.pf",
-            "NOMAD-HELIUM.EXE-00000009.pf",
-            "NOMAD-UNGOOGLED-CHROMIUM.EXE-0000000A.pf",
-            "NOMAD-MULLVAD.EXE-0000000C.pf",
-            "NOMAD-BITWARDEN.EXE-0000000D.pf",
-            "BITWARDEN-PORTABLE.EXE-0000000E.pf",
-            "BITWARDEN.EXE-0000000F.pf",
-        ];
-        for name in &cases {
-            std::fs::write(dir.path().join(name), b"pf").unwrap();
-        }
-        scrub_prefetch_dir(dir.path());
-        for name in &cases {
-            assert!(
-                !dir.path().join(name).exists(),
-                "{name} must have been deleted"
+    fn legacy_prefetch_setting_cannot_reach_cleanup_child_arguments() {
+        let config = Config::parse(
+            "[browser]\ninstall_dir = \"Browser\"\n[hardening]\nscrub_prefetch = true\n",
+        )
+        .unwrap();
+        for enabled in [false, true] {
+            let args = cleanup_watcher_args(
+                55,
+                r"C:\owned\Browser\chrome.exe",
+                HardeningConfig {
+                    enabled,
+                    ..config.hardening
+                },
+            );
+            assert_eq!(
+                args,
+                [
+                    "--nomad-cleanup-pid",
+                    "55",
+                    "--nomad-cleanup-exe",
+                    r"C:\owned\Browser\chrome.exe",
+                ]
             );
         }
+    }
+
+    #[test]
+    fn retired_prefetch_cannot_replace_supported_thumbnail_request() {
+        let args = cleanup_watcher_args(
+            55,
+            r"C:\owned\Browser\chrome.exe",
+            HardeningConfig {
+                scrub_thumbnail_cache: true,
+                scrub_prefetch: true,
+                ..HardeningConfig::default()
+            },
+        );
+        assert_eq!(args.last().unwrap(), "--nomad-scrub-thumbcache");
+        assert!(!args.iter().any(|arg| arg == "--nomad-scrub-prefetch"));
+        assert_eq!(args.len(), 5);
+    }
+
+    #[test]
+    fn legacy_prefetch_handler_is_a_successful_no_op() {
+        assert_eq!(handle_retired_prefetch_flag(), ExitCode::SUCCESS);
     }
 
     #[test]
@@ -3899,7 +3769,6 @@ mod tests {
                 browser_pid: 1234,
                 browser_exe: Some("firefox.exe".to_owned()),
                 scrub_thumbnail_cache: false,
-                scrub_prefetch: false,
             })
         );
 
@@ -3914,7 +3783,6 @@ mod tests {
                 browser_pid: 9999,
                 browser_exe: None,
                 scrub_thumbnail_cache: false,
-                scrub_prefetch: false,
             })
         );
 
@@ -3941,13 +3809,12 @@ mod tests {
         ];
         let result = parse_cleanup_pid(&args).expect("must parse");
         assert!(result.scrub_thumbnail_cache);
-        assert!(!result.scrub_prefetch);
         assert_eq!(result.browser_pid, 42);
         assert_eq!(result.browser_exe.as_deref(), Some("firefox.exe"));
     }
 
     #[test]
-    fn parse_cleanup_pid_sets_scrub_prefetch_flag() {
+    fn parse_cleanup_pid_ignores_retired_prefetch_flag() {
         let args = vec![
             "nomad-firefox.exe".to_owned(),
             "--nomad-cleanup-pid".to_owned(),
@@ -3957,7 +3824,9 @@ mod tests {
             "--nomad-scrub-prefetch".to_owned(),
         ];
         let result = parse_cleanup_pid(&args).expect("must parse");
-        assert!(result.scrub_prefetch);
+        let without_legacy_flag = &args[..args.len() - 1];
+        assert_eq!(Some(result), parse_cleanup_pid(without_legacy_flag));
+        let result = parse_cleanup_pid(&args).unwrap();
         assert!(!result.scrub_thumbnail_cache);
         assert_eq!(result.browser_pid, 55);
     }
