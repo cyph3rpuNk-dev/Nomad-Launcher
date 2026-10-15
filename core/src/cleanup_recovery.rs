@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(f.replay(Presence::Idle, false), 0);
         assert_eq!(std::fs::read(&f.paths()[0]).unwrap(), before);
         assert_eq!(f.replay(Presence::Idle, true), 1);
-        assert!(f.paths().is_empty());
+        assert_eq!(f.paths(), [] as [PathBuf; 0]);
     }
     #[test]
     fn other_machine_or_user_cannot_authorize_replay_or_evict_pending_records() {
@@ -743,7 +743,7 @@ mod tests {
             std::fs::read_dir(directory(&f.root)).unwrap().count(),
             MAX_ENTRIES
         );
-        assert!(f.paths().is_empty());
+        assert_eq!(f.paths(), [] as [PathBuf; 0]);
     }
     #[test]
     fn existing_current_intent_is_reused_at_directory_capacity() {
