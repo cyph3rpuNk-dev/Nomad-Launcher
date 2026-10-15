@@ -1,5 +1,9 @@
 # Audit status
 
+For the current consolidated disposition, read [release readiness](RELEASE-READINESS.md).
+The sections below are chronological evidence; earlier pending/delivery statements
+retain their historical scope and may be superseded by later records.
+
 Baseline reviewed 2026-10-07 against `f37c9a9`; documentation follow-up against
 `1b13fb8` on `rebuild/foundation`.
 This reconciles the original handoff findings with the current source and local
