@@ -542,7 +542,7 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
-            Self::from_temp(tempfile::tempdir().unwrap())
+            Self::from_temp(crate::tests::owned_temp_fixture())
         }
 
         fn from_temp(temp: tempfile::TempDir) -> Self {
@@ -1281,18 +1281,10 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_created_links_preserve_unknown_folder_translation() {
-        let parent = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("target");
-        std::fs::create_dir_all(&parent).unwrap();
-        crate::fs_safety::ensure_directory(&parent).unwrap();
-        let f = Fixture::from_temp(
-            tempfile::Builder::new()
-                .prefix("nomad-native-shortcut-")
-                .tempdir_in(&parent)
-                .unwrap(),
-        );
+        // The checkout may be on D: outside any known user folder on CI.
+        // TEMP is under LocalAppData/Profile on the supported Windows runners;
+        // keep this format-specific case there and still require the record.
+        let f = Fixture::from_temp(crate::tests::owned_temp_fixture());
         let source = windows_link(&f, "folder-source", &f.exe);
         let bytes = std::fs::read(&source).unwrap();
         let flags = u32::from_le_bytes(bytes[20..24].try_into().unwrap());

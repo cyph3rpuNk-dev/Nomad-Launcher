@@ -326,7 +326,7 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = crate::tests::owned_temp_fixture();
             let root = temp.path().join("portable");
             let image = root.join("Browser/chrome.exe");
             std::fs::create_dir_all(image.parent().unwrap()).unwrap();
