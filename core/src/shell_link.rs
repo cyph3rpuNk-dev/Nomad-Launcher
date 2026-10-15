@@ -709,7 +709,7 @@ mod tests {
     use super::*;
 
     fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, Vec<u8>) {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::tests::owned_temp_fixture();
         let root = temp.path().join("portable");
         std::fs::create_dir(&root).unwrap();
         let file = root.join("target.txt");

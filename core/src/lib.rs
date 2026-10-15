@@ -2279,6 +2279,62 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    use std::path::PathBuf;
+
+    /// Keep authored fixture metadata in one ordinary, long-path spelling.
+    /// Hosted Windows TEMP can contain 8.3 aliases while `Scope` canonicalizes
+    /// the owned image. Production cleanup deliberately preserves aliases it
+    /// cannot corroborate; a positive fixture must not assume TEMP's spelling.
+    pub(crate) fn owned_temp_fixture() -> tempfile::TempDir {
+        owned_fixture_under(&std::env::temp_dir())
+    }
+
+    fn owned_fixture_under(parent: &Path) -> tempfile::TempDir {
+        crate::fs_safety::ensure_directory(parent).unwrap();
+        let parent = parent.canonicalize().unwrap();
+        #[cfg(windows)]
+        let parent = PathBuf::from(crate::strip_verbatim(parent.to_str().unwrap()));
+        tempfile::Builder::new()
+            .prefix("nomad-owned-fixture-")
+            .tempdir_in(parent)
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn owned_fixture_expands_native_short_parent_before_authoring_metadata() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+        let outer = tempfile::Builder::new()
+            .prefix("Nomad long fixture parent-")
+            .tempdir()
+            .unwrap();
+        let original: Vec<u16> = outer
+            .path()
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let mut buffer = vec![0u16; 32_768];
+        // SAFETY: terminated existing owned path and live bounded output. Only
+        // queries its native short spelling; creates no aliases or host config.
+        let len = unsafe { GetShortPathNameW(original.as_ptr(), buffer.as_mut_ptr(), 32_768) };
+        assert!(len > 0 && len < 32_768);
+        let short = PathBuf::from(String::from_utf16(&buffer[..len as usize]).unwrap());
+        let fixture = owned_fixture_under(&short);
+        let canonical_parent = outer.path().canonicalize().unwrap();
+        let ordinary_parent =
+            PathBuf::from(crate::strip_verbatim(canonical_parent.to_str().unwrap()));
+        assert_eq!(fixture.path().parent(), Some(ordinary_parent.as_path()));
+        assert!(fixture
+            .path()
+            .canonicalize()
+            .unwrap()
+            .starts_with(canonical_parent));
+        // Systems with 8.3 creation disabled may return the long spelling; the
+        // same boundary assertions apply rather than requiring system changes.
+    }
 
     pub(crate) fn owned_directory_link(temp: &tempfile::TempDir, link: &Path, target: &Path) {
         let root = temp.path().canonicalize().unwrap();
