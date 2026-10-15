@@ -23,7 +23,9 @@ evidence, open risks and delivery steps. These notes do not authorize publicatio
   during undo. Existing historical state cannot always be reconstructed.
 - One cleanup coordinator handles an owned session. Attributed Recent shortcuts
   and current-user/ProgramData WER reports are cleaned conservatively; ambiguous
-  records, shared state and standalone dumps are preserved. Prefetch deletion is
+  records, shared state and standalone dumps are preserved. Windows Shell Recent
+  links using DisableKnownFolderTracking are now supported when every stored
+  target agrees; ignored folder-translation combinations stay preserved. Prefetch deletion is
   retired. Optional thumbnail/icon-cache clearing never terminates Explorer and
   leaves files in use alone.
 - Default-on missed-cleanup recovery records bounded DPAPI-protected retry intent
@@ -72,8 +74,10 @@ is disabled for portability, independently of the hardening toggle.
 ## Validation and limits
 
 **Tested locally:** the canonical gate before documentation commit `9fbac51`
-passed 550 Rust tests (16 ignored), formatting, strict Clippy, safety fixtures
-and the structured dependency audit with the existing RSA advisory exception.
+passed 550 Rust tests (16 ignored). The subsequent final Windows metadata
+correction passed 551 tests (17 ignored), formatting, strict Clippy, safety
+fixtures, structured dependency audit with the existing RSA advisory exception,
+and Rust 1.92 workspace/all-target checking.
 **Tested read-only on GitHub:** all seven checks for merged main `4951d05`
 completed successfully on inspection. Neither result is a tagged-release build
 or CI for subsequent local commits.
@@ -97,7 +101,9 @@ and preserves the limits of each build/run. In particular:
 - Recovery has same-context native and authored-file browser-integration
   evidence. Different-user/independently keyed-machine isolation, physical
   interruption and genuine Windows crash-report forms remain unqualified.
-- Genuine Windows 10/11 Recent/WER metadata, Windows 10 execution, some visible
+- Windows 11 Shell API Recent links and custom queued WER metadata passed
+  fake-root replay after the narrow Recent flag correction. Natural crash forms,
+  actual Explorer/browser navigation, Windows 10 execution, some visible
   failure/prompt paths, post-replacement rollback and cross-machine sign-in retain
   gaps. Download-failure preservation does not prove post-replacement rollback.
 - Safe Browsing is disabled by Nomad hardening in Chromium/managed Gecko.

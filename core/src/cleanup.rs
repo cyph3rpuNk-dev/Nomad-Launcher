@@ -1343,7 +1343,15 @@ mod tests {
         if let Some(special) = special_pos {
             wrong_offset[special + 12..special + 16].copy_from_slice(&terminal.to_le_bytes());
         }
-        let cases = [unknown, wrong_folder, invalid_offset, wrong_offset];
+        let mut disabled_tracking = bytes.clone();
+        disabled_tracking[20..24].copy_from_slice(&(flags | 0x0020_0000).to_le_bytes());
+        let cases = [
+            unknown,
+            wrong_folder,
+            invalid_offset,
+            wrong_offset,
+            disabled_tracking,
+        ];
         let links: Vec<_> = cases
             .iter()
             .enumerate()
@@ -1505,3 +1513,8 @@ mod tests {
         crate::tests::owned_directory_link(temp, link, target);
     }
 }
+
+// Explicit offline guest qualification; never selected by the normal gate.
+#[cfg(all(test, windows))]
+#[path = "cleanup/metadata_sandbox_tests.rs"]
+mod metadata_sandbox_tests;

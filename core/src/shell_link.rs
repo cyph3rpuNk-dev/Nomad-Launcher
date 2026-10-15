@@ -4,6 +4,7 @@
 use std::path::{Component, Path, PathBuf};
 
 const MAX_LINK_BYTES: usize = 65_536;
+const DISABLE_KNOWN_FOLDER_TRACKING: u32 = 0x0020_0000;
 const CLSID: &[u8] = &[1, 20, 2, 0, 0, 0, 0, 0, 192, 0, 0, 0, 0, 0, 0, 70];
 
 struct FolderAnchor {
@@ -327,13 +328,34 @@ fn local_info_paths(info: &[u8]) -> Option<Vec<PathBuf>> {
     Some(paths)
 }
 
+// Do not use ignored translation records as ownership evidence. All supported
+// tracking-enabled records must still agree on the folder and ItemID offset.
+fn folder_records_agree(
+    flags: u32,
+    special: Option<(u32, usize)>,
+    anchor: Option<&FolderAnchor>,
+) -> bool {
+    if flags & DISABLE_KNOWN_FOLDER_TRACKING != 0 && (special.is_some() || anchor.is_some()) {
+        return false;
+    }
+    special.is_none_or(|(legacy, offset)| {
+        anchor.is_some_and(|known| {
+            offset == known.offset && Some(legacy) == known_folder_legacy(&known.guid)
+        })
+    })
+}
+
 fn parse(bytes: &[u8]) -> Option<ParsedLink<'_>> {
     if bytes.len() > MAX_LINK_BYTES || u32_at(bytes, 0)? != 76 || bytes.get(4..20) != Some(CLSID) {
         return None;
     }
     let flags = u32_at(bytes, 20)?;
-    // StringData/IDList plus EnableTargetMetadata. Refuse target-changing flags.
-    if (flags & 1 == 0 && flags & 2 == 0) || flags & !0x0008_00ff != 0 {
+    // Windows Recent links can disable known-folder tracking. This changes no
+    // stored target; keep all corroboration and refuse ignored folder blocks.
+    // StringData/IDList and EnableTargetMetadata remain the only other flags.
+    if (flags & 1 == 0 && flags & 2 == 0)
+        || flags & !(0x0008_00ff | DISABLE_KNOWN_FOLDER_TRACKING) != 0
+    {
         return None;
     }
     let mut cursor: usize = 76;
@@ -412,11 +434,8 @@ fn parse(bytes: &[u8]) -> Option<ParsedLink<'_>> {
         signatures.push(signature);
         cursor = end;
     }
-    if let Some((legacy, offset)) = special_folder {
-        let known = anchor.as_ref()?;
-        if offset != known.offset || Some(legacy) != known_folder_legacy(&known.guid) {
-            return None;
-        }
+    if !folder_records_agree(flags, special_folder, anchor.as_ref()) {
+        return None;
     }
     if !signatures.is_empty() && !terminated {
         return None;
@@ -738,6 +757,26 @@ mod tests {
         push_unicode(&mut bytes, "unrelated working directory metadata");
         let expected = std::fs::canonicalize(root.join("target.txt")).unwrap();
         assert_eq!(owned_target(&bytes, &link, &root), Some(expected));
+    }
+    #[test]
+    fn disabled_folder_tracking_does_not_relax_owned_target_or_override_checks() {
+        let (temp, root, link, mut bytes) = fixture();
+        let flags = 2 | DISABLE_KNOWN_FOLDER_TRACKING;
+        bytes[20..24].copy_from_slice(&flags.to_le_bytes());
+        let expected = std::fs::canonicalize(root.join("target.txt")).unwrap();
+        assert_eq!(owned_target(&bytes, &link, &root), Some(expected));
+        let foreign = temp.path().join("foreign.txt");
+        std::fs::write(&foreign, b"foreign fixture").unwrap();
+        for path in [foreign, root.join("missing.txt")] {
+            let mut other = crate::tests::make_lnk(path.to_str().unwrap());
+            other[20..24].copy_from_slice(&flags.to_le_bytes());
+            assert_eq!(owned_target(&other, &link, &root), None);
+        }
+        for override_flag in [0x100u32, 0x200, 0x1000, 0x8000, 0x0200_0000] {
+            let mut other = bytes.clone();
+            other[20..24].copy_from_slice(&(flags | override_flag).to_le_bytes());
+            assert_eq!(owned_target(&other, &link, &root), None);
+        }
     }
     #[test]
     fn malformed_strings_offsets_and_truncations_are_preserved_without_native_loading() {

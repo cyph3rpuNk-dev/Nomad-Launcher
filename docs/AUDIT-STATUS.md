@@ -2432,3 +2432,37 @@ formatting, strict Clippy, offline safety fixtures and the structured dependency
 audit with the existing documented RSA advisory exception. Log:
 `target/waterfox-dns-evidence-check.log`. No new Rust/runtime change was needed.
 Remote checks for this new local documentation commit have not run.
+
+## Windows Shell/queued-WER metadata qualification (2026-10-15)
+
+**Confirmed in baseline / corrected locally:** native Shell Recent links from a
+networking-disabled Windows 11 Sandbox carried `DisableKnownFolderTracking`,
+which the committed parser refused. The baseline same-byte fake-host replay
+failed with exit 101 because the owned shortcut remained. The correction allows
+only that documented bit, preserves full target agreement and refuses ignored
+KnownFolder/SpecialFolder-record combinations. Both initial and final refactored
+harnesses passed with exit 0 using the unchanged captured bytes. All unrelated
+sentinels, the source captures and ownership marker were preserved.
+
+**Tested WER scope:** Windows queued two custom noncritical reports with exact
+controlled AppPath values. Unmodified UTF-16LE metadata passed existing WER
+cleanup in four fake-root placements. No WER production change was needed.
+These are custom API reports, not natural browser-crash variants; no real host
+cleanup, browser crash, dump request or raw metadata export was performed.
+
+**Verified selected evidence:** both baseline and final receipts, bounded typed
+outputs, all input hashes and 194 final source hashes, result serialization,
+source delta, and byte-identical unmapped host preservation passed. The original
+partial collector and failing baseline retain their original verdicts. The
+[qualification record](WINDOWS-METADATA-QUALIFICATION.md) contains commands,
+receipt/build identities and operational boundaries.
+
+**Tested final source:** canonical gate passed 551 Rust tests, 17 ignored,
+formatting, strict Clippy, safety fixtures and the structured dependency audit
+with the existing RSA exception. Rust 1.92 workspace/all-target checking passed.
+The final refactored binary was replayed in the offline guest after lint fixes.
+Changes are included in this local correction checkpoint on
+`codex/windows-cleanup-metadata`, base `fcd3c01`.
+No remote CI, push or release is claimed. Windows 10, actual Explorer/browser
+navigation, natural crash/user-store WER forms, independent-context recovery and
+CRLSet freshness remain open; rating 3/5 and release hold remain.

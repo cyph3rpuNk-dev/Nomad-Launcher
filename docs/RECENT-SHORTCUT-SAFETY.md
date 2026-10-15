@@ -26,6 +26,12 @@ are interpreted from the actual shortcut directory. Candidates must pass the
 lexical owned-folder boundary before filesystem metadata checks; symlinks,
 junctions and other reparse points are refused before canonicalization.
 
+`DisableKnownFolderTracking` is accepted for ordinary stored targets, as emitted
+by the Windows Shell Recent API. A link combining that bit with KnownFolder or
+SpecialFolder translation records is preserved because Windows ignores those
+records; Nomad does not use an ignored anchor as ownership evidence. All other
+target representations must still agree.
+
 Supported IDLists begin with the built-in Computer or UsersFiles namespace and
 recognized local drive/filesystem item types. Supported ExtraData comprises
 bounded Tracker, PropertyStore, KnownFolder and paired SpecialFolder records.
@@ -102,3 +108,17 @@ inert regression coverage, while native crash/power-loss validation remains pend
 - [Known-folder flags](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/ne-shlobj_core-known_folder_flag)
   and [known-folder IDs](https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid)
   document the bounded anchor mappings and no-verification flag.
+
+## Windows Shell Recent capture follow-up (2026-10-15)
+
+**Tested:** an offline Windows 11 Sandbox produced actual `SHAddToRecentDocs`
+links with flags `0x0020009B`. The baseline parser refused their
+`DisableKnownFolderTracking` bit and left the owned Recent copy behind. A narrow
+bit allowlist correction, with ignored folder-block combinations still refused,
+passed a same-byte replay; unrelated links/reports and original captures were
+preserved. The final refactored build also passed, alongside the 551-test gate
+(17 ignored) and Rust 1.92 checking. The change is local/uncommitted.
+
+[Commands, exact evidence and limits](WINDOWS-METADATA-QUALIFICATION.md) distinguish
+Shell API serialization from an actual Explorer/browser navigation session.
+Windows 10 and those navigation-generated variants remain unqualified.
