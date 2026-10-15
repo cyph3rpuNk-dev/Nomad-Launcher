@@ -45,7 +45,7 @@ F-numbers refer to the original handoff. Paths below identify current evidence.
 
 | Finding | Current disposition | Evidence / local commit |
 |---|---|---|
-| F1/F2: broad host-directory cleanup | Fixed. Shared profiles, registration maps, temporary files, raw dumps and compound Jump Lists are preserved. Deletion requires instance attribution. | [`cleanup.rs`](../core/src/cleanup.rs), `ffbd1e0`. |
+| F1/F2: broad host-directory cleanup | Fixed. Shared profiles, registration maps, temporary files, standalone dumps and compound Jump Lists are preserved. Attributed WER report attachments, including dumps, may be removed; see the WER follow-up below. Deletion requires instance attribution. | [`cleanup.rs`](../core/src/cleanup.rs), `ffbd1e0`. |
 | F3: forwarded browser switches | Fixed. Exactly one supported URL/file argument; switch-like and extra arguments are rejected before configuration or browser construction. | `split_forwarded_args` / `validate_forwarded_args` in [`lib.rs`](../core/src/lib.rs), `1bc3fdc`. |
 | F4/F10: unsafe or nested installation folders | Fixed. A single Windows-safe, nonreserved folder component is required. Filesystem aliases and instance ownership are checked separately. | [`config.rs`](../core/src/config.rs), [`fs_safety.rs`](../core/src/fs_safety.rs), [`instance.rs`](../core/src/instance.rs); `cd93fad`, `1734e26`. |
 | F5: unbounded network waits | Fixed. Shared connection, read and total deadlines, plus metadata/archive byte limits. | [`network.rs`](../core/src/network.rs), [`downloader.rs`](../core/src/downloader.rs), `87caecd`. |
@@ -1037,3 +1037,1357 @@ owner's offline checksum-manifest signature, and publication remain pending.
 The documented live-platform, browser and post-replacement recovery gaps are
 unchanged. No launcher was executed or host configuration changed for this
 artifact review.
+
+## Privacy/security follow-up, first local patch (2026-10-13)
+
+Base tree: `e86307a944d98cae20d5d64dab5f4008c0eb69a3`, identical to
+release candidate `bc3f8891af4ae8e86de706c09a9b0896d8df785f`. This entry
+records local implementation/validation, not a pushed commit or release approval.
+
+- Floorp/Waterfox autoconfig now defaults general extension updates to enabled
+  without locking those preferences. Nomad's separate uBlock verification remains.
+- Cleanup workers acquire an owned per-folder `Nomad/cleanup.lock`; duplicate
+  workers exit before exit actions. The OS releases the lock when its worker dies.
+  This does not replay cleanup missed after power loss or drive removal.
+- Opt-in thumbnail clearing never terminates/restarts Explorer. On Windows it
+  holds a handle that denies readers/writers while deleting; active readers are
+  preserved even when their handles permit deletion. Shared unlocked cache files
+  can still be removed, and complete clearing is not guaranteed.
+- Dependency audit requires clean JSON output, captures stderr and rejects
+  registry diagnostics even with exit zero. Fixtures cover the observed timeout
+  behavior, malformed/missing output, vulnerabilities and warning categories.
+- Public/configuration descriptions now distinguish restricted Chromium WebRTC
+  from disabled Gecko peer connections and disclose retained profile data,
+  update bypass on protocol launches, component-update suppression and the broad
+  legacy Prefetch scope. The third-party notice identifies 7-Zip 26.04.
+
+`pwsh -NoProfile -File scripts/check.ps1` passed after these code changes:
+466 core unit tests, 12 integration tests and 2 upstream-metadata regressions,
+plus artifact, build, release, CI and audit fixtures. Dependency audit completed
+with a clean structured report and no registry diagnostics. Native registry and
+live-upstream tests remain ignored; no browser, real host cleanup or installer
+was run. Real Windows handles were tested only on owned temporary cache fixtures.
+
+Release remains on hold. Still open: a safe security-component update path
+(Helium couples component access to the disabled browser-updater preference),
+visible freshness handling for users who only launch links, path-attributed
+Prefetch handling, real Recent/WER coverage, critical hardening failure reporting,
+cleanup recovery and effective browser/DNS/extension-update validation. This
+patch does not close the full independent review or raise its rating by itself.
+
+## Helium component capability follow-up (2026-10-13)
+
+The preceding patch was committed locally as
+`e5e6fa0d2d70bdfdd675ac5b5c2b1134c84096ee` on
+`codex/privacy-security-followup`; it has not been pushed.
+
+Source inspection of Helium Windows 0.19.2.1 found the newer native
+installer-eligibility guard introduced by upstream #408. The reviewed source
+requires an installed/versioned module directory and rejects Nomad's ordinary
+flat bundle for automatic checks, manual About-page checks and installer runs.
+See [Helium component-update safety](HELIUM-COMPONENT-UPDATES.md) for pinned
+source revisions, the published package digest and the live-validation gap.
+
+The next local patch permits components only for the reviewed x64 0.19.2.1
+marker plus validated flat layout. It removes the component-disable switch
+for that capability and seeds the native update default in first-run profiles.
+Existing Preferences and service/schema consent remain byte-for-byte unchanged.
+A false preference may be an old Nomad override or a user choice; enabling it
+requires an explicit browser-settings choice. Other versions/targets retain
+both the preference and command-line block. This does not block Nomad browser
+updates for unreviewed versions and does not add a component downloader.
+
+The Windows canonical gate passed: 471 core unit tests, 12 integration tests
+and 2 metadata regressions (485 total), plus safeguard fixtures and the completed
+structured dependency audit. A separate read-only live metadata check passed:
+`helium_release_is_verifiable` resolved 0.19.2.1 with required SHA-256. No browser
+or installer was launched and no component was downloaded by these checks.
+
+The capability patch is local/uncommitted. Release remains on hold pending
+Sandbox evidence that CRLSet refresh succeeds while automatic/manual installer
+updates remain ineligible, including first-run and existing profiles.
+Ungoogled Chromium component updates, link-only freshness handling and the
+other independent-review findings remain open.
+
+A local unsigned test launcher was built with
+`cargo build --release --locked --target x86_64-pc-windows-msvc -p nomad-helium`
+and passed the metadata-only PE guard. Its SHA-256 is
+`FAE26E64AFD0B49D8CB9633EE0E3D11297EFD2F3D0A5F8EEADD48B1F1456BA42`.
+The previous generated executable was preserved before building.
+
+Prepared fixture:
+`target/helium-components-e5e6fa0-ebfa255756cd43ee949f302d3a38e0f2/Nomad-Helium-Components.wsb`.
+The host payload is read-only and contains no host profile. It opens instructions
+only; a Sandbox-account-guarded helper invokes Nomad with freshly fetched, pinned
+0.19.2.1 release metadata. No installed-version marker or browser binaries are
+fabricated/imported. Relaunch preserves the guest instance and profile and
+refreshes the test's authentic pinned metadata. XML/PowerShell 5.1 syntax and
+the host-refusal path passed. No Sandbox/browser was started by preparation.
+
+### Partial live Helium observations
+
+User-provided Sandbox output and screenshots dated 2026-10-13 identify the
+unsigned test launcher above and reviewed Helium 0.19.2.1 / Chromium 155.0.8059.39.
+Initial service setup was incomplete and component access was disabled. After
+user-completed setup with service access/updates enabled, CRLSet changed from
+0.0.0.0 to **10833**, status **Updated**. This is a live component-refresh pass
+for this guest, not a universal installer-safety or release pass. The user also
+confirmed the test bookmark and built-in uBlock present. Widevine reported an
+update error and remains unverified. About showed the browser version without
+updater controls; native installer blocking, side effects, relaunch preservation,
+network destinations and an older blocked-profile migration remain pending.
+
+Screenshots were inspected as conversation attachments. Their supplied local
+paths were unavailable when archive copying was attempted; no screenshot files
+have been archived in the fixture. No personal browser profile was copied. These
+results do not close the other outstanding independent-review findings.
+
+The subsequent user-run Relaunch check shows the first browser exited fully
+and another launch used the same reviewed instance. CRLSet remained **10833 /
+Up-to-date**, the service update preference and schema acceptance persisted,
+and the user confirmed bookmark/uBlock and enabled service controls remained.
+This closes that observed relaunch check. Widevine remains an unexplained update
+error. Installer runtime evidence and previously blocked-profile migration are
+still pending. A Sandbox-guarded read-only helper was prepared to inspect the
+loaded executable/DLL paths against the reviewed upstream eligibility rule;
+the subsequent output and inference are recorded below.
+
+The user subsequently ran the read-only layout inspector: the main process
+loaded `Browser/chrome.dll` beside `Browser/chrome.exe`, the versioned child
+was absent, and no component-disable switch was present. Applying the reviewed
+upstream installer rule to those observed paths excludes this flat layout;
+this remains a **source-rule inference**, not an instrumented native-function
+result. No pending installer markers/helper were present in this snapshot.
+The user-provided transcript is preserved in the ignored fixture; About with
+services enabled, independent guest evidence transfer, network destination
+capture and a formerly blocked-profile migration remain pending. No broad
+absence of installer side effects or release clearance is claimed.
+
+The final supplied About/services screenshots show automatic updates and service
+access enabled while About has no update controls/status or visible installer
+UI. Together with the loaded-path snapshot and pinned upstream source, this
+supports the reviewed flat-layout separation. It is not an instrumented native
+function result or exhaustive installer/network history. A bounded Sandbox-only
+exporter (full profiles, cookies/history/bookmark contents and binaries excluded)
+passed syntax/host-refusal checks; the private single-upload receiver is ready.
+Independent archive transfer and validation remain pending, along with Widevine,
+network destination capture and previously blocked-profile migration.
+
+### Helium guest evidence independently preserved
+
+The guest exported 6 collected files plus manifest and 9 hash-only references.
+Host ZIP size is 4,011 bytes and SHA-256 matches the guest:
+`845A05D6B509588F9020DD29F2C4CE8AC0CDC9B10836AEF2C3F8E242E971D797`.
+Independent in-memory validation checked exact archive paths, every declared
+file size/digest, build/source identity, selected service settings and CRLSet
+manifest version 10833. Malformed/private archive refusal checks passed.
+No extraction or full profile/browser-binary copying was performed. The private
+single-upload receiver completed and exited; no firewall settings were changed.
+
+Evidence and `HOST-VERIFICATION.json` are preserved under the ignored fixture's
+`evidence-transfer-e6ab4c903be145bb8fc59bfbed21758b/received/` directory.
+The guest launcher hash matches test-build metadata, and runtime executable/DLL
+hash inventory agrees with the user's prior transcript. The source/lockfile still
+match the tested launcher metadata. Original screenshot files were unavailable
+at the supplied local paths and remain conversation-only evidence. The expected
+bookmark-file reference is absent; bookmark/uBlock preservation remains the
+user's UI confirmation. Hash-only references are not independently computed
+host hashes of the original guest files.
+
+This completes independent preservation for the observed CRLSet-refresh and
+relaunch session. The native installer conclusion remains a source-rule
+inference supported by loaded paths and About/marker snapshots. Widevine,
+older blocked-profile migration, live older-version handling and runtime network
+capture remain unverified. Capability changes remain local/uncommitted, the
+first patch remains unpushed, and release is still on hold.
+
+## Prefetch retirement follow-up (2026-10-14)
+
+The verified Helium capability/evidence patch was committed locally as
+`dad9a993f4277ff7fd0fd0ba7b458afe9d9e5e3a` on
+`codex/privacy-security-followup`. It and the preceding first patch are unpushed.
+
+The next local patch retires Windows Prefetch deletion instead of attempting
+ownership attribution from an executable-name prefix. The prefix list,
+filesystem deletion routine and `ShellExecuteW` UAC path have been removed.
+New cleanup worker arguments cannot include the retired scrub request; old
+cleanup arguments ignore it, and a standalone legacy internal invocation only
+logs a retirement notice and exits successfully. Existing boolean config keys
+remain parseable without rewriting users' configuration. A true legacy value
+logs a warning when cleanup is scheduled; new defaults omit the obsolete key.
+
+Regression coverage checks legacy-config compatibility, both hardening modes,
+absence of the retired worker argument, preservation of the separate thumbnail
+request, legacy cleanup-flag parsing and the standalone no-op entry point.
+No real host Prefetch files, UAC prompts, browser launch or installers were used.
+The Windows canonical gate `pwsh -NoProfile -File scripts/check.ps1` passed:
+471 core unit tests, 12 integration tests, 2 metadata regressions (485 total),
+plus artifact/build/release/CI/audit fixtures and a completed clean dependency
+audit without registry-check diagnostics. Native registry/live-upstream tests
+remain ignored. `git diff --check` also passed.
+
+README, SECURITY, SPEC, generated-config notes and UPDATE-SAFETY now state that
+Windows Prefetch/execution paths remain and that cleanup does not request
+elevation. The UPDATE-SAFETY description of always blocking Helium's updater was
+also stale after the capability change: its file history last changed in the
+first patch (`e5e6fa0`), whereas `dad9a99` changed the reviewed capability.
+It now points to the exact consent/version/layout exception and live evidence.
+
+This closes the broad Prefetch-deletion/elevation defect in the current working
+tree; it does not provide forensic erasure. The retirement patch is local and
+uncommitted. Still open: real Recent shortcut/WER coverage, missed-cleanup
+recovery, critical hardening-write failure handling, link-only update freshness,
+Ungoogled Chromium component handling, browser/DNS/runtime verification and the
+remaining Helium limitations. Release remains on hold; no push/tag/release or
+CI success is claimed for these local changes.
+
+## Recent shortcut cleanup follow-up (2026-10-14)
+
+The completed Prefetch retirement was committed locally as
+`ca4633d676ddac433eff4248950de8242d90405a` on
+`codex/privacy-security-followup`. The three follow-up commits remain unpushed.
+The following Recent shortcut changes are uncommitted working-tree changes on
+that base; they are not part of the release candidate or evidence-tested Helium
+launcher.
+
+**Verified in code:** The old exact `HasLinkInfo`-only gate rejected ordinary
+Windows-created links with additional target/metadata records. It has been
+replaced by the bounded parser/corroborator in `core/src/shell_link.rs:22` and
+`core/src/shell_link.rs:330`, called from `core/src/cleanup.rs:209`. Recognized
+local IDList, LinkInfo, Unicode and relative records must agree on an existing
+ordinary target strictly inside the claimed portable folder. Built-in folder
+anchor IDs/offsets are corroborated against their stored prefix and current
+mapping (`core/src/shell_link.rs:573`). Unknown/override/network records,
+conflicting representations, missing targets and reparse paths are preserved.
+The old unused permissive parser and its synthetic-only tests were removed.
+
+**Verified in code:** The Windows backend loads bounded bytes in memory and
+requests native RAWPATH (`core/src/shell_link.rs:617`). It does not invoke
+Resolve, Save, ShellExecute or target execution. Native decoding is still a
+Windows trust boundary; PropertyStore internals are not independently parsed,
+and filesystem metadata checks are not race-proof against a hostile writer.
+The patch adds Windows API features to the existing `windows-sys` dependency;
+`Cargo.lock` is unchanged.
+
+**Tested:** `cargo test --locked --target x86_64-pc-windows-msvc -p nomad-core
+windows_created_ -- --nocapture` passed all six native fixture tests on Windows
+11 build 26200. The explicitly marked fixture helper saves links with Windows'
+`WScript.Shell`, targeting inert owned files only. Fake host roots verify
+removal of attributed ordinary/non-ASCII targets and preservation of unrelated
+same-drive/sibling targets, missing files, conflicting IDLists/relative records,
+unsupported/malformed metadata and incorrect folder mappings/offsets. IDList-only
+coverage includes a derived fixture with optional LinkInfo removed; adverse
+cases deliberately mutate real serialized metadata. Mixed slash styles in the
+initial test target caused Windows to omit LinkInfo; normalizing test paths
+provides real LinkInfo coverage without changing production refusal rules.
+
+**Tested:** `pwsh -NoProfile -File scripts/check.ps1` passed formatting,
+Clippy with warnings denied, 478 core unit tests, 12 integration tests and two
+metadata regressions (492 total), artifact/build/release/CI/audit fixtures, and
+a completed clean dependency audit without registry diagnostics. Four native
+registry tests and eight live download/upstream tests remain ignored. No real
+host Recent cleanup, browser launch, installer, persistent configuration writes
+or hardware probes were used. `git diff --check` passed. The separate
+`cargo +1.92 check --workspace --all-targets --locked --target
+x86_64-pc-windows-msvc --target-dir target/msrv-1.92` compatibility check also
+passed; this is compilation/type checking, not an additional MSRV runtime test.
+
+**Documented:** README, SECURITY, SPEC and UPDATE-SAFETY now distinguish
+recognized agreeing records from unsupported/conflicting records. The new
+[Recent shortcut safety](RECENT-SHORTCUT-SAFETY.md) describes the allowlist,
+native API choices, upstream Microsoft contracts and residual limits. The prior
+docs were last changed by `ca4633d` before this parser existed; the earlier
+synthetic-only implementation did not substantiate ordinary Windows shortcut
+coverage.
+
+**Not tested / remaining:** Windows 10 and Explorer-generated Recent links from
+actual browsing sessions have not been replayed for this patch. Native decoder
+side effects/network activity were not instrumented. Real WER coverage,
+per-user WER handling, missed-cleanup recovery, critical hardening-write failure
+handling, link-only update freshness, Ungoogled Chromium component handling,
+other browser/DNS runtime checks and remaining Helium limitations remain open.
+Release remains on hold; no push, merge, tag, release or remote CI result is
+claimed for this working-tree patch.
+
+## WER ownership and coverage follow-up (2026-10-14)
+
+Base HEAD remains `ca4633d676ddac433eff4248950de8242d90405a` on
+`codex/privacy-security-followup`. The preceding Recent shortcut patch was
+already uncommitted and in scope at the start of this follow-up. WER changes
+and documentation are also local/uncommitted. No branch push, merge, tag,
+release or remote CI result is claimed.
+
+**Verified in code:** The previous WER implementation scanned only ProgramData
+queues/archives and called canonicalize on AppPath without rejecting target aliases.
+That allowed an alias to an owned image to pass attribution and did not cover
+per-user reports. The revised host paths include LOCALAPPDATA
+(`core/src/cleanup.rs:18`); both conventional roots use the same scanner
+(`core/src/cleanup.rs:424`). AppPath must be one bounded valid text field and
+identify the exact existing browser image. Owned-folder lexical checks precede
+filesystem lookups; reparse, parent, network and device paths are refused
+(`core/src/cleanup.rs:310`). Embedded NULs and duplicate fields preserve reports
+(`core/src/cleanup.rs:242`). Other images within the owned folder are insufficient.
+
+**Verified in code:** WER deletion no longer uses recursive remove_dir_all.
+Preflight accepts at most 256 ordinary files in one flat report folder and
+opens all files with Windows sharing guards before mutation
+(`core/src/cleanup.rs:347`). Linked/nested/unreadable/over-budget reports remain
+untouched at preflight. Attribution is reread through its held metadata handle,
+attachments are unlinked in deterministic order, Report.wer is removed last,
+and only an empty folder can be removed (`core/src/cleanup.rs:376`). An
+attachment deletion failure can leave partial contents but retains attribution
+for a later completed session. A new entry/final directory error after metadata
+removal can still leave an unattributed remainder; this is not a transaction
+or hostile-host race defense. No privileges, WER APIs or reporting settings
+are changed.
+
+**Documented / corrected mismatch:** The current-user WER gap was confirmed
+in the prior code and is addressed by this patch. The hypothesis that raw dumps
+are always preserved was too broad: attributed report directories could already
+contain deleted dump attachments, while standalone CrashDumps were kept.
+README, SECURITY, SPEC, UPDATE-SAFETY and the earlier summary row now distinguish
+these cases, disclose sensitive memory retention and OS upload limits, and link
+[WER cleanup safety](WER-CLEANUP-SAFETY.md). Git history shows the committed
+cleanup code was last changed by `e5e6fa0`, while README, SECURITY, SPEC and
+UPDATE-SAFETY were last changed by `ca4633d` before this WER implementation.
+The preceding uncommitted Recent patch did not add per-user WER coverage.
+
+**Tested:** `cargo test --locked --target x86_64-pc-windows-msvc -p nomad-core
+cleanup::tests -- --nocapture` passed all 27 cleanup tests on Windows 11 build
+26200. Eight new WER regressions cover user/machine queues and archives,
+UTF-8-BOM/UTF-16LE report-shaped metadata, ordinary dump/XML attachments,
+unrelated/misleading-name reports, invalid/duplicate/NUL/missing-image metadata,
+other owned executables, image/root junctions, parent/device/network paths,
+nested/linked/over-budget reports and the exact file-count boundary. Native
+sharing tests preserve an active reader, then retry successfully; a DELETE-only
+handle causes a real partial deletion failure, leaves Report.wer, then allows
+successful retry when closed. These are inert authored synthetic fixtures,
+not real captured WER reports or memory dumps.
+
+**Tested:** `pwsh -NoProfile -File scripts/check.ps1` passed formatting, strict
+Clippy, 486 core unit tests, 12 integration tests and two metadata regressions
+(500 total), artifact/build/release/CI/audit fixtures, and the completed clean
+dependency audit without registry diagnostics. Four native registry tests and
+eight live-upstream/download tests remain ignored. The separate
+`cargo +1.92 check --workspace --all-targets --locked --target
+x86_64-pc-windows-msvc --target-dir target/msrv-1.92` compatibility check passed
+(compilation, not another runtime run). Logs are
+`target/wer-cleanup-targeted.log`, `target/wer-cleanup-check.log` and
+`target/wer-cleanup-msrv-check.log`. Cargo.lock is unchanged; no real host
+report/dump access, deletion, crash generation, upload, browser launch,
+installer, persistent user/system configuration change or hardware probe was
+used. `git diff --check` passed.
+
+**Not tested / remaining:** Real Windows 10/11 Report.wer captures and live
+browser-crash cleanup are unverified. Synthetic text/sharing fixtures prove
+these ownership and failure-path controls, not every OS serialization or store
+location. Standalone/custom/browser dump stores, WER uploads before cleanup,
+missed-session recovery and concurrency remain residual limits. Other audit
+priorities, including critical hardening-write failures, link-only update
+freshness, Ungoogled Chromium components and remaining browser/Helium runtime
+gaps, remain open. The privacy/security rating is not reassessed upward and
+v1.0.9 stays on hold.
+
+## Required hardening-failure follow-up (2026-10-14)
+
+Base remains `ca4633d676ddac433eff4248950de8242d90405a` on
+`codex/privacy-security-followup`. Recent and WER working-tree changes were
+already uncommitted at the start; this required-settings change is also local
+and uncommitted. Cargo.lock is unchanged. No push, merge, tag, release or remote
+CI result is claimed.
+
+**Verified in code / corrected gap:** Earlier active-launch privacy/policy writes
+and hardening withdrawal could warn and continue. Update-error fallback skipped
+those writes entirely. Required preparation now propagates typed failure
+(`core/src/lib.rs:1097`, `core/src/lib.rs:1442`, `core/src/browsers/mod.rs:406`)
+and runs for normal, fallback and protocol-style launches. The error UI offers
+Retry/Close and rejects stale Launch anyway clicks (`core/src/lib.rs:1345`).
+Malformed/nonobject JSON, blocked enforced scalar paths, incomplete declared
+autoconfig, and unreadable withdrawal are refused rather than silently skipped.
+Staged required-overlay errors precede the success marker and swap
+(`core/src/updater.rs:317`). See [exact scope and limits](HARDENING-FAILURE-SAFETY.md).
+
+**Verified in code:** Correct managed-file bytes and semantically unchanged
+Chromium JSON are retained, including tested read-only files
+(`core/src/hardening.rs:22`, `core/src/hardening.rs:331`). Extension-policy
+file URLs round-trip reserved/Unicode characters. Safe Browsing logging no
+longer calls DNS filtering a substitute or attributes an empty vendor-managed
+user.js payload to Nomad's privacy profile. Optional extension fetching and
+actual browser policy acceptance remain separate concerns.
+
+**Documented / corrected mismatches:** README, SECURITY, SPEC and UPDATE-SAFETY
+now describe launch refusal, fallback parity, withdrawal failures and per-file
+rather than whole-profile atomicity. README/SPEC also correct the stale blanket
+Helium updater-disable claim: reviewed x64 0.19.2.1 preserves existing service
+consent/update choices. SPEC no longer describes Local State as a one-time
+write or guarantees that retained policies cannot affect site compatibility.
+Git history shows these public documents and lib/hardening were last changed
+by `ca4633d` before the working-tree follow-ups; the reviewed Helium capability
+was committed earlier in `dad9a99`, making the old blanket claim stale.
+
+**Tested:** Canonical `pwsh -NoProfile -File scripts/check.ps1` passed with
+499 core + 12 integration + two metadata tests (513 total), strict Clippy,
+formatting, safety fixtures and the clean dependency audit. Thirteen new
+regressions use inert owned fixtures for required settings, withdrawal, encoded
+URLs, read-only no-ops, GUI-state fallback refusal and pre-swap preservation.
+Four native registry and eight live-upstream/download tests remain ignored.
+Rust 1.92 workspace/all-target locked compilation also passed. Logs and exact
+commands are in [required-settings safety](HARDENING-FAILURE-SAFETY.md).
+No real browser, installer, cleanup, persistent host configuration change or
+hardware probe was used for this follow-up.
+
+**Not tested / remaining:** Actual GUI/browser enforcement, Windows 10 execution,
+read-denied ACLs and hostile concurrent modification remain unverified. Earlier
+successful file writes can remain after a later failure; post-swap profile errors
+do not roll back the new bundle. Link-only update freshness, Ungoogled Chromium
+components, missed-cleanup recovery, real captured Recent/WER artifacts and
+remaining browser/DNS/Helium runtime checks remain open. Rating stays 3/5 and
+v1.0.9 remains on hold. Next priority is link-only update freshness without
+violating the launch-only protocol invariant.
+
+## Protocol update-freshness follow-up (2026-10-14)
+
+Base remains `ca4633d676ddac433eff4248950de8242d90405a` on
+`codex/privacy-security-followup`. Recent, WER and required-hardening changes
+were already uncommitted and remain in scope. This change is local/uncommitted
+as well; no push, merge, tag, release or remote CI is claimed.
+
+**Verified in code:** A protocol origin forces check/download options off at the
+pipeline boundary (`core/src/lib.rs:645`). Its default-on local reminder
+(`core/src/lib.rs:425`, `core/src/protocol_freshness.rs:24`) gives Continue opening
+link/Close for unknown/seven-day-old metadata or a recorded uninstalled version.
+It cannot start an update. Continue acknowledges advice for 24 hours, then runs
+normal required launch preparation. Close cancels. Opt-out is
+`[update] remind_on_protocol = false`; it defaults true when absent. No new
+endpoint, forwarded-target logging or per-link counter is added.
+
+**Verified in code:** Managed-extension successful lookup time/version is a
+separate bounded atomic receipt (`core/src/version_cache.rs:212`), not an
+installed-version-cache rewrite. Deferred/failed promotions retain installed
+cache bytes and working extension bytes. Future browser cache timestamps cannot
+suppress a direct refresh. Unknown, malformed, oversized or linked advisory
+state cannot assert freshness. [Data, controls and limits](PROTOCOL-UPDATE-FRESHNESS.md)
+cover plaintext records, indefinite retention, clocks, cooldown behavior and
+browser-managed components/extensions.
+
+**Documented / disposition:** The link-only indefinite-freshness gap is mitigated
+with visible local advice, not eliminated. Users can continue/opt out indefinitely.
+The seven-day interval is a reminder policy, not a security promise or update
+schedule. README, SPEC, SECURITY and UPDATE-SAFETY now describe that distinction
+and the two new local state files; no claim of automatic protocol updates is made.
+
+**Tested:** Canonical `pwsh -NoProfile -File scripts/check.ps1` passed formatting,
+strict Clippy, 508 core + 12 integration + two metadata tests (522 total), safety
+fixtures and clean dependency audit. Nine new inert regressions cover age/deferred
+metadata, scoped cooldowns, cache/receipt bounds and links, independent lookup
+versus installation state, legacy/opt-out config, fixed-window layout, Continue,
+Close, stale actions and protocol-option enforcement. AMO/gorhill deferred mocks
+also verify receipts, and existing failed-promotion preservation tests still pass.
+Four native registry/eight live-upstream/download tests remain ignored. Rust 1.92
+workspace/all-target compilation passed; exact commands/logs are in the linked
+runbook. No real browser, installer, watcher or persistent host mutation was used
+for this follow-up. Cargo.lock is unchanged.
+
+**Not tested / remaining:** Native Windows handoff/rendering/live-browser behavior
+and Windows 10 execution need disposable validation. Metadata is not attested
+freshness or installed-byte/extension/filter verification. The privacy/security
+rating remains 3/5 and v1.0.9 remains on hold. Ungoogled Chromium component-update
+handling is the next priority; missed-cleanup recovery, captured Recent/WER
+artifacts and remaining browser/DNS/Helium runtime checks remain open.
+
+## Ungoogled Chromium component follow-up (2026-10-14)
+
+Base remains `ca4633d676ddac433eff4248950de8242d90405a` on
+`codex/privacy-security-followup`; this and the preceding Recent/WER/hardening/
+protocol reminder changes are local and uncommitted. No push, merge, tag,
+release or remote CI result is claimed.
+
+**Verified in code:** The default hardening component-disable flag remains;
+Ungoogled's adapter now supplies a standing CRLSet limitation to the launcher's
+runtime details (`core/src/browsers/ungoogled.rs:309`, `core/src/lib.rs:605`,
+`core/src/ui/mod.rs:420`) and logs it during required preparation. This display
+is independent of the hardening toggle and does not query or migrate profiles.
+No endpoint, component downloader, permissions or update flags were changed.
+
+**Verified in pinned upstream source / inference:** Windows release
+155.0.8059.39-1.1 packaging commit `989b4382364baaddb8b3180e1eb1030ca96a7273`
+uses core `ffeb45a2bb88bc56a1dfed31410aeb10e9efcd5a` (155.0.8059.39, revision 1).
+Chromium's startup flag guard suppresses component registration, while CRLSet
+registration still exists. The prescribed Windows source build rewrites the
+normal service URLs to placeholder domains. Removing a Nomad flag alone does
+not restore that normal service path; this is source-based inference, not live
+proof of the published binary. [Pinned evidence and source links](UNGOOGLED-COMPONENT-UPDATES.md)
+also distinguish CRLSet freshness from ordinary TLS/CT/DNS controls and Helium's
+separate consented service.
+
+**Documented / corrected mismatch:** README, SECURITY, SPEC and UPDATE-SAFETY
+now disclose the two barriers and do not imply a launcher flag is the whole
+cause or that toggling hardening restores freshness. A current verified browser
+bundle is not proof of current revocation data. The retained flag may also
+prevent discovering/loading existing CRLSet data through registration; that
+runtime effect is unverified. UPDATE-SAFETY's stale acceptance of empty Chromium
+settings was corrected to match the preceding required-hardening patch, which
+refuses empty/nonobject existing settings. Git history shows these documents
+last committed in `ca4633d`; the later working-tree hardening change had already
+made the old empty-file sentence stale.
+
+**Tested:** An owned offline text script verified 24 source snapshots against
+saved SHA-256 values and reproduced endpoint rewriting. Twenty-seven pinned
+Windows patches were searched; the relevant private-token patch was read.
+Source archives were read in memory, not executed or unpacked into browser
+installations. No component-service or real-browser contact occurred.
+Canonical `pwsh -NoProfile -File scripts/check.ps1` passed formatting, strict
+Clippy, 510 core + 12 integration + two metadata tests (524 total), safety
+fixtures and clean dependency audit. Two new regressions cover disclosure,
+unchanged flag/URL behavior and fixed-window button bounds. Four native registry
+and eight live-upstream/download tests remain ignored. Rust 1.92 workspace/
+all-target compilation passed, including the updated local UI preview example.
+Cargo.lock is unchanged. Exact commands, pins, logs and omitted work are linked
+above.
+
+**Remaining:** This completes the scoped source review and launcher disclosure,
+not CRLSet refresh restoration. Published-binary/network/runtime validation,
+existing component loading and any secure refresh design remain open. The
+rating stays 3/5 and v1.0.9 stays on hold. Next priority is missed-cleanup
+recovery after crash/power loss/drive removal, with remaining captured Recent/
+WER and browser/DNS/Helium checks still pending.
+
+
+## Missed-cleanup recovery follow-up (2026-10-14)
+
+Base remains `ca4633d676ddac433eff4248950de8242d90405a` on
+`codex/privacy-security-followup`. This and the preceding Recent/WER/required-
+settings/protocol/component changes remain local and uncommitted; nothing is
+staged. No commit, push, merge, remote CI, tag or release result is claimed.
+
+**Verified in code:** `[hardening] recover_missed_cleanup` defaults true,
+independently of `enabled` (`core/src/config.rs:241`). GUI direct and registered
+link/file launch attempts retry pending owned cleanup after taking the install
+lock and before update/runtime work (`core/src/lib.rs:688`). Required preparation
+precedes arming before both normal/fallback spawns (`core/src/lib.rs:1155`,
+`core/src/lib.rs:1503`). The new journal serializes browser family and original
+canonical root/image paths, uses nested Windows user/machine DPAPI protection,
+exclusive synced writes, bounded reads/listing, deduplication and no foreign
+record eviction (`core/src/cleanup_recovery.rs:32`, `:135`, `:180`). Failed arming
+warns and permits launch. There is no plaintext fallback.
+
+**Verified in code:** Recovery only invokes attributed Recent/WER cleanup;
+shared profiles/cache actions, Prefetch, registry repair and process creation/
+termination are not replayed (`core/src/cleanup_recovery.rs:258`). Matching
+ownership, ordinary existing image/path and original root are required. Running,
+unknown/denied/ambiguous same-name processes, moved/unreadable records and lock
+contention preserve intent. The strict native process check fails closed on
+incomplete enumeration (`core/src/cleanup_process.rs:110`). Ordinary post-exit
+cleanup also takes the install lock and requires this proof (`core/src/lib.rs:1845`);
+the advisory PID/tree wait is not deletion authority. Nested images select the
+outer bundle folder's lock (`core/src/cleanup.rs:49`). Completed scoped attempts
+retire only unchanged bounded record bytes; scanner/deletion failures keep intent
+for retry (`core/src/cleanup.rs:166`, `core/src/cleanup_recovery.rs:224`).
+
+**Documented upstream / inference:** The nested binding follows Microsoft's
+[DPAPI contract](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata),
+including its roaming-profile exception. Requiring original user and computer
+is the intended design; native binding across sessions/accounts/machines remains
+unverified. Ciphertext/format metadata, filesystem times and existing path logs
+remain observable. The journal does not encrypt browser profiles/logs or defend
+against stolen keys, malicious drive writers or a compromised host. The linked
+[data inventory, retention, controls and limits](MISSED-CLEANUP-RECOVERY.md)
+records defaults/opt-out, 32-record/64-entry/64-KiB bounds, exact-capacity behavior,
+no eviction/expiry and manual removal. No new Nomad endpoint/client is added;
+OS key-store/domain behavior has not been instrumented.
+
+**Documented / disposition:** Earlier statements in this audit that no replay
+exists describe the pre-patch state. Hypothesis 5 is now mitigated for recorded
+sessions under the original context/path, not refuted as a universal guarantee.
+Old unrecorded sessions, failed/lost writes, moved/absent images, lost keys,
+unsupported metadata and non-Nomad process/path races can still leave traces.
+Completion is an attributed scan attempt, not trace-free Windows or proof that
+all reports were removed. Shared opt-in actions never replay. README, SECURITY,
+SPEC, UPDATE-SAFETY and Recent/WER runbooks now describe that distinction.
+
+**Tested:** Canonical `pwsh -NoProfile -File scripts/check.ps1` passed formatting,
+strict Clippy, 531 core + 12 integration + two metadata tests (545 total), safeguard
+fixtures and clean dependency audit. Rust 1.92 workspace/all-target compilation
+passed. Twenty-one new regressions use injected fake context codecs/process
+states, literal path comparisons and owned inert roots. Real Windows file-share
+handles prove a busy authored WER fixture preserves intent, then cleanup/record
+retirement succeeds after release while an unrelated standalone dump stays.
+Wrong simulated machine/user, moved scope, missing ownership, unknown/running
+process decisions, coordinator contention, malformed/linked/over-budget state,
+no plaintext fallback, duplicate intent, changed/locked retirement, nested-image
+locking and directory capacity have preservation coverage. Cargo.lock and staged
+index are unchanged. Commands/logs and fixture limits are in the linked runbook.
+Four native registry/eight live-upstream/download tests remain ignored.
+
+**Not tested / next priority:** Native DPAPI round trips/foreign-user or foreign-
+machine refusal, the new native snapshot/query path against real browsers,
+interrupted workers, power loss, drive removal and Windows 10 execution need
+disposable validation. No real browser, watcher, crash, WER upload or personal
+host cleanup was exercised for this patch. Captured Explorer/WER artifacts and
+remaining browser/DNS/Helium checks remain pending; Ungoogled CRLSet restoration
+is still unresolved. Next priority is disposable native recovery qualification
+before publishing. Rating remains 3/5 and v1.0.9 remains on hold.
+
+
+## Native cleanup-recovery qualification preparation (2026-10-14)
+
+This follow-up is still local/uncommitted on `codex/privacy-security-followup`
+at base `ca4633d676ddac433eff4248950de8242d90405a`; previous working-tree fixes
+remain in scope and unchanged in disposition. No commit, push, merge, CI, tag,
+release or native Sandbox test result is claimed.
+
+**Verified in code:** A Windows-only lib-test module adds four explicitly ignored
+native suite/helper functions (`core/src/cleanup_recovery/sandbox_tests.rs`).
+Production launcher binaries do not contain this module. The primary suite uses
+actual DPAPI, bounded journal logic, process-path queries and file coordination,
+but routes deletion only to owned fake host roots. It checks running/ambiguous
+inert images, cross-process intent, an intentionally terminated inert worker,
+missing/restored images, moved/original paths and foreign-report/dump preservation.
+Public-payload encryption/tamper samples are not a general crypto proof. A later
+foreign-context function is an observation, not isolated same-machine/different-
+user qualification or proof of independent machine keys.
+
+**Verified in code:** Preparation builds without running the harness, pins its
+Cargo JSON artifact and a before/after source inventory, and creates a fresh
+`.wsb` package with read-only inputs and a dedicated writable output mapping.
+The logon command runs the guest-only fixture after the user opens that file.
+Networking/clipboard/device sharing are disabled. Export refuses linked,
+over-budget and oversized evidence, copies only selected inert fixture files,
+and records hashes/diagnostics. The repository host verifier performs read-only
+bounded schema/path/hash/provenance/assertion/log checks, including Windows
+reserved device names and typed booleans. Operational Sandbox account/path/owner
+checks prevent accidental host use, not malicious guard spoofing. Source hashes
+and guest reports are not signed attestations. No personal host folder is mapped,
+and no browser/registry/account provisioning is performed. The full data/mapping/
+retention limits and pending cases are in [the runbook](CLEANUP-RECOVERY-QUALIFICATION.md).
+
+**Tested:** Canonical `pwsh -NoProfile -File scripts/check.ps1` passed formatting,
+strict Clippy, 532 core + 12 integration + two metadata tests (546 total),
+safeguard fixtures and clean dependency audit. New ordinary token and offline
+export-metadata regressions ran without native guest operations. The latter
+passed on PowerShell 5.1 and 7, including owned-junction refusal/unlink, traversal,
+reserved devices, aliases, duplicate entries, invalid sizes/hashes, provenance,
+failed-run and string-for-boolean rejection. Gate mocks verify recovery-fixture
+failure stops dependent Cargo operations. Four new native suite/helper tests
+remain ignored, alongside four native registry and eight live-upstream/download
+cases (16 ignored total). Rust 1.92 workspace/all-target compilation passed.
+Logs are `target/cleanup-native-preparation-check.log` and
+`target/cleanup-native-preparation-msrv.log`. Package preparation completed;
+its inputs/build manifest and `.wsb` are under an owned
+`target/cleanup-recovery-native-<guid>` folder. Cargo.lock and index are unchanged.
+
+**Remaining / next action:** Open the newly prepared `.wsb` in a fresh Sandbox,
+retain its console output, and independently verify the mapped receipt/files
+before closing the guest or claiming a native pass. This does not execute the
+full production watcher/launcher or browser, physically remove a drive, interrupt
+power, test access-denied process queries or prove different-user/machine key
+isolation. Those and Windows 10/real captured artifact/browser/DNS/Helium checks
+remain pending. Ungoogled CRLSet restoration is still unresolved. Rating 3/5 and
+the v1.0.9 hold remain.
+
+
+## Recovery guest evidence / receipt follow-up (2026-10-14)
+
+**Tested / observed:** Two Windows Sandbox build 26100 primary logs report the
+native fixture suite passed (2.69s and 2.51s). Each exports 23 files plus eight
+hash-only references. The host independently verified the 23 copied file hashes,
+source record and harness SHA-256
+`7272742C9CD467ECE24E440B1F0940C466F42CC090DF7F4155480BE94C1D0A5C`.
+Result assertions cover DPAPI samples, native image states, interrupted inert
+worker lock release/cross-process replay, moved/missing image preservation and
+owned/foreign fake WER behavior. These remain module fixtures, not production
+browser/watcher, power-loss, drive-removal or different-user/machine validation.
+
+**Verified / blocked completion:** Both original receipts saved a null process
+exit code. The normal host verifier rejected them; independent partial reports
+preserve that limitation and the unchanged original receipts. No exit code is
+fabricated from logs and no fully verified native pass is claimed. The
+[runbook](CLEANUP-RECOVERY-QUALIFICATION.md#first-guest-observations-and-exit-capture-correction-2026-10-14)
+records exact tokens and provenance.
+
+**Verified in code / tested:** A dedicated no-shell/no-window process helper now
+retains the native process handle before waiting, drains redirected output and
+requires a numeric code. New PowerShell 5.1/7 fixtures check inert child codes 0/7,
+timeout refusal and null-receipt refusal. Canonical gate passed again (546 tests,
+formatting, strict Clippy, safeguards and clean dependency audit); log
+`target/cleanup-exit-capture-fix-check.log`. Core/harness bytes are unchanged.
+Original mapped inputs/evidence will be retained before promoting the four-input
+corrected runner/manifest. A same-guest rerun and full host verification remain
+required. This is local/uncommitted on `codex/privacy-security-followup` at base
+`ca4633d676ddac433eff4248950de8242d90405a`; index/Cargo.lock unchanged. Rating 3/5
+and the v1.0.9 hold remain.
+
+
+## Recovery primary native fixture verified (2026-10-14)
+
+**Tested:** Corrected rerun `fab950f9929949ccb45aaf5f079b4c79` passed the exact
+native lib test in 2.44 seconds on Windows build 26100, with captured exit code 0,
+empty stderr and eleven true assertion fields. The repository host verifier
+independently checked 23 copied file hashes, base/source/harness identity, typed
+results and completion log. A separate unmapped host snapshot was copied and
+reverified under the original package's `VerifiedEvidence/primary-<token>/`,
+with a saved `HOST-VERIFICATION.json`. Eight hash-only executable references are
+observations; large guest executable bytes were not independently copied/verified.
+Guest receipt hash is
+`1CEED1E110CB5300870837DAD85B151438850B6784A7344FFF8B43344694403D`;
+harness/source hashes and precise cases are in the
+[verified primary record](CLEANUP-RECOVERY-QUALIFICATION.md#primary-fixture-verified-2026-10-14).
+The two null-exit observations and original inputs remain preserved and partial.
+
+**Disposition:** Primary inert same-context DPAPI samples, native process-path
+classification, interrupted inert worker lock release/cross-process intent replay,
+moved/missing image preservation and attributed fake WER cleanup are now covered
+by this Windows 11 fixture. This does not prove full production watcher/browser
+behavior, different-user isolation, independently keyed machines, physical power
+loss/drive removal, query-denial cases, Windows 10 or captured Explorer/WER forms.
+A new `Nomad-Recovery-Foreign.wsb` is prepared with only verified public-payload
+blobs/read-only test inputs and dedicated writable output. The preparation
+state is superseded by the failed foreign observation below.
+Second-context refusal is an observation, not proof that Sandbox keys are unique.
+
+Only documentation and owned evidence/configuration artifacts changed for this
+record; prior canonical gate remains 546 passed/16 ignored with strict Clippy,
+safeguards and clean dependency audit, and Rust 1.92 passed. Branch remains
+`codex/privacy-security-followup`, base `ca4633d676ddac433eff4248950de8242d90405a`,
+with local uncommitted changes and no push/merge/release. Rating 3/5 and the v1.0.9
+hold remain; Ungoogled CRLSet and other recorded runtime gaps remain unresolved.
+
+## Recovery foreign-context refusal failed (2026-10-14)
+
+**Tested / host-verified evidence:** Windows 11 second-Sandbox run
+`a38f529946ae4984a38dfa95df4cadca` failed in 0.02 seconds with actual exit 101.
+The host checked all four copied files, typed result fields, failure logs and
+base/source/harness provenance. The normal success verifier rejected it. An
+unmapped snapshot and `HOST-PARTIAL-VERIFICATION.json` preserve the unchanged
+receipt and failed result; no complete qualification pass is claimed.
+
+**Tested:** The nested recovery-codec sample was refused, while the machine-only
+comparison sample decrypted. **Inference:** Reused/cloned machine key material
+could explain it; the cause and exact nested failure layer are unmeasured. This
+is not evidence that a production recovery journal decrypted across users or
+independently initialized machines. Neither fresh Sandbox isolation nor full
+user/machine separation is qualified. No assertion was weakened and no key
+material was inspected/exported. [Full result and next qualification](CLEANUP-RECOVERY-QUALIFICATION.md#foreign-context-refusal-failed-2026-10-14).
+
+Documentation and owned evidence artifacts alone changed. The prior canonical
+gate (546 passed, 16 ignored) and MSRV result are historical, not rerun for this
+record. All implementation changes remain local/uncommitted. Rating 3/5 and the
+v1.0.9 hold remain; independent context and broader runtime gaps are still open.
+
+
+## Production recovery/browser integration preparation (2026-10-14)
+
+**Verified in code / prepared only:** A separate guest-only Helium workflow now
+builds a locked x64 local launcher with artifact/source checks and prepares a
+fresh Sandbox. It tests the production DPAPI journal/watcher/replay with a real
+browser, Windows-created shortcut and synthetic owned/foreign WER fixtures.
+Only an exact retained and corroborated watcher handle may be terminated; the
+user closes the browser normally. It checks old intent retirement, scoped trace
+removal, foreign/standalone preservation, config/marker/bookmark preservation
+and recovery-before-launch logging. The [runbook](RECOVERY-BROWSER-INTEGRATION.md)
+details paths, network/data export, failure handling and remaining limits.
+
+The ordinary gate includes authored process/evidence safety regressions only,
+with mock wiring to stop Cargo if they fail. Native integration is NOT RUN merely
+because the package or scripts exist. No host browser/profile/registry/DPAPI or
+cleanup mutation is requested by preparation. Existing primary and foreign
+qualification evidence remains preserved; different-user/machine and physical
+interruption gaps, rating 3/5 and the v1.0.9 hold remain. Work is local/uncommitted;
+validation/build results will be recorded separately after execution.
+
+
+**Tested local preparation checks:** PowerShell 5.1 and 7 authored integration
+safety fixtures passed. Canonical gate passed again: 546 Rust tests, 16 ignored,
+formatting/strict Clippy, safety fixtures and clean dependency audit
+(`target/recovery-integration-check.log`). The gate now refuses dependent Cargo
+work after an integration-fixture failure. Whitespace checks passed. No actual
+launcher/browser, DPAPI, watcher termination or host cleanup ran in these checks;
+guest integration remains pending and no remote CI/commit/publication is claimed.
+
+
+## Recovery integration logging setup correction (2026-10-14)
+
+**Observed / verified in code:** The user confirmed real Helium opened, the
+public test bookmark was created, built-in uBlock was present and service setup
+was untouched. The Interrupt helper then refused its required watcher-event
+count before any process termination or fixture/config mutation. Its original
+startup omitted `NOMAD_LOG=info` even though watcher/recovery evidence relies on
+INFO events; Nomad defaults to WARN. The current guest's actual event count/log
+still needs diagnostic export. No production recovery failure or integration
+pass is established by this setup exception.
+
+The guest launcher-start wrapper now enables INFO and restores prior environment
+values, including on failed start. PowerShell 5.1/7 scoped mock regressions passed
+without a real process launch. Missing/duplicate/invalid watcher PID events remain
+refused, and retained live-handle/image/arguments/creation-time checks are unchanged.
+Original mapped package inputs stay intact. Export/preserve the initial guest's
+bounded diagnostics before opening a corrected fresh package. The [runbook](RECOVERY-BROWSER-INTEGRATION.md#info-logging-setup-correction-2026-10-14)
+records provenance and limitations. Work remains local/uncommitted; no release
+or remote CI result is claimed, and the v1.0.9 hold remains.
+
+
+**Tested correction checks:** Canonical `pwsh -NoProfile -File scripts/check.ps1`
+passed again (546 tests, 16 ignored, formatting, strict Clippy, safety regressions
+and clean dependency audit); log `target/recovery-integration-logging-check.log`.
+PowerShell 5.1/7 mock fixtures and `git diff --check` passed. Original package
+`recovery-integration-60787c95be9b4ecead7c8d68dce2d49c` input hashes still match
+its original manifest. A corrected package will have its own frozen source/input
+manifest; compilation does not execute guest integration. Diagnostic export and
+production-path recovery remain pending; changes remain local/uncommitted.
+
+
+## Recovery integration active-log export correction (2026-10-14)
+
+**Observed / preserved partial evidence:** Original diagnostic export failed when
+rehashing the source log held by the live watcher. Its copied state/log are now
+bounded, hashed and preserved in an unmapped host snapshot with the original
+input manifest and `HOST-PARTIAL-VERIFICATION.json`. The copied log has only WARN
+entries and zero watcher-spawn events, corroborating the missing INFO setup.
+The missing guest receipt/live-source hash and unestablished guest source identity
+are explicit. This is incomplete copied-output preservation, not a completed
+transfer or native interruption/recovery pass. No worker was stopped at the prior
+watcher-identification refusal.
+
+**Verified in code / tested:** Shared read handles now capture bounded log/file
+prefixes without releasing the writer. Exports hash the captured buffer and new
+copy, rather than comparing against a live source that can change. Live-log reads
+use the same path. PowerShell 5.1/7 authored held-writer fixtures passed for shared
+capture, later append preservation, exclusive/oversize/overwrite refusal and empty
+files. Capture is not an atomic history or guest attestation; success acceptance
+rules remain unchanged. [Exact partial provenance and capture limits](RECOVERY-BROWSER-INTEGRATION.md#active-log-capture-correction-and-preserved-partial-attempt-2026-10-14).
+
+The old mapped inputs/evidence remain intact; use a new package with both logging
+and shared-read fixes. Host browser/DPAPI/cleanup was not run by these regression
+fixtures. Production integration and release still await guest execution. No
+commit/push/remote CI/release result is claimed.
+
+
+**Tested shared-capture correction checks:** Canonical gate passed again: 546
+Rust tests, 16 ignored, formatting, strict Clippy, offline safety fixtures and
+clean dependency audit; log `target/recovery-integration-snapshot-check.log`.
+PowerShell 5.1/7 held-writer/mock regressions and whitespace checks passed.
+The unmapped partial snapshot was rechecked with its explicit missing-receipt/
+live-source limitations. No browser or watcher was run/stopped by host tests.
+A fresh package with both corrections records its own source/input hashes;
+older packages remain preserved and should not be used for the next attempt.
+Guest integration, remote CI and release remain pending; work is uncommitted.
+
+
+## Helium production-path recovery scenario verified (2026-10-14)
+
+**Tested / host-verified:** Corrected Windows 11 guest session
+`dabb00bb8a144343b797984aa3d80b71` passed interrupted watcher -> normal browser
+close -> direct Nomad relaunch with real Helium 0.19.2.1. The host verified all
+five copied evidence files, typed stage assertions, package provenance and the
+recovery-before-relaunch log sequence. Three input/179 source hashes matched the
+frozen inventory before recording this result. Saved journal metadata agrees
+across state/interruption/closed phases. Initial watcher 6900 was interrupted;
+one old cleanup record was retired before the new browser 5392/watcher 6828.
+
+**Guest assertions / user observation:** The owned Windows-created shortcut and
+synthetic WER report were removed; foreign shortcut/report and standalone inert
+dump were preserved, alongside frozen config, installed marker and public test
+bookmark. The user confirmed bookmark and built-in uBlock remained present.
+An unmapped host snapshot preserves the unchanged receipt, five files, build
+manifest, scoped `HOST-VERIFICATION.json` and separate user confirmation.
+[Full provenance, scope and remaining cases](RECOVERY-BROWSER-INTEGRATION.md#helium-interrupted-worker-recovery-verified-2026-10-14).
+Earlier missing-INFO/partial-export observations remain preserved; the omitted
+bookmark precondition was satisfied before retry without weakening checks.
+
+**Remaining:** Different-user/independent-machine isolation, real power/storage
+interruptions, Windows 10, protocol/other-family/query-denial cases, genuine WER
+forms and browser/DNS/component/installer checks remain unqualified. Ungoogled
+CRLSet restoration remains unresolved. The foreign-context machine-only decryption
+failure is unchanged. Rating 3/5 and v1.0.9 hold remain. Only documentation/evidence
+changed here; the prior gate (546 passed, 16 ignored) remains historical, not rerun.
+Branch `codex/privacy-security-followup` remains local/uncommitted/unpushed.
+
+
+## Local commit checkpoint (2026-10-14)
+
+The owner requested a local commit of the accumulated privacy/security follow-up:
+attributed Recent/WER cleanup, fail-closed required settings, advisory protocol
+freshness, Ungoogled CRLSet disclosure, bounded missed-cleanup recovery and the
+associated regression/Sandbox workflows and documentation. Source changes belong
+to `codex/privacy-security-followup`; Git history identifies the resulting local
+checkpoint. Earlier dated statements that work was uncommitted describe the
+state at those observations. Frozen guest build manifests and original receipts
+remain unchanged and retain their pre-commit base/source identities.
+
+Validation records include the canonical gate (546 tests passed, 16 ignored,
+formatting, strict Clippy, safety fixtures and clean dependency audit), earlier
+Rust 1.92 checking, PowerShell 5.1/7 safeguards, host-verified primary native
+fixtures and the real Windows 11 Helium interrupted-worker/direct-relaunch pass.
+The second-Sandbox machine-only refusal failure and earlier incomplete outputs
+remain recorded, without rewritten assertions or broadened qualification claims.
+Generated executables, logs, guest artifacts and unmapped evidence snapshots under
+`target/` remain local and are excluded from the source commit.
+
+The owner authorized this local commit only. Push/PR/merge, remote CI and release
+publication are separate actions. Remaining runtime/isolation/physical-durability/
+Windows 10 and Ungoogled CRLSet gaps keep the audit rating at 3/5 and v1.0.9 on hold.
+
+
+## Helium DNS observation preparation (2026-10-14)
+
+**Prepared only / verified in code:** The next runtime check observes a public
+nonce hostname with seeded Quad9 secure DoH, then an unreachable loopback DoH
+resolver in a fresh closed guest profile. Source-linked DNS/HTTPS response events
+are distinguished from saved preferences and unrelated requests. Raw NetLog stays
+in the guest; only bounded public observations and receipt/hash references are
+exported. No total packet-leak absence or browser DNS pass is claimed.
+The [runbook](BROWSER-DNS-QUALIFICATION.md) explains paths, endpoints, privacy,
+retention, restore/refusal behavior and measurement limits.
+
+**Tested:** Offline authored source-correlation, privacy filtering, config-argument,
+closed-browser/change-preservation, restore and evidence-integrity fixtures passed
+on PowerShell 5.1 and 7. Gate wiring rejects dependent Cargo work if DNS fixtures
+fail. These tests do not launch a browser or change host DNS. Changes are local/
+uncommitted on `codex/privacy-security-followup`, based on `920a829`.
+Fresh Sandbox observations and independent selected-output verification remain
+pending. Prior recovery/isolation/component limits, rating 3/5 and v1.0.9 hold
+remain. Full gate/build results will be recorded after execution; no push, PR,
+remote CI or release has been performed for this preparation.
+
+
+**Tested full local gate:** `pwsh -NoProfile -File scripts/check.ps1` passed:
+546 Rust tests, 16 ignored, formatting, strict Clippy, offline safety fixtures and
+clean dependency audit. Log: `target/helium-dns-preparation-check.log`.
+PowerShell 5.1/7 DNS fixtures passed; whitespace checks passed. No actual DNS
+observation or remote CI is established. The separate MSRV check is historical,
+not rerun for these PowerShell/documentation-only changes. Package compilation
+and input/source validation are preparation, not guest execution.
+
+
+## Helium baseline collector refusal (2026-10-14)
+
+**User-reported:** CollectBaseline in the first DNS package failed its finalized
+JSON/schema/correlation stage. No observation receipt or DNS success was recorded.
+The capture remains in the guest, and no failure-resolver mutation is authorized
+by this result. The root cause is not established by the generic error.
+
+**Prepared / tested scope:** A read-only `Inspect-Dns-Capture.ps1` diagnostic was
+added under the existing mapped Input/DnsDiagnostics directory. Original four
+inputs still match their frozen manifest. It reads only the bounded closed-browser
+capture, reports JSON conversion versus a whitelisted parser refusal or exception
+type/line, and suppresses raw values and arbitrary exception text. It exports
+nothing and performs no launch, DNS/profile write or cleanup. Syntax and host-
+execution refusal were checked; actual guest diagnostic/result remains pending.
+Earlier source inventory describes the original package, not this later diagnostic.
+The earlier full gate is historical; no new full-gate/native DNS pass is claimed.
+
+
+## Signed NetLog source-ID correction (2026-10-14)
+
+**User-reported diagnostic:** The original baseline is valid JSON (591,492 bytes,
+2,364 events), with event/phase dictionaries present. The original parser refused
+`Invalid event identity or phase`; no baseline DNS result is yet established.
+
+**Verified in code / upstream source:** The parser erroneously required source
+IDs to be nonnegative. Chromium initializes a separate partition at int32 minimum
+and serializes uint32 IDs via signed int32. Negative IDs can therefore be valid.
+[Source partition](https://raw.githubusercontent.com/chromium/chromium/main/net/log/net_log.cc)
+and [entry serialization](https://raw.githubusercontent.com/chromium/chromium/main/net/log/net_log_entry.cc).
+This is a confirmed parser defect; its role in this particular guest refusal
+still needs the existing-capture follow-up, not an assumed DNS pass.
+
+**Tested / prepared:** Signed int32 IDs and matching dependency IDs are now
+accepted without converting signs or merging identities. Zero selected IDs,
+non-integer/out-of-range IDs, wrong endpoints and unrelated requests remain
+refused. PowerShell 5.1/7 signed-partition and JSON-round-trip fixtures passed,
+alongside altered-correction-file/receipt refusal. A separately hashed collector
+can reprocess the original closed-browser capture, report negative-ID count and
+whether the frozen parser reproduced its refusal, export only selected observations
+and update collection bookkeeping. Original four package inputs/manifests remain
+unchanged. Browser, raw capture, DNS/profile choices are not rewritten or relaunched.
+Original build source identity and corrected analysis provenance are separate.
+Actual corrected guest result and independent host evidence checking remain pending.
+
+
+**Tested correction gate / prepared mapping:** Canonical local gate passed
+(`target/helium-dns-signed-id-check.log`): formatting, strict Clippy, 546 Rust tests
+passed / 16 ignored, offline safeguards and clean dependency audit. Windows
+PowerShell host execution of the recollector refused at its guest guard. Two
+correction inputs were copied/hash-checked under the existing readonly mapping;
+original four inputs still match the original build manifest. Correction manifest
+SHA256: `2749671A7E5C9E83B8D77B29762A3DF93E551AABB40B6EA82AD4B8F165670C43`.
+Guest reanalysis and host selected-output verification remain pending. Work stays
+local/uncommitted; no push, remote CI or release result is claimed.
+
+
+## Helium secure DNS baseline selected evidence verified (2026-10-14)
+
+**Guest observation / host-verified selected evidence:** Session
+`e68ca8a1ffab42afa571297eec5b6725` reports three source-correlated Quad9 DoH
+transactions and replies, with saved secure DNS choices matching the test. Host
+checks validated the selected observation/receipt hash, four original inputs,
+two corrected-analysis inputs and their correction manifest, provenance and the
+three selected begin -> DoH dependency -> reply sequences. Replies have rcode 0,
+net_error 0 and no answers; this establishes the observed DNS transport, not a
+working test web page. No recognized classic/system probe attempt was reported.
+Raw NetLog was not transferred/replayed independently and total packet-leak absence
+is explicitly false. Helium-services URL-job host names appear in the filtered
+inventory; this alone does not establish successful connections or telemetry.
+
+The capture contained 74 negative source-ID events, reproducing the original
+parser identity refusal; corrected analysis completed on those same guest bytes.
+Original browser source hash `A7CAB4C1A426D61A43413735038B0339F457FE224D64BBBFD9B6B29461DC29AD`
+and correction manifest `2749671A7E5C9E83B8D77B29762A3DF93E551AABB40B6EA82AD4B8F165670C43`
+remain distinct. Receipt SHA256:
+`930F422437DCF44E7D87F028FCEAE2139C2C8642A6C1D0E4C4C684BAA8F20AA3`.
+An unmapped `VerifiedEvidence/baseline-e68ca8a1ffab42afa571297eec5b6725-0ac94ab819554540a1e570ad044c3d18`
+snapshot retains unchanged selected files, original/correction script manifests
+and a scoped host verification record; the launcher is a checked hash-only
+reference and raw capture remains guest-only.
+
+**Next / prepared only:** A separately hashed existing-session continuation uses
+the corrected parser for controlled resolver failure, collection and restoration.
+Its source excludes Fresh/provisioning and preserves the validated resolver-
+mutation functions. PowerShell 5.1/7 continuation guards/syntax, identical safety
+functions and offline DNS fixtures passed. The original four inputs and baseline
+correction inputs are preserved. Controlled failure and subsequent restoration
+still require guest execution and host evidence review; no fail-closed runtime
+claim is made yet. All broader audit gaps/rating 3/5/release hold remain. Changes
+are local/uncommitted; no push or remote CI has run for this work.
+
+
+**Tested continuation gate / prepared inputs:** Canonical gate passed again
+(`target/helium-dns-continuation-check.log`): 546 tests passed, 16 ignored,
+formatting, strict Clippy, offline safety fixtures and clean dependency audit.
+The prepared DnsContinuation input manifest SHA256 is
+`F8AF10436C9CABE1217E3BB59EF9F75786E8A1C3C35D9A6EF559597B0BD4549E`.
+All four continuation copies match their sources; original inputs and baseline
+correction still verify. This reuses the original launcher bytes, with separately
+identified workflow inputs; no fresh compilation or guest failure/restore result
+is claimed. No production Rust change or host DNS/profile mutation occurred.
+
+
+## Prelaunch resolver-fault fixture invalid (2026-10-14)
+
+**Guest observation / host-verified selected evidence:** Failure session
+`e68ca8a1ffab42afa571297eec5b6725` produced an inconclusive result: three target
+transactions, zero correlated loopback DoH attempts, saved resolver mismatch,
+no recognized plain target attempt. Filtered URL-job hosts include Quad9/Helium
+services; this does not itself prove successful connections. Original receipt
+SHA256 `B6237D1DA2FC704D60F16F25F0978A1DF33556D7834A75D64DA6CE5FD6DD70B3`,
+observation and four continuation inputs matched their hashes. Six unchanged
+selected/provenance files plus a scoped HOST-VERIFICATION record are preserved
+in an unmapped VerifiedEvidence/failure snapshot; launcher is hash-only, raw
+capture is guest-only. No outage or fallback-absence test is qualified.
+
+**Verified in code / tested:** `hardening.rs:287-288` lists both DoH fields in
+`LOCKED_SCALAR_PATHS`; `merge_json_file` reapplies their payload values after
+merging. The existing exact locked-scalar regression passed (one test) on the
+Windows x64 target. **Inference supported by code and saved-choice mismatch:**
+Nomad replaced the helper's prelaunch loopback override with secure Quad9 before
+browser creation. The test design overlooked this enforcement; it is not evidence
+of a production secure-DNS failure. Production hardening is unchanged. The user
+reported Restore confirmed/restored Quad9; a read-only guest Status check remains
+pending rather than claiming independent restoration verification.
+
+Current source refuses the invalid FailClosed phase before state/profile/launch
+actions; historical mapped inputs are preserved unchanged. PowerShell 5.1/7
+refusal, syntax, restore and correlation fixtures passed. README/SPEC, the public
+writer comment and runbook now describe required DoH re-enforcement instead of
+implying all scalar/resolver choices survive the next hardened launch. The live
+runbook withdraws invalid outage instructions. A replacement must cause an actual
+transport failure while retaining required settings; it is not prepared/run yet.
+Baseline selected secure-reply evidence remains valid. Broader runtime/isolation/
+revocation gaps and rating 3/5/v1.0.9 hold remain. Changes stay local/uncommitted.
+
+
+**Validation after fixture retirement:** The first full gate stopped at a new
+Rust documentation-markdown lint before workspace tests; that log is retained.
+The comment lint and an encoding error in this edit were corrected, preserving
+unrelated Unicode text. Canonical rerun passed (`target/helium-dns-invalid-fixture-check-corrected.log`):
+546 tests passed, 16 ignored, formatting, strict Clippy, offline safety fixtures
+and clean dependency audit. Focused locked-scalar test and PowerShell 5.1/7
+fixture refusals passed. Production Rust behavior and historical mapped inputs
+are unchanged. Guest read-only restoration status and a replacement outage test
+remain pending; no remote CI, commit or publishing action occurred.
+
+
+## Replacement DNS transport-fault preparation (2026-10-14)
+
+**User observation:** The preserved continuation's read-only Status reported zero
+browser processes, secure mode and `https://dns.quad9.net/dns-query` after Restore.
+This confirms saved values in the user's console; it is not actual traffic proof.
+
+**Prepared / verified in code:** An existing-session, guest-only replacement
+keeps enforced secure Quad9 and original browser/launcher identity. Two exact
+owned program-scoped outbound TCP/UDP 443 block rules provide a transport fault;
+the helper does not block DNS 53 or change DNS/profile preferences. It requires
+usable enabled guest firewall policy, without enabling global settings. It uses a
+new probe/capture nonce, records restore intent and an owned config backup before
+changes, validates rules/filters in active and persistent stores, and restores
+only its rules/config. All rules are validated before deletion; changed/foreign
+rules, running browsers and user-changed config are refused. Historical inputs,
+receipts, baseline and invalid-attempt snapshots remain intact. The [runbook](BROWSER-DNS-QUALIFICATION.md#program-scoped-guest-https-outage-replacement-fixture)
+details data, scope, failure handling and limits. Blocking matching browser 443
+traffic is not a blanket DNS-leak or host-network claim.
+
+**Tested offline:** PowerShell 5.1/7 source-correlation/fallback, exact rule ownership,
+pre-deletion validation, restore/preservation and typed-fixture evidence regressions
+passed with local mocks and inert temporary files. Host execution refused before
+firewall/profile commands; no real host firewall rule or browser action ran. Native
+guest setup/outage/collection/rule removal remains pending. The 3/5 rating, broader
+privacy/security gaps and release hold remain. Changes are local/uncommitted;
+full-gate and separately hashed preparation results will be recorded after running.
+
+
+**Tested transport preparation gate / frozen inputs:** Canonical gate passed
+(`target/helium-dns-transport-preparation-check.log`): 546 tests passed, 16 ignored,
+formatting, strict Clippy, offline safety regressions and clean dependency audit.
+PowerShell 5.1/7 mocked ownership/restoration/fixture tests passed. Four new input
+copies under the existing readonly Input/DnsFault mapping were hash-checked.
+Manifest SHA256:
+`FABC8B78AD60626C6922D4420034BE459FEB79ABBD765DA59C48A4FDD7B3F0BB`.
+The original launcher is reused, not rebuilt; original/correction/continuation
+receipts and input hashes still verify. A separate user-confirmation record
+preserves the reported saved secure/Quad9 restoration without changing the prior
+failure receipt or host verification. No real firewall rule, browser launch or
+DNS/profile mutation ran on the host. Guest transport fault, collection and owned
+rule/config restoration are NOT RUN by preparation and remain pending.
+Changes stay local/uncommitted; no remote CI, push or release is claimed.
+
+
+## Transport fault restored before collection (2026-10-14)
+
+**User-reported / verified selected restoration:** The fault Start helper reported
+success, then the user invoked Restore before Collect. Restore exported token
+`8e215f4c4aa4489b8ff15b554f7d560f` / export
+`0e166f74dadb4a3e9ea9ae4740c9dc78`. Collect refused the restored intent, as designed.
+The host checked all four frozen fault inputs, receipt/result scope and hash,
+typed zero-rules/config-restored/secure-Quad9 fields and identical config hashes.
+Receipt SHA256 `9AB95EFFABEF5B7FC40EF0D815D3F4EF8AD81F6FA9867E709AA6C2A4C202EF81`.
+Six unchanged selected/provenance files are retained in an unmapped VerifiedEvidence
+restore snapshot, with a scoped host record and hash-only launcher reference.
+No live host firewall replay or outage/fallback qualification is claimed.
+
+**Prepared / tested offline:** A separate read-only post-restore capture recovery
+requires unchanged original inputs, restored/started/uncollected intent, closed
+browser, saved secure Quad9/config hash and no owned rules now in either store.
+It reanalyzes the existing bounded capture, exports selected fields and leaves
+state/profile/config/raw files alone. Historical startup checks are separated
+from unavailable active-at-collection checks; `qualified_fault_fixture` stays
+false. PowerShell 5.1/7 syntax/host-refusal, altered-restoration and false recovered-
+qualification fixtures passed. Original inputs/receipts remain frozen. The
+[runbook](BROWSER-DNS-QUALIFICATION.md#restore-before-collect-recovery) records scope
+and limits. Guest recovery/correlation and selected host checking remain pending.
+Current changes are local/uncommitted; no new browser or firewall action is run
+by host preparation. Full gate results are recorded after execution; broader
+privacy/security gaps, rating 3/5 and the release hold are unchanged.
+
+
+**Tested recovery gate / frozen mapped inputs:** Canonical local gate passed
+(`target/helium-dns-restored-recovery-check.log`): 546 tests passed, 16 ignored,
+formatting, strict Clippy, offline safeguards and clean dependency audit.
+PowerShell 5.1/7 post-restore scope, host refusal and altered-restoration fixtures
+passed. Four Input/DnsFaultRecovery copies matched their sources; manifest SHA256
+`BBB72783008F8A95DB1BD8D6D421923D8C0AD07BF20F554A19814768616D4DE7`.
+Original fault inputs/restore receipt rechecked unchanged. These are preparation
+results; actual recovered guest events and host selected-copy validation remain
+pending. Work remains local/uncommitted, without push, remote CI or release.
+
+
+## Recovered Helium DNS capture reviewed (2026-10-14)
+
+**Tested guest observation / verified selected copied records:** Post-restore
+recovery exported `failed_doh_no_plain_attempt_in_capture`: four target
+transactions, four correlated Quad9 DoH attempts, no recognized plain target
+attempt. Host `Test-DnsEvidenceExport` passed against frozen Input/DnsFaultRecovery;
+`Test-DnsRestoreExport` revalidated the original fault inputs and restoration
+record. Four selected begin/attempt/failed-end sequences and their ordering,
+source IDs, endpoint and negative results were independently checked in the
+selected export. Raw NetLog remains guest-only and was not independently replayed.
+
+Recovery receipt SHA256:
+`C4AEDA6FF61ABDD979BE4B504730F2FCF48BBE49577619C5CB56A83BEBBA1713`.
+Thirteen unchanged selected/provenance/verifier files are preserved outside the
+Sandbox mappings, with a scoped HOST-VERIFICATION.json and hash-only launcher/raw
+references. Original inputs, receipts and prior verification records were retained.
+The guest reports owned rules absent now, matching restored config and secure
+Quad9; host checks validate those typed copied assertions, not live firewall state.
+
+**Unqualified full fault:** Restore preceded Collect. Recovery retains
+`qualified_fault_fixture = false` and `rules_during_capture_rechecked = false`;
+historical startup checks do not substitute for capture-close rule verification.
+The result supports a capture-scoped failed-DoH observation without a recognized
+plain target attempt, not total packet-leak absence or complete outage qualification.
+See the [result and limits](BROWSER-DNS-QUALIFICATION.md#recovered-capture-result-2026-10-14).
+
+Evidence-only preservation/documentation adds no production behavior change.
+The prior canonical local gate remains the recorded validation for the workflow;
+it was not rerun for this evidence record. No remote CI or publication is claimed.
+Current DNS work remains local/uncommitted. Broader privacy/security gaps, rating
+3/5 and the release hold remain unchanged.
+
+
+## Fresh Helium DNS fixture completed (2026-10-14)
+
+**Tested guest / verified selected records:** A fresh Windows 11 Helium 0.19.2.1
+session completed Baseline, Start, normal browser closure, Collect and Restore
+in order. Normal operation recorded three Quad9 DoH replies. The outage capture
+recorded four correlated attempts: three QUIC protocol-error completions and one
+aborted operation, with no recognized plain target attempt. The aborted operation
+is retained separately rather than counted as another completed transport failure.
+Owned-rule/profile checks ran in the guest before collection; secure Quad9 remained
+configured. Restore reported zero owned rules and matching original/restored config
+hashes. The host verified both exports, frozen inputs, selected sequence ordering,
+reviewed browser/module identities and baseline/fault/restore session linkage.
+See [scope, upstream error definitions and receipts](BROWSER-DNS-QUALIFICATION.md#fresh-controlled-fixture-completed-2026-10-14).
+
+Base commit remains `920a8294afde63b4a9629433025a7f69a8eb6075`; the new package
+manifest includes the working changes and source inventory. Source SHA256:
+`04F93821D9466F2C4A033D2358DD0643545F8FA05A34B805CC2F1F6F87BE2A42`.
+Launcher SHA256:
+`D878000B40C578EAA48927A9C22CBD1F39B5862B1A1AB59265781B6EBCAC272B`.
+Fresh session: `5aaec5e79bce4cbdb7a3960f09833ffd`;
+fault: `eb40d791ba494fd78dc2d2b04fe3b70e`.
+Failure receipt SHA256:
+`79E0238858E985BF6C40F27EF23A86795CA2D9C539B414C4DDB4B20E5648BF43`.
+Restore receipt SHA256:
+`80DA05360A98560CCE882D9A38EA70C581EE4F50BD276375E999C0ADFD44421F`.
+Unmapped baseline/failure/restore snapshots each preserve eight unchanged files
+plus HOST-VERIFICATION.json; raw capture/profile stayed guest-only.
+
+**Scoped conclusion:** This closes the Collect-before-Restore guest-fixture gap
+for the exercised version/hostname/interval. It does not establish all-packet leak
+absence, live host firewall replay, indefinite outage behavior, resolver bootstrap
+privacy, other browser families/versions or other platforms/networks. Earlier
+invalid and Restore-before-Collect records remain unchanged and unqualified for
+their original scope. No production code changed. Evidence documentation and
+whitespace were checked; the prior canonical workflow gate remains historical.
+Current changes stay local/uncommitted on `codex/privacy-security-followup`.
+Broader audit gaps, rating 3/5, remote CI and release hold remain unchanged.
+
+
+## DNS commit checkpoint (2026-10-14)
+
+Commit scope: bounded DNS NetLog correlation, disposable Helium preparation,
+read-only diagnostics/recovery, exact-program transport-fault ownership and
+restoration helpers, offline failure/privacy regressions and canonical gate
+wiring. README/SPEC and the Rust comment now accurately describe DoH values as
+re-enforced at hardened launch. Production browser behavior is unchanged.
+The Windows 11 Helium baseline, Collect-before-Restore outage observation and
+restoration records are documented above; older partial/invalid records retain
+their original scope. Ignored local target evidence is not staged in the commit.
+
+**Tested:** `pwsh -NoProfile -File scripts/check.ps1` passed for this checkpoint:
+546 Rust tests passed, 16 ignored, formatting, strict Clippy, offline safety
+fixtures and clean structured dependency audit with the documented RSA advisory
+exception. Log: `target/helium-dns-precommit-check.log`. Windows 10, ignored live/
+registry tests and remote CI were not run by this gate. MSRV results from the
+prior production checkpoint are historical; no runtime Rust behavior changed.
+
+Publication is separate from this local commit. Next work is the outstanding
+Ungoogled Chromium CRLSet runtime gap: determine what the reviewed published
+build actually registers/loads and whether a supported authenticated refresh
+path exists. A newer browser bundle, a removed flag or a manually copied list
+cannot stand in for fresh verified revocation data. Independent-key recovery,
+genuine Windows 10/11 Recent/WER coverage and other browser/runtime checks remain
+separate gaps. The rating stays 3/5 and the release hold remains.
+
+
+## Ungoogled Chromium default runtime snapshot (2026-10-14)
+
+**Tested guest / verified selected copied evidence:** A fresh Windows 11 x64
+155.0.8059.39-1.1 fixture built from committed `a59035c` opened after one Retry
+following a response-body download failure. The user screenshot says no
+components are installed. Status reports the component-disable/background-network
+switches present, no component-URL override, a neutralized updater-host literal
+in the loaded module's file and no CertificateRevocation directory in this fresh
+profile. Literal presence is not active routing; file/directory absence is not
+proof of every certificate-verifier state. Loaded version/refresh are not claimed.
+
+The host verified the four frozen workflow inputs, receipt scope, selected bytes/
+hash, typed assertions and screenshot. Receipt SHA256:
+`967FEDCE5A454A2801009623DF932D99157848AAD6BC6290BB8492CD8D9ED2B0`.
+Nine unchanged evidence/provenance/screenshot files plus HOST-VERIFICATION.json
+are preserved outside Sandbox mappings. Full profiles, network logs and browser
+binaries were not exported. [Exact identities, checks and limits](UNGOOGLED-COMPONENT-UPDATES.md#windows-11-default-runtime-snapshot-2026-10-14)
+distinguish guest module inventory from independent host binary attestation.
+
+**Remaining:** This closes the observed default-component-page/published-module
+literal snapshot gap. It does not restore fresh CRLSet data, measure updater
+traffic, validate loading of an existing component or establish the effect of
+removing a switch. A supported authenticated refresh path still needs design and
+validation. Current source/documentation already discloses the limitation; no
+production flag, endpoint or trust check was changed to obtain this result.
+Different-user/independent-machine recovery, genuine Recent/WER and wider browser/
+platform runtime checks remain separate gaps. Rating 3/5 and release hold remain.
+
+The completed DNS work is committed locally as `a59035c`; these two evidence
+document updates were uncommitted at collection. Their whitespace/UTF-8/LF and
+preserved copy checks passed; the prior 546-test canonical gate is historical,
+not rerun for this evidence-only update. Subsequent branch publication does not
+establish remote CI or release qualification.
+
+
+## CRLSet-only refresh feasibility review (2026-10-14)
+
+**Verified pinned source / scoped inference:** The native unpacker verifies CRX
+signatures against component key requirements before extraction, and CRLSet's
+policy pins SPKI SHA256 `75daf8cb77684033654c97e5c51bcd817b1eeb112ce1a4338cf5725eedb84397`.
+The referenced fetch utility extracts raw data without performing that verification.
+Normal registration includes other components; URL overrides are debug controls
+for the shared service. Cached-data selection/loading depends on registration
+and its manifest/file checks are not a new CRX signature verification on each load.
+The verifier's current-sequence comparison does not alone prove a durable launcher
+rollback/freshness policy. No supported narrow route was identified in the inspected
+interfaces; this is not an exhaustive negative claim about every custom build.
+
+**Tested offline:** Twenty pinned source snapshots were hash-checked and the
+publisher-hash-derived component ID matched the pinned fetch utility. No upstream
+code or verifier was executed, component endpoint contacted, list downloaded,
+profile written or browser launched during this investigation. The
+[feasibility record and upstream capability proposal](CRLSET-REFRESH-FEASIBILITY.md)
+include exact source links, unavailable paths, candidate dispositions and a
+concrete signed-data-only interface/acceptance contract. The proposal is local;
+it has not been posted or sent upstream.
+
+No production workaround, provider consent, endpoint, dependency or flag change
+was introduced. Previous runtime evidence remains unchanged. These documentation
+changes were uncommitted at this review checkpoint; the prior `a59035c` gate is
+historical. The supported
+refresh gap remains unresolved and requires separately validated browser/loading
+capability before an integration can be represented as a fix. Rating 3/5 and the
+release hold remain.
+
+## Waterfox DNS default conflict confirmed (2026-10-15)
+
+The fresh x64 6.7.6 Sandbox screenshots show mode 5, OHTTP true and the upstream
+Waterfox/Cloudflare endpoints. The shared autoconfig disabled TRR despite the
+Waterfox payload comment promising upstream defaults. After normal closure,
+selected guest settings were exported and host-verified against the frozen
+inputs; original evidence is preserved. This does not establish DNS traffic.
+
+A local correction separates the shared non-DNS autoconfig from Floorp-only
+DNS defaults and preserves Waterfox upstream/user choices. Explicit saved DNS
+choices are not reset. The corrected settings/relaunch check below now passed; mode 2
+allows native fallback and does not provide Quad9 malware filtering. See
+[Waterfox DNS defaults, provenance and limits](WATERFOX-DNS-DEFAULTS.md).
+
+The correction's canonical gate passed locally: 549 Rust tests, 16 ignored,
+formatting, strict Clippy, offline safety fixtures and structured dependency
+audit (the existing documented RSA exception remains). These offline results
+do not establish network behavior or remote CI/release qualification.
+
+### Waterfox corrected settings and relaunch result
+
+The user confirmed mode 2 on first corrected launch, then mode 2, OHTTP true,
+the authored **Nomad DNS test** bookmark and enabled uBlock Origin after normal
+closure and one helper relaunch. These are user text confirmations, without a
+corrected-build screenshot. Final guest collection reports original config
+restoration, unchanged installed marker and the expected corrected autoconfig;
+all seven selected DNS user values remain absent. Host verification checked
+selected bytes, provenance and the six original/corrected input files and
+preserved eight unchanged evidence/helper files. Receipt SHA256:
+`85E0AC589BA86A6FD04BFC3881252546B70500569F711A3F073B6E0962062139`.
+
+The settings/preservation check is complete for this instance; actual OHTTP/DNS
+traffic and broader platform/profile coverage remain unverified. Mode 2 allows
+native DNS fallback. The full limitations and provenance are in
+[Waterfox DNS defaults](WATERFOX-DNS-DEFAULTS.md). No production installation or
+release was performed; subsequent commit/push delivery does not extend these
+test results. The broader audit/release hold remains.

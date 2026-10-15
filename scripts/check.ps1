@@ -44,6 +44,15 @@ try {
         Invoke-GateStep 'CI safeguard regression fixtures' {
             pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-ci-safeguards.ps1')
         }
+        Invoke-GateStep 'Recovery evidence regression fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-cleanup-recovery-sandbox.ps1')
+        }
+        Invoke-GateStep 'Recovery integration safety fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-recovery-integration.ps1')
+        }
+        Invoke-GateStep 'DNS observation safety fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-dns-netlog.ps1')
+        }
         Invoke-GateStep 'Formatting' {
             cargo fmt --all -- --check
         }
@@ -63,7 +72,31 @@ try {
         Invoke-GateStep 'Dependency advisories' {
             # RSA is used only for public-key signature verification. The
             # unfixed private-key timing advisory is documented in SECURITY.md.
-            cargo audit --deny warnings --ignore RUSTSEC-2023-0071
+            # cargo-audit can print registry failures yet exit zero. Capture
+            # stderr too: any non-JSON diagnostic makes completion unprovable.
+            $auditOutput = @(& cargo audit --json --deny warnings --ignore RUSTSEC-2023-0071 2>&1)
+            $auditExitCode = $LASTEXITCODE
+            $auditText = ($auditOutput | ForEach-Object { $_.ToString() }) -join "`n"
+            if ($auditExitCode -ne 0) {
+                throw "Dependency audit failed with exit code $auditExitCode. $auditText"
+            }
+            try {
+                $report = ConvertFrom-Json -InputObject $auditText -ErrorAction Stop
+                if ($null -eq $report -or $report -is [array] -or
+                    $null -eq $report.PSObject.Properties['vulnerabilities'] -or
+                    $null -eq $report.PSObject.Properties['warnings'] -or
+                    $null -eq $report.vulnerabilities.PSObject.Properties['found'] -or
+                    $report.vulnerabilities.found -isnot [bool] -or
+                    $report.vulnerabilities.found -or
+                    $report.warnings -isnot [pscustomobject] -or
+                    @($report.warnings.PSObject.Properties).Count -ne 0) {
+                    throw 'Missing or unsafe dependency audit report.'
+                }
+            }
+            catch {
+                throw "Dependency audit did not complete with a valid clean JSON report; registry checks may have failed. $auditText"
+            }
+            Write-Host 'Dependency audit completed without registry-check diagnostics.'
         }
     }
 

@@ -11,6 +11,8 @@ pub mod authenticode;
 pub mod branding;
 pub mod browsers;
 mod cleanup;
+mod cleanup_process;
+mod cleanup_recovery;
 pub mod config;
 pub mod downloader;
 mod extensions;
@@ -21,8 +23,10 @@ pub mod hardening;
 pub mod install;
 mod instance;
 mod network;
+mod protocol_freshness;
 pub mod registry;
 mod selfreg_watch;
+mod shell_link;
 pub mod taskbar;
 pub mod ui;
 pub mod updater;
@@ -136,7 +140,7 @@ where
         return handle_cleanup_flag(make, cleanup);
     }
     if own_args.iter().any(|a| a == "--nomad-scrub-prefetch") {
-        return handle_prefetch_scrub_flag();
+        return handle_retired_prefetch_flag();
     }
 
     // Panics bypass the Result-based error arm below and would otherwise die
@@ -317,7 +321,7 @@ struct CleanupArgs {
     /// accepted and falls back to name-only matching (bounded wait).
     browser_exe: Option<String>,
     scrub_thumbnail_cache: bool,
-    scrub_prefetch: bool,
+    recover_missed_cleanup: bool,
 }
 
 // ── Top-level wiring ──────────────────────────────────────────────────────────
@@ -397,6 +401,13 @@ where
             &browser,
             &install_dir,
             opts,
+            if protocol_invocation {
+                LaunchOrigin::Protocol {
+                    remind: config.update.remind_on_protocol,
+                }
+            } else {
+                LaunchOrigin::Direct
+            },
             &launch_args,
             branding,
             hardening,
@@ -405,6 +416,73 @@ where
         );
     })
     .map_err(|e| RunError::Ui(e.to_string()))
+}
+
+#[derive(Clone, Copy)]
+enum LaunchOrigin {
+    Direct,
+    Protocol { remind: bool },
+}
+
+/// Acknowledge local maintenance advice without changing update permissions.
+fn confirm_protocol_maintenance<B: BrowserFamily>(
+    browser: &B,
+    install: &Path,
+    state: &StateHandle,
+    ctx: &egui::Context,
+) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let Some(message) = protocol_freshness::message(browser, install, now) else {
+        return true;
+    };
+    let (lock, cvar) = &**state;
+    let mut guard = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.view.status = StatusLines::new("Update check reminder");
+    guard.view.progress = ProgressState::Hidden;
+    if matches!(guard.phase, WindowPhase::Done) {
+        return false;
+    }
+    guard.phase = WindowPhase::MaintenancePrompt {
+        message: message.clone(),
+    };
+    cvar.notify_all();
+    ctx.request_repaint();
+    loop {
+        match guard.phase {
+            WindowPhase::MaintenanceContinue => {
+                drop(guard);
+                if let Err(error) = protocol_freshness::acknowledge(
+                    browser,
+                    install,
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                ) {
+                    tracing::warn!(%error, "cannot save local update reminder acknowledgment");
+                }
+                return true;
+            }
+            WindowPhase::Done => return false,
+            _ => {
+                if !matches!(guard.phase, WindowPhase::MaintenancePrompt { .. }) {
+                    guard.phase = WindowPhase::MaintenancePrompt {
+                        message: message.clone(),
+                    };
+                    cvar.notify_all();
+                    ctx.request_repaint();
+                }
+                guard = cvar
+                    .wait(guard)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+        }
+    }
 }
 
 /// Derives update permissions for a launch origin. The OS protocol handler is
@@ -527,6 +605,7 @@ fn build_initial_view<B: BrowserFamily>(
         progress: ProgressState::Indeterminate,
         icon_bytes: if icon.is_empty() { None } else { Some(icon) },
         accent: browser.accent(),
+        component_update_notice: browser.component_update_notice().map(str::to_owned),
     }
 }
 
@@ -571,6 +650,7 @@ fn pipeline_thread<B: BrowserFamily + 'static>(
     browser: &Arc<B>,
     install_dir: &Path,
     opts: UpdateOptions,
+    origin: LaunchOrigin,
     extra_args: &[String],
     branding: Option<&'static Branding>,
     hardening: HardeningConfig,
@@ -579,6 +659,12 @@ fn pipeline_thread<B: BrowserFamily + 'static>(
 ) {
     // Deref coercion: &Arc<B> → &B via Arc's Deref impl.
     let b: &B = browser;
+    let opts = effective_update_options(
+        opts.check_on_launch,
+        opts.auto_download,
+        matches!(origin, LaunchOrigin::Protocol { .. }),
+    );
+    let mut reminded = false;
 
     'retry: loop {
         // Reset to the initial Running phase so the window shows status lines.
@@ -599,6 +685,19 @@ fn pipeline_thread<B: BrowserFamily + 'static>(
             }
         };
 
+        if hardening.recover_missed_cleanup {
+            if let Some(base) = install_dir.parent() {
+                cleanup_recovery::recover(base, b.id());
+            }
+        }
+
+        if !reminded && matches!(origin, LaunchOrigin::Protocol { remind: true }) {
+            if !confirm_protocol_maintenance(b, install_dir, state, ctx) {
+                break 'retry;
+            }
+            reminded = true;
+        }
+
         // Build a fresh async runtime for each attempt so that a cancelled or
         // timed-out future from the previous attempt cannot pollute the new one.
         let rt = match tokio::runtime::Builder::new_multi_thread()
@@ -616,7 +715,7 @@ fn pipeline_thread<B: BrowserFamily + 'static>(
                     hardening,
                     state,
                     ctx,
-                    &msg,
+                    &BrowserError::Io(std::io::Error::other(msg)),
                 ) {
                     PostErrorAction::Retry => continue 'retry,
                     PostErrorAction::Done => break 'retry,
@@ -643,7 +742,7 @@ fn pipeline_thread<B: BrowserFamily + 'static>(
                 hardening,
                 state,
                 ctx,
-                &e.to_string(),
+                &e,
             ) {
                 PostErrorAction::Retry => continue 'retry,
                 PostErrorAction::Done => break 'retry,
@@ -681,7 +780,7 @@ fn pipeline_thread<B: BrowserFamily + 'static>(
                             hardening,
                             state,
                             ctx,
-                            &e.to_string(),
+                            &e,
                         ) {
                             PostErrorAction::Retry => continue 'retry,
                             PostErrorAction::Done => {}
@@ -733,7 +832,7 @@ fn pipeline_thread<B: BrowserFamily + 'static>(
                                 hardening,
                                 state,
                                 ctx,
-                                &e.to_string(),
+                                &e,
                             ) {
                                 PostErrorAction::Retry => continue 'retry,
                                 PostErrorAction::Done => {}
@@ -772,7 +871,7 @@ fn pipeline_thread<B: BrowserFamily + 'static>(
                 hardening,
                 state,
                 ctx,
-                &e.to_string(),
+                &e,
             ) {
                 PostErrorAction::Done => break 'retry,
                 PostErrorAction::Retry => {} // loop continues to next iteration
@@ -1048,120 +1147,12 @@ fn do_launch<B: BrowserFamily>(
     ctx: &egui::Context,
 ) -> Result<(), BrowserError> {
     apply_branding(install_dir, branding, state, ctx);
-    if hardening.enabled {
-        if let Hardening::LaunchFlags {
-            local_state,
-            preferences,
-            ..
-        } = browser.hardening()
-        {
-            if let Some(user_data_dir) = browser.profile_dir(install_dir) {
-                if let Err(e) =
-                    hardening::write_chromium_state(&user_data_dir, local_state, preferences)
-                {
-                    tracing::warn!(
-                        browser = browser.id(),
-                        error = %e,
-                        "failed to seed Chromium Local State / Preferences; \
-                         chrome://flags may not reflect hardening"
-                    );
-                } else if local_state.is_some() || preferences.is_some() {
-                    tracing::info!(
-                        browser = browser.id(),
-                        "seeded Local State + Default/Preferences for chrome://flags visibility"
-                    );
-                }
-            }
-        }
-        if let Hardening::GeckoProfile {
-            user_js,
-            policies,
-            autoconfig,
-            cfg,
-            ..
-        } = browser.hardening()
-        {
-            if let Some(profile_dir) = browser.profile_dir(install_dir) {
-                if user_js.is_empty() {
-                    // The browser opts out of Nomad's user.js (e.g. Mullvad,
-                    // which manages its own prefs and crowd-blending). Write
-                    // nothing — not even the WebRTC / sanitize overrides, which
-                    // would make the profile fingerprint-distinguishable from
-                    // the browser's own crowd. Strip any block a prior Nomad
-                    // version may have left behind.
-                    if let Err(e) = hardening::remove_managed_user_js(&profile_dir) {
-                        tracing::warn!(
-                            browser = browser.id(),
-                            error = %e,
-                            "failed to remove stale Nomad user.js"
-                        );
-                    }
-                } else {
-                    let mut content = if hardening.sanitize_on_shutdown {
-                        user_js.to_owned()
-                    } else {
-                        format!("{user_js}\n{SANITIZE_DISABLE_OVERRIDE}")
-                    };
-                    if hardening.disable_webrtc {
-                        content = format!("{content}\n{WEBRTC_DISABLE_OVERRIDE}");
-                    }
-                    if let Err(e) = hardening::write_user_js(&profile_dir, &content) {
-                        tracing::warn!(
-                            browser = browser.id(),
-                            error = %e,
-                            "failed to write user.js; launching without hardening update"
-                        );
-                    }
-                }
-            }
-            tracing::warn!(
-                browser = browser.id(),
-                "Safe Browsing disabled by hardening profile (privacy trade-off); \
-                 no browser-level phishing/malware protection — use a DNS block list as substitute"
-            );
-            if let Some(p) = policies {
-                // If the uBlock XPI was provisioned by fetch_extension_updates,
-                // inject a file:// URL so Firefox installs it without further
-                // AMO contact.
-                let launcher_dir = install_dir.parent().unwrap_or(install_dir);
-                let xpi_dir = config::nomad_subdir(launcher_dir).join("Gecko-extensions");
-                let ublock_xpi = xpi_dir.join("uBlock0.xpi");
-                let effective_policies = if ublock_xpi.exists() {
-                    hardening::inject_ublock_policy(p, &ublock_xpi)
-                } else {
-                    p.to_owned()
-                };
-                if let Err(e) = hardening::write_policies_json(install_dir, &effective_policies) {
-                    tracing::warn!(
-                        browser = browser.id(),
-                        error = %e,
-                        "failed to write policies.json; hardening may be stale"
-                    );
-                }
-            }
-            if let (Some(a), Some(c)) = (autoconfig, cfg) {
-                if let Err(e) = hardening::write_autoconfig(install_dir, a, c) {
-                    tracing::warn!(
-                        browser = browser.id(),
-                        error = %e,
-                        "failed to write autoconfig pair; hardening will fall back to user.js only"
-                    );
-                } else {
-                    tracing::info!(
-                        browser = browser.id(),
-                        "wrote install_dir/nomad.cfg + defaults/pref/autoconfig.js (LibreWolf-derived hardening)"
-                    );
-                }
-            }
-        }
-    } else {
-        remove_gecko_hardening(browser, install_dir);
-    }
     prepare_browser_for_launch(browser, install_dir, hardening)?;
     // Shared host profiles and registration maps are never pre-launch cleanup
-    // targets. Attributed post-exit cleanup runs in handle_cleanup_flag().
+    // targets. Earlier recovery and post-exit cleanup only retry attributed artifacts.
     let mut cmd = browser.launch_command(install_dir, extra_args);
     let browser_exe = browser_exe_path(&cmd);
+    arm_cleanup_recovery(browser, install_dir, &browser_exe, hardening);
     let child = spawn_browser(&mut cmd, STARTUP_WATCH).inspect_err(|error| {
         tracing::error!(
             browser = browser.id(),
@@ -1172,79 +1163,163 @@ fn do_launch<B: BrowserFamily>(
     })?;
     let pid = child.id();
     tracing::info!(browser = browser.id(), pid, exe = %browser_exe, "browser launched");
-    spawn_cleanup_watcher(
-        pid,
-        &browser_exe,
-        hardening.scrub_thumbnail_cache,
-        hardening.scrub_prefetch,
-    );
+    spawn_cleanup_watcher(pid, &browser_exe, hardening);
     signal_done(state, ctx);
     Ok(())
 }
 
-/// Withdraws the Gecko hardening Nomad previously wrote, so `[hardening]
-/// enabled = false` disables hardening on an already-hardened profile instead
-/// of merely not refreshing it.
-///
-/// Gecko hardening lives in files that persist between launches, unlike the
-/// Chromium-family launch flags which simply stop being passed. Skipping the
-/// write left the previous `user.js` fence and the locked `nomad.cfg` in place,
-/// so a user who turned the setting off to unbreak a site saw no change at all
-/// — and `lockPref` values cannot even be overridden from `about:config`.
-///
-/// Two surfaces are withdrawn:
-/// - the Nomad-managed `user.js` fence (content the user added outside the
-///   markers is preserved; see `hardening::remove_managed_user_js`);
-/// - the autoconfig pair, but only for browsers that declare one. `LibreWolf`
-///   and Mullvad ship their own and Nomad never writes theirs.
-///
-/// `distribution/policies.json` is deliberately **kept**. Nothing in the
-/// curated payload breaks a site — it covers telemetry, updates, Pocket, and
-/// first-run pages — so removing it does not serve the reason people turn
-/// hardening off, and it carries the injected uBO `ExtensionSettings` entry,
-/// so deleting it would uninstall the user's ad blocker. Nomad also overwrites
-/// the vendor's own file on browsers that ship one, so the original could not
-/// be restored.
-///
-/// The Chromium family has no equivalent: its profile seeds are merged into
-/// the browser's own `Preferences` with user-wins semantics and cannot be
-/// cleanly un-merged. Turning hardening off stops the locked scalars being
-/// re-enforced, which is the most that can be withdrawn there.
-fn remove_gecko_hardening<B: BrowserFamily>(browser: &B, install_dir: &Path) {
+fn arm_cleanup_recovery<B: BrowserFamily>(
+    browser: &B,
+    install: &Path,
+    image: &str,
+    hardening: HardeningConfig,
+) {
+    if hardening.recover_missed_cleanup {
+        if let Some(base) = install.parent() {
+            cleanup_recovery::arm(base, Path::new(image), browser.id());
+        }
+    }
+}
+
+fn required_setting<T>(
+    step: &'static str,
+    result: Result<T, BrowserError>,
+) -> Result<T, BrowserError> {
+    result.map_err(|source| BrowserError::Preparation {
+        step,
+        source: Box::new(source),
+    })
+}
+
+fn required_profile<B: BrowserFamily>(
+    browser: &B,
+    install_dir: &Path,
+) -> Result<std::path::PathBuf, BrowserError> {
+    browser
+        .profile_dir(install_dir)
+        .ok_or_else(|| BrowserError::Preparation {
+            step: "portable profile location",
+            source: Box::new(BrowserError::Parse(
+                "adapter declared managed settings without a profile directory".to_owned(),
+            )),
+        })
+}
+
+/// Required local settings for every launch origin, including fallback. No
+/// network, provisioning, registry repair, process creation or watcher runs here.
+fn apply_required_hardening<B: BrowserFamily>(
+    browser: &B,
+    install_dir: &Path,
+    config: HardeningConfig,
+) -> Result<(), BrowserError> {
+    let payload = browser.hardening();
+    required_setting("hardening payload", payload.validate())?;
+    if !config.enabled {
+        return remove_gecko_hardening(browser, install_dir);
+    }
+    match payload {
+        Hardening::LaunchFlags {
+            local_state,
+            preferences,
+            ..
+        } => {
+            if local_state.is_some() || preferences.is_some() {
+                let profile = required_profile(browser, install_dir)?;
+                required_setting(
+                    "Chromium privacy settings",
+                    hardening::write_chromium_state(&profile, local_state, preferences),
+                )?;
+            }
+        }
+        Hardening::GeckoProfile {
+            user_js,
+            policies,
+            autoconfig,
+            cfg,
+            ..
+        } => {
+            let profile = required_profile(browser, install_dir)?;
+            if user_js.is_empty() {
+                required_setting(
+                    "remove stale Nomad privacy settings",
+                    hardening::remove_managed_user_js(&profile),
+                )?;
+            } else {
+                let mut content = user_js.to_owned();
+                if !config.sanitize_on_shutdown {
+                    content.push('\n');
+                    content.push_str(SANITIZE_DISABLE_OVERRIDE);
+                }
+                if config.disable_webrtc {
+                    content.push('\n');
+                    content.push_str(WEBRTC_DISABLE_OVERRIDE);
+                }
+                required_setting(
+                    "Gecko privacy settings",
+                    hardening::write_user_js(&profile, &content),
+                )?;
+            }
+            if let Some(p) = policies {
+                let launcher_dir = install_dir.parent().unwrap_or(install_dir);
+                let xpi = config::nomad_subdir(launcher_dir).join("Gecko-extensions/uBlock0.xpi");
+                required_setting(
+                    "browser extension policy",
+                    fs_safety::ensure_file(&xpi).map_err(BrowserError::from),
+                )?;
+                let effective = match std::fs::symlink_metadata(&xpi) {
+                    Ok(_) => required_setting(
+                        "browser extension policy",
+                        hardening::inject_ublock_policy(p, &xpi),
+                    )?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => p.to_owned(),
+                    Err(e) => return required_setting("browser extension policy", Err(e.into())),
+                };
+                required_setting(
+                    "browser policies",
+                    hardening::write_policies_json(install_dir, &effective),
+                )?;
+            }
+            if let (Some(a), Some(c)) = (autoconfig, cfg) {
+                required_setting(
+                    "Gecko preference locks",
+                    hardening::write_autoconfig(install_dir, a, c),
+                )?;
+            }
+            if !user_js.is_empty() {
+                tracing::warn!(browser = browser.id(), "Nomad privacy profile requests Safe Browsing off; DNS filtering does not replace browser phishing/malware protection");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Withdraw the Nomad user.js fence and declared autoconfig pair when disabled.
+/// Vendor autoconfig is left alone. Existing policies are retained, including
+/// any injected extension policy; disabling hardening does not restore vendor
+/// policy contents or undo merged Chromium profile preferences.
+/// Withdrawal errors must stop launch, since skipping removal leaves stale locks.
+fn remove_gecko_hardening<B: BrowserFamily>(
+    browser: &B,
+    install_dir: &Path,
+) -> Result<(), BrowserError> {
     let Hardening::GeckoProfile {
         autoconfig, cfg, ..
     } = browser.hardening()
     else {
-        return;
+        return Ok(());
     };
-    if let Some(profile_dir) = browser.profile_dir(install_dir) {
-        match hardening::remove_managed_user_js(&profile_dir) {
-            Ok(()) => tracing::info!(
-                browser = browser.id(),
-                "hardening disabled — removed the Nomad-managed user.js block"
-            ),
-            Err(e) => tracing::warn!(
-                browser = browser.id(),
-                error = %e,
-                "hardening disabled but the Nomad user.js block could not be removed; \
-                 the profile stays hardened"
-            ),
-        }
-    }
+    let profile = required_profile(browser, install_dir)?;
+    required_setting(
+        "remove Nomad privacy settings",
+        hardening::remove_managed_user_js(&profile),
+    )?;
     if autoconfig.is_some() && cfg.is_some() {
-        match hardening::remove_autoconfig(install_dir) {
-            Ok(()) => tracing::info!(
-                browser = browser.id(),
-                "hardening disabled — removed nomad.cfg + defaults/pref/autoconfig.js"
-            ),
-            Err(e) => tracing::warn!(
-                browser = browser.id(),
-                error = %e,
-                "hardening disabled but the autoconfig pair could not be removed; \
-                 locked prefs stay in force"
-            ),
-        }
+        required_setting(
+            "remove Nomad preference locks",
+            hardening::remove_autoconfig(install_dir),
+        )?;
     }
+    Ok(())
 }
 
 /// Returns the full path of the browser executable a `Command` built by
@@ -1388,13 +1463,21 @@ fn handle_error<B: BrowserFamily>(
     hardening: HardeningConfig,
     state: &StateHandle,
     ctx: &egui::Context,
-    message: &str,
+    error: &BrowserError,
 ) -> PostErrorAction {
-    let has_fallback = browser.installed_version(install_dir).is_some();
-    tracing::error!(browser = browser.id(), error = message, "pipeline error");
-    show_error(state, ctx, message, has_fallback);
-
-    match wait_for_pipeline_action(state) {
+    let has_fallback = !matches!(error, BrowserError::Preparation { .. })
+        && browser.installed_version(install_dir).is_some();
+    let message = error.to_string();
+    tracing::error!(browser = browser.id(), error = %message, "pipeline error");
+    let action = loop {
+        show_error(state, ctx, &message, has_fallback);
+        let action = wait_for_pipeline_action(state);
+        if matches!(action, PipelineAction::LaunchAnyway) && !has_fallback {
+            continue;
+        }
+        break action;
+    };
+    match action {
         PipelineAction::Retry => PostErrorAction::Retry,
         PipelineAction::LaunchAnyway => {
             apply_branding(install_dir, branding, state, ctx);
@@ -1406,14 +1489,18 @@ fn handle_error<B: BrowserFamily>(
             );
             if let Err(e) = prepare_browser_for_launch(browser, install_dir, hardening) {
                 tracing::error!(browser = browser.id(), error = %e, "launch preparation refused fallback");
-                show_error(state, ctx, &e.to_string(), false);
-                return match wait_for_pipeline_action(state) {
-                    PipelineAction::Retry => PostErrorAction::Retry,
-                    PipelineAction::Close | PipelineAction::LaunchAnyway => PostErrorAction::Done,
-                };
+                loop {
+                    show_error(state, ctx, &e.to_string(), false);
+                    match wait_for_pipeline_action(state) {
+                        PipelineAction::Retry => return PostErrorAction::Retry,
+                        PipelineAction::Close => return PostErrorAction::Done,
+                        PipelineAction::LaunchAnyway => {}
+                    }
+                }
             }
             let mut cmd = browser.launch_command(install_dir, extra_args);
             let browser_exe = browser_exe_path(&cmd);
+            arm_cleanup_recovery(browser, install_dir, &browser_exe, hardening);
             finish_fallback_spawn(
                 spawn_browser_for_fallback(&mut cmd, STARTUP_WATCH),
                 |child| {
@@ -1423,12 +1510,7 @@ fn handle_error<B: BrowserFamily>(
                         exe = %browser_exe,
                         "browser launched (fallback)"
                     );
-                    spawn_cleanup_watcher(
-                        child.id(),
-                        &browser_exe,
-                        hardening.scrub_thumbnail_cache,
-                        hardening.scrub_prefetch,
-                    );
+                    spawn_cleanup_watcher(child.id(), &browser_exe, hardening);
                 },
                 state,
                 ctx,
@@ -1476,7 +1558,11 @@ fn prepare_browser_for_launch<B: BrowserFamily>(
     install_dir: &Path,
     hardening: HardeningConfig,
 ) -> Result<(), BrowserError> {
-    browser.prepare_launch(install_dir, hardening)?;
+    apply_required_hardening(browser, install_dir, hardening)?;
+    required_setting(
+        "browser launch preparation",
+        browser.prepare_launch(install_dir, hardening),
+    )?;
     // If the browser registered *itself* as a URL/HTML handler (its own
     // "Make default" button), that registration launches the browser exe
     // directly — host profile, no hardening, no portable Data dir — and a
@@ -1675,8 +1761,8 @@ fn validate_forwarded_args(forwarded: &[String]) -> Result<(), BrowserError> {
 
 /// Parses cleanup-watcher arguments: `--nomad-cleanup-pid <pid>` (required),
 /// `--nomad-cleanup-exe <path>` (optional; full browser-executable path, a
-/// bare name is tolerated), `--nomad-scrub-thumbcache` (flag), and
-/// `--nomad-scrub-prefetch` (flag). Returns `None` when
+/// bare name is tolerated), and `--nomad-scrub-thumbcache` (flag). The legacy
+/// `--nomad-scrub-prefetch` flag is ignored. Returns `None` when
 /// `--nomad-cleanup-pid` is absent.
 fn parse_cleanup_pid(args: &[String]) -> Option<CleanupArgs> {
     let pos = args.iter().position(|a| a == "--nomad-cleanup-pid")?;
@@ -1686,12 +1772,12 @@ fn parse_cleanup_pid(args: &[String]) -> Option<CleanupArgs> {
         .position(|a| a == "--nomad-cleanup-exe")
         .and_then(|i| args.get(i + 1).cloned());
     let scrub_thumbnail_cache = args.iter().any(|a| a == "--nomad-scrub-thumbcache");
-    let scrub_prefetch = args.iter().any(|a| a == "--nomad-scrub-prefetch");
+    let recover_missed_cleanup = args.iter().any(|a| a == "--nomad-recover-cleanup");
     Some(CleanupArgs {
         browser_pid,
         browser_exe,
         scrub_thumbnail_cache,
-        scrub_prefetch,
+        recover_missed_cleanup,
     })
 }
 
@@ -1706,6 +1792,29 @@ where
     B: BrowserFamily,
     F: FnOnce(Arch) -> B,
 {
+    let browser = make(Arch::X64);
+    let session = (|| {
+        let launcher = std::env::current_exe()?;
+        let base = launcher
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing launcher directory"))?;
+        let image = args
+            .browser_exe
+            .as_deref()
+            .ok_or_else(|| std::io::Error::other("missing browser image"))?;
+        cleanup::CleanupSession::acquire(base, Path::new(image), browser.id())
+    })();
+    let _session = match session {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            tracing::debug!("cleanup coordinator already owns this session");
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => {
+            tracing::warn!(%error, "cannot coordinate owned cleanup; preserving host traces");
+            return ExitCode::FAILURE;
+        }
+    };
     tracing::info!(
         pid = args.browser_pid,
         exe = args.browser_exe.as_deref().unwrap_or("(unknown)"),
@@ -1733,25 +1842,43 @@ where
     if let Some(live) = live_repair {
         live.stop();
     }
+    // Recovery and new launch attempts share this lock. Never clean in the gap
+    // between a launcher's quiescence check and its process creation.
+    let (Ok(launcher), Some(image)) = (std::env::current_exe(), args.browser_exe.as_deref()) else {
+        return ExitCode::FAILURE;
+    };
+    let Some(base) = launcher.parent() else {
+        return ExitCode::FAILURE;
+    };
+    let Some(scope) = cleanup::Scope::new(base, Path::new(image), browser.id()) else {
+        return ExitCode::FAILURE;
+    };
+    let Some(install_dir) = scope.install_dir() else {
+        return ExitCode::FAILURE;
+    };
+    let Ok(_install_lock) = install::InstanceLock::acquire(&install_dir) else {
+        tracing::warn!("post-exit cleanup deferred: another launch/transaction owns the folder");
+        return ExitCode::FAILURE;
+    };
+    if cleanup_process::probe(&scope.launcher, &scope.browser_exe)
+        != cleanup_process::Presence::Idle
+    {
+        tracing::warn!(
+            "browser quiescence is not proven; host traces and recovery records preserved"
+        );
+        return ExitCode::FAILURE;
+    }
     tracing::info!(
         pid = args.browser_pid,
-        "browser tree exited; scrubbing host traces"
+        "browser quiescence proven; scrubbing attributed host traces"
     );
     repair_registration_after_exit(args.browser_exe.as_deref());
-    if let (Ok(launcher), Some(browser_exe)) =
-        (std::env::current_exe(), args.browser_exe.as_deref())
-    {
-        if let Some(base) = launcher.parent() {
-            let browser = make(Arch::X64);
-            cleanup::scrub_host_traces(base, Path::new(browser_exe), browser.id());
-        }
+    let completed = cleanup::scrub_host_traces(base, Path::new(image), browser.id());
+    if completed && args.recover_missed_cleanup {
+        cleanup_recovery::complete(base, Path::new(image), browser.id());
     }
     if args.scrub_thumbnail_cache {
         scrub_thumbnail_cache();
-    }
-    if args.scrub_prefetch && !scrub_prefetch() {
-        tracing::info!("Prefetch scrub needs elevation; requesting UAC prompt");
-        elevate_for_prefetch_scrub();
     }
     ExitCode::SUCCESS
 }
@@ -1803,50 +1930,55 @@ fn install_dir_from_browser_exe(browser_exe: Option<&str>) -> Option<std::path::
         .map(std::path::Path::to_path_buf)
 }
 
-/// Entry point for the elevated Prefetch scrubber sub-process.
-///
-/// Spawned by `elevate_for_prefetch_scrub()` with the `runas` `ShellExecute` verb
-/// so it runs with an elevated token. Deletes Prefetch entries for all browser
-/// and launcher executables that Nomad manages, then exits.
-fn handle_prefetch_scrub_flag() -> ExitCode {
-    tracing::info!("elevated Prefetch scrubber started");
-    scrub_prefetch();
+/// Accept a legacy internal invocation without deleting host records or
+/// requesting elevation. Prefetch filenames cannot establish instance ownership.
+fn handle_retired_prefetch_flag() -> ExitCode {
+    tracing::warn!("Prefetch cleanup has been retired; no host Prefetch records are removed and no elevation is requested");
     ExitCode::SUCCESS
 }
 
-/// Spawns this executable again as a detached cleanup watcher. The watcher
-/// waits for the browser (and its background-task children) to exit, then
-/// scrubs host-system traces. When `scrub_thumbnail_cache` is `true`, it also
-/// clears Windows thumbnail/icon caches (briefly restarts Explorer). When
-/// `scrub_prefetch` is `true`, it attempts to delete Prefetch entries,
-/// elevating via UAC if needed.
-fn spawn_cleanup_watcher(
+/// Build only the supported cleanup arguments. The legacy Prefetch setting is
+/// deliberately not forwarded, including when an existing config enables it.
+fn cleanup_watcher_args(
     browser_pid: u32,
     browser_exe: &str,
-    scrub_thumbnail_cache: bool,
-    scrub_prefetch: bool,
-) {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let mut cmd_args = vec![
+    hardening: HardeningConfig,
+) -> Vec<String> {
+    let mut args = vec![
         "--nomad-cleanup-pid".to_owned(),
         browser_pid.to_string(),
         "--nomad-cleanup-exe".to_owned(),
         browser_exe.to_owned(),
     ];
-    if scrub_thumbnail_cache {
-        cmd_args.push("--nomad-scrub-thumbcache".to_owned());
+    if hardening.scrub_thumbnail_cache {
+        args.push("--nomad-scrub-thumbcache".to_owned());
     }
-    if scrub_prefetch {
-        cmd_args.push("--nomad-scrub-prefetch".to_owned());
+    if hardening.recover_missed_cleanup {
+        args.push("--nomad-recover-cleanup".to_owned());
     }
-    match std::process::Command::new(&exe).args(&cmd_args).spawn() {
+    args
+}
+
+/// Spawn a detached coordinator for owned host-trace cleanup after browser exit.
+/// Opt-in thumbnail clearing preserves files in use and never stops Explorer.
+/// The legacy Prefetch option only logs a retirement notice; it cannot request
+/// deletion or elevation.
+fn spawn_cleanup_watcher(browser_pid: u32, browser_exe: &str, hardening: HardeningConfig) {
+    if hardening.scrub_prefetch {
+        tracing::warn!(
+            "scrub_prefetch is retired and has no effect; Windows Prefetch records are preserved"
+        );
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let args = cleanup_watcher_args(browser_pid, browser_exe, hardening);
+    match std::process::Command::new(&exe).args(&args).spawn() {
         Ok(w) => tracing::info!(
             watcher_pid = w.id(),
             browser_pid,
             exe = browser_exe,
-            scrub_thumbnail_cache,
+            scrub_thumbnail_cache = hardening.scrub_thumbnail_cache,
             "cleanup watcher spawned"
         ),
         Err(e) => tracing::warn!(
@@ -1958,7 +2090,8 @@ fn wait_for_browser_tree_exit(exe: &str, bare_name_max_wait_secs: u64) {
 /// When `exe` contains a path separator it is a full executable path:
 /// candidates are pre-filtered by file name, then confirmed by querying each
 /// candidate's image path. A bare file name matches on the name alone.
-/// Returns an empty list on non-Windows or on enumeration failure.
+/// Returns an empty list on non-Windows or on enumeration failure. This wait
+/// is advisory: deletion additionally requires `cleanup_process::probe` to prove idle.
 fn processes_matching(exe: &str) -> Vec<u32> {
     #[cfg(windows)]
     {
@@ -2027,9 +2160,9 @@ fn processes_matching(exe: &str) -> Vec<u32> {
 /// (case-insensitive, `\\?\` prefixes ignored on both sides).
 ///
 /// Processes whose path cannot be queried do **not** match: the portable
-/// browser runs unelevated as the current user and is always queryable, so
-/// an unqueryable process cannot be one Nomad launched — and counting it
-/// would stall the scrub on somebody else's process.
+/// path query can fail even for a relevant process. This advisory wait does
+/// not authorize deletion; the final conservative probe preserves traces
+/// when any matching-name process cannot be classified safely.
 #[cfg(windows)]
 fn image_path_matches(pid: u32, target_path: &str) -> bool {
     use windows_sys::Win32::Foundation::CloseHandle;
@@ -2064,307 +2197,20 @@ fn strip_verbatim(path: &str) -> &str {
     path.strip_prefix(r"\\?\").unwrap_or(path)
 }
 
-/// Parses the local file target path from a Windows Shell Link (`.lnk`) file.
-///
-/// Implements the subset of MS-SHLLINK needed to read `LocalBasePath` /
-/// `LocalBasePathUnicode` from the optional `LinkInfo` block.  Returns `None`
-/// when the file is not a valid LNK, has no `LinkInfo`, or has no local path.
-fn lnk_target_path(data: &[u8]) -> Option<std::path::PathBuf> {
-    if data.len() < 76 {
-        return None;
-    }
-    // §2.1: HeaderSize must be 0x4C and first byte of CLSID is the magic 0x4C.
-    if data[..4] != [0x4C, 0x00, 0x00, 0x00] {
-        return None;
-    }
-    let link_flags = u32::from_le_bytes(data[20..24].try_into().ok()?);
-
-    let mut pos: usize = 76;
-
-    // §2.2: Skip optional LinkTargetIDList (flag bit 0 = HasLinkTargetIDList).
-    if link_flags & 0x01 != 0 {
-        if pos + 2 > data.len() {
-            return None;
-        }
-        let id_list_size = u16::from_le_bytes(data[pos..pos + 2].try_into().ok()?) as usize;
-        pos += 2 + id_list_size;
-    }
-
-    // §2.3: LinkInfo block (flag bit 1 = HasLinkInfo).
-    if link_flags & 0x02 == 0 {
-        return None;
-    }
-    if pos + 4 > data.len() {
-        return None;
-    }
-    let li_size = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
-    if li_size < 28 || pos + li_size > data.len() {
-        return None;
-    }
-    let li = &data[pos..pos + li_size];
-
-    // LinkInfoFlags bit 0 = VolumeIDAndLocalBasePath (local path present).
-    let li_flags = u32::from_le_bytes(li[8..12].try_into().ok()?);
-    if li_flags & 0x01 == 0 {
-        return None;
-    }
-
-    let header_size = u32::from_le_bytes(li[4..8].try_into().ok()?) as usize;
-
-    // §2.3.1: Extended header (>= 0x24 bytes) carries Unicode offsets.
-    if header_size >= 0x24 && li.len() >= 32 {
-        let uc_offset = u32::from_le_bytes(li[28..32].try_into().ok()?) as usize;
-        if uc_offset > 0 && uc_offset + 2 <= li_size {
-            let chars: Vec<u16> = li[uc_offset..]
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|chunk| u16::from_le_bytes(*chunk))
-                .take_while(|&c| c != 0)
-                .collect();
-            if !chars.is_empty() {
-                if let Ok(s) = String::from_utf16(&chars) {
-                    return Some(std::path::PathBuf::from(s));
-                }
-            }
-        }
-    }
-
-    // §2.3: Fall back to ANSI LocalBasePath.
-    let ansi_offset = u32::from_le_bytes(li[16..20].try_into().ok()?) as usize;
-    if ansi_offset == 0 || ansi_offset >= li_size {
-        return None;
-    }
-    let tail = &li[ansi_offset..];
-    let end = tail.iter().position(|&b| b == 0)?;
-    let s = std::str::from_utf8(&tail[..end]).ok()?;
-    Some(std::path::PathBuf::from(s))
-}
-
-/// Clears Windows thumbnail and icon caches by terminating Explorer briefly,
-/// deleting `thumbcache_*.db` and `iconcache_*.db` from
-/// `%LOCALAPPDATA%\Microsoft\Windows\Explorer\`, then restarting Explorer.
-///
-/// The taskbar and desktop icons are absent for roughly one second. Called only
-/// when `[hardening] scrub_thumbnail_cache = true` in `nomad.toml`.
+/// Attempts opt-in thumbnail/icon cache deletion without stopping Explorer.
+/// Files in use are preserved, so this does not guarantee complete clearing.
 fn scrub_thumbnail_cache() {
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return;
     };
-    let cache_dir = std::path::PathBuf::from(local)
-        .join("Microsoft")
-        .join("Windows")
-        .join("Explorer");
-    if !cache_dir.exists() {
-        return;
-    }
-    tracing::info!("scrubbing thumbnail/icon cache (Explorer will restart briefly)");
-    kill_all_processes_named("explorer.exe");
-    // Brief pause so the OS releases file handles before we try to delete.
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
-        let mut count: usize = 0;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name();
-            let stem = name.to_string_lossy().to_ascii_lowercase();
-            if (stem.starts_with("thumbcache_") || stem.starts_with("iconcache_"))
-                && path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("db"))
-                && std::fs::remove_file(&path).is_ok()
-            {
-                count += 1;
-            }
-        }
-        if count > 0 {
-            tracing::info!(count, "removed thumbnail/icon cache files");
-        }
-    }
-    restart_explorer();
-}
-
-/// Terminates all running instances of `exe_name` (case-insensitive) using
-/// `TerminateProcess`. Used exclusively by `scrub_thumbnail_cache` to stop
-/// Explorer before clearing its cache files.
-fn kill_all_processes_named(exe_name: &str) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStringExt;
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-            TH32CS_SNAPPROCESS,
-        };
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, TerminateProcess, PROCESS_TERMINATE,
-        };
-        // SAFETY: handle lifetimes are tightly scoped; snapshot is closed before return.
-        unsafe {
-            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-            if snapshot.is_null() || snapshot as isize == -1 {
-                return;
-            }
-            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-            #[allow(clippy::cast_possible_truncation)]
-            // PROCESSENTRY32W is ~568 bytes, well within u32
-            {
-                entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-            }
-            let target = exe_name.to_ascii_lowercase();
-            if Process32FirstW(snapshot, &raw mut entry) != 0 {
-                loop {
-                    let len = entry
-                        .szExeFile
-                        .iter()
-                        .position(|&c| c == 0)
-                        .unwrap_or(entry.szExeFile.len());
-                    let name = std::ffi::OsString::from_wide(&entry.szExeFile[..len])
-                        .to_string_lossy()
-                        .to_ascii_lowercase();
-                    if name == target {
-                        let h = OpenProcess(PROCESS_TERMINATE, 0, entry.th32ProcessID);
-                        if !h.is_null() {
-                            TerminateProcess(h, 1);
-                            CloseHandle(h);
-                        }
-                    }
-                    if Process32NextW(snapshot, &raw mut entry) == 0 {
-                        break;
-                    }
-                }
-            }
-            CloseHandle(snapshot);
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = exe_name;
-    }
-}
-
-/// Resolves the full path to the trusted Windows Explorer binary under
-/// `%SystemRoot%`, falling back to the conventional location. Using an absolute
-/// path prevents `CreateProcess` from resolving a planted `explorer.exe` from
-/// the launcher directory or the current working directory (CWE-426/427).
-fn system_explorer_path() -> std::path::PathBuf {
-    std::env::var_os("SystemRoot").map_or_else(
-        || std::path::PathBuf::from(r"C:\Windows\explorer.exe"),
-        |root| std::path::Path::new(&root).join("explorer.exe"),
-    )
-}
-
-/// Restarts Windows Explorer as the user's shell after `kill_all_processes_named`
-/// has terminated it for cache scrubbing.
-fn restart_explorer() {
-    match std::process::Command::new(system_explorer_path()).spawn() {
-        Ok(_) => tracing::info!("Explorer restarted"),
-        Err(e) => tracing::warn!(error = %e, "could not restart Explorer"),
-    }
-}
-
-/// Executable name prefixes that identify Nomad-managed browser processes in
-/// `C:\Windows\Prefetch\`. Each `.pf` filename has the form `<EXE>-<HASH>.pf`
-/// (uppercase); matching on the `<EXE>-` prefix avoids false positives.
-const PREFETCH_TOKENS: &[&str] = &[
-    "CHROME.EXE-",
-    "FIREFOX.EXE-",
-    "FLOORP.EXE-",
-    "LIBREWOLF.EXE-",
-    "MULLVADBROWSER.EXE-",
-    "WATERFOX.EXE-",
-    "BITWARDEN.EXE-",
-    "BITWARDEN-PORTABLE.EXE-",
-    "NOMAD-BITWARDEN.EXE-",
-    "NOMAD-FIREFOX.EXE-",
-    "NOMAD-FIREFOX-ESR.EXE-",
-    "NOMAD-FLOORP.EXE-",
-    "NOMAD-HELIUM.EXE-",
-    "NOMAD-LIBREWOLF.EXE-",
-    "NOMAD-MULLVAD.EXE-",
-    "NOMAD-UNGOOGLED-CHROMIUM.EXE-",
-    "NOMAD-WATERFOX.EXE-",
-];
-
-/// Attempts to remove Prefetch entries for all Nomad-managed browser and
-/// launcher executables from `C:\Windows\Prefetch\`.
-///
-/// Returns `true` if the scrub completed without any access-denied errors (or
-/// there was nothing to scrub), `false` if at least one deletion was blocked by
-/// insufficient privileges — the caller should then invoke
-/// `elevate_for_prefetch_scrub()` to retry under an elevated token.
-fn scrub_prefetch() -> bool {
-    scrub_prefetch_dir(std::path::Path::new(r"C:\Windows\Prefetch"))
-}
-
-fn scrub_prefetch_dir(dir: &std::path::Path) -> bool {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return false,
-        Err(_) => return true,
-    };
-    let mut need_elevation = false;
-    let mut count: usize = 0;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let n = name.to_string_lossy().to_ascii_uppercase();
-        if PREFETCH_TOKENS.iter().any(|&t| n.starts_with(t)) {
-            match std::fs::remove_file(entry.path()) {
-                Ok(()) => count += 1,
-                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                    need_elevation = true;
-                }
-                Err(e) => tracing::warn!(
-                    path = %entry.path().display(),
-                    error = %e,
-                    "Prefetch scrub: could not remove entry"
-                ),
-            }
-        }
-    }
-    if count > 0 {
-        tracing::info!(count, "removed Prefetch entries");
-    }
-    !need_elevation
-}
-
-/// Re-spawns this executable with `--nomad-scrub-prefetch` under an elevated
-/// token using `ShellExecuteW` with the `"runas"` verb. The UAC consent dialog
-/// appears once; on approval the elevated process deletes the Prefetch entries
-/// and exits silently.
-fn elevate_for_prefetch_scrub() {
-    #[cfg(windows)]
-    {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::UI::Shell::ShellExecuteW;
-        use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
-
-        fn wide(s: &OsStr) -> Vec<u16> {
-            s.encode_wide().chain(std::iter::once(0)).collect()
-        }
-
-        let Ok(exe) = std::env::current_exe() else {
-            tracing::warn!("elevate_for_prefetch_scrub: could not resolve current exe");
-            return;
-        };
-
-        let verb = wide(OsStr::new("runas"));
-        let file = wide(exe.as_os_str());
-        let params = wide(OsStr::new("--nomad-scrub-prefetch"));
-
-        // SAFETY: all three wide string vecs are valid null-terminated UTF-16.
-        // ShellExecuteW is a synchronous shell launch with no lifetime concerns.
-        unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                verb.as_ptr(),
-                file.as_ptr(),
-                params.as_ptr(),
-                std::ptr::null(),
-                SW_HIDE,
-            );
+    let cache_dir = std::path::PathBuf::from(local).join("Microsoft/Windows/Explorer");
+    match cleanup::scrub_unlocked_thumbnail_cache(&cache_dir) {
+        Ok(count) => tracing::info!(
+            count,
+            "removed unlocked thumbnail/icon cache files; files in use may remain"
+        ),
+        Err(error) => {
+            tracing::warn!(%error, "thumbnail/icon cache clearing incomplete; Explorer was not stopped");
         }
     }
 }
@@ -2433,6 +2279,62 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    use std::path::PathBuf;
+
+    /// Keep authored fixture metadata in one ordinary, long-path spelling.
+    /// Hosted Windows TEMP can contain 8.3 aliases while `Scope` canonicalizes
+    /// the owned image. Production cleanup deliberately preserves aliases it
+    /// cannot corroborate; a positive fixture must not assume TEMP's spelling.
+    pub(crate) fn owned_temp_fixture() -> tempfile::TempDir {
+        owned_fixture_under(&std::env::temp_dir())
+    }
+
+    fn owned_fixture_under(parent: &Path) -> tempfile::TempDir {
+        crate::fs_safety::ensure_directory(parent).unwrap();
+        let parent = parent.canonicalize().unwrap();
+        #[cfg(windows)]
+        let parent = PathBuf::from(crate::strip_verbatim(parent.to_str().unwrap()));
+        tempfile::Builder::new()
+            .prefix("nomad-owned-fixture-")
+            .tempdir_in(parent)
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn owned_fixture_expands_native_short_parent_before_authoring_metadata() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+        let outer = tempfile::Builder::new()
+            .prefix("Nomad long fixture parent-")
+            .tempdir()
+            .unwrap();
+        let original: Vec<u16> = outer
+            .path()
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let mut buffer = vec![0u16; 32_768];
+        // SAFETY: terminated existing owned path and live bounded output. Only
+        // queries its native short spelling; creates no aliases or host config.
+        let len = unsafe { GetShortPathNameW(original.as_ptr(), buffer.as_mut_ptr(), 32_768) };
+        assert!(len > 0 && len < 32_768);
+        let short = PathBuf::from(String::from_utf16(&buffer[..len as usize]).unwrap());
+        let fixture = owned_fixture_under(&short);
+        let canonical_parent = outer.path().canonicalize().unwrap();
+        let ordinary_parent =
+            PathBuf::from(crate::strip_verbatim(canonical_parent.to_str().unwrap()));
+        assert_eq!(fixture.path().parent(), Some(ordinary_parent.as_path()));
+        assert!(fixture
+            .path()
+            .canonicalize()
+            .unwrap()
+            .starts_with(canonical_parent));
+        // Systems with 8.3 creation disabled may return the long spelling; the
+        // same boundary assertions apply rather than requiring system changes.
+    }
 
     pub(crate) fn owned_directory_link(temp: &tempfile::TempDir, link: &Path, target: &Path) {
         let root = temp.path().canonicalize().unwrap();
@@ -2892,6 +2794,7 @@ mod tests {
                 check_on_launch: false,
                 auto_download: false,
             },
+            LaunchOrigin::Direct,
             &[],
             None,
             HardeningConfig {
@@ -2911,6 +2814,539 @@ mod tests {
         );
     }
 
+    struct RequiredSettingsFixture {
+        payload: Hardening,
+        profile_present: bool,
+        launch_calls: std::sync::atomic::AtomicUsize,
+    }
+    impl RequiredSettingsFixture {
+        fn gecko() -> Self {
+            Self {
+                payload: Hardening::GeckoProfile {
+                    user_js: "user_pref(\"managed\", true);",
+                    policies: Some(r#"{"policies":{"DisableAppUpdate":true}}"#),
+                    autoconfig: Some("// pointer\n"),
+                    cfg: Some("// config\n"),
+                    ublock_xpi_releases_url: None,
+                },
+                profile_present: true,
+                launch_calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+        fn chromium() -> Self {
+            Self {
+                payload: Hardening::LaunchFlags {
+                    flags: &[],
+                    local_state: Some(r#"{"dns_over_https":{"mode":"secure"}}"#),
+                    preferences: Some(r#"{"https_only_mode_enabled":true}"#),
+                },
+                ..Self::gecko()
+            }
+        }
+    }
+    impl BrowserFamily for RequiredSettingsFixture {
+        fn id(&self) -> &'static str {
+            "required-settings-fixture"
+        }
+        fn package_target(&self) -> browsers::PackageTarget {
+            browsers::PackageTarget::X64
+        }
+        fn display_name(&self) -> &'static str {
+            "Inert settings fixture"
+        }
+        fn engine(&self) -> Engine {
+            match self.payload {
+                Hardening::LaunchFlags { .. } => Engine::Chromium,
+                Hardening::GeckoProfile { .. } => Engine::Gecko,
+            }
+        }
+        fn staged_install_layout(&self) -> browsers::StagedInstallLayout {
+            browsers::StagedInstallLayout::PortableExecutable("inert.exe")
+        }
+        fn public_key(&self) -> Option<&'static [u8]> {
+            None
+        }
+        fn installed_version(&self, install: &Path) -> Option<InstalledVersion> {
+            browsers::read_version_marker(install)
+        }
+        fn fetch_latest_version(
+            &self,
+        ) -> impl std::future::Future<Output = Result<VersionInfo, BrowserError>> + Send {
+            std::future::ready(Err(BrowserError::Network(
+                "no network in settings fixture".into(),
+            )))
+        }
+        fn download(
+            &self,
+            _: &VersionInfo,
+            _: &Path,
+            _: ProgressSink,
+        ) -> impl std::future::Future<Output = Result<(), BrowserError>> + Send {
+            std::future::ready(Err(BrowserError::Network(
+                "no download in settings fixture".into(),
+            )))
+        }
+        fn verify_signature(&self, _: &Path, _: &Path) -> Result<(), BrowserError> {
+            panic!("no verification in settings fixture")
+        }
+        fn extract(&self, _: &Path, _: &Path) -> Result<(), BrowserError> {
+            panic!("no extraction in settings fixture")
+        }
+        fn profile_dir(&self, install: &Path) -> Option<std::path::PathBuf> {
+            self.profile_present
+                .then(|| install.parent().unwrap().join("Data"))
+        }
+        fn hardening(&self) -> Hardening {
+            self.payload
+        }
+        fn launch_command(&self, _: &Path, _: &[String]) -> std::process::Command {
+            self.launch_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            panic!("required-settings failure must never reach command creation")
+        }
+        fn upstream_url(&self) -> &'static str {
+            "https://example.invalid"
+        }
+    }
+    fn settings_install(root: &Path) -> std::path::PathBuf {
+        let install = root.join("Browser");
+        std::fs::create_dir_all(&install).unwrap();
+        browsers::write_version_marker(
+            &install,
+            &InstalledVersion {
+                target: Some(browsers::PackageTarget::X64),
+                browser_version: "1.0".into(),
+                engine_version: "1.0".into(),
+            },
+        )
+        .unwrap();
+        install
+    }
+    fn settings_error_step(error: &BrowserError) -> &'static str {
+        let BrowserError::Preparation { step, .. } = error else {
+            panic!("expected required-settings refusal, got {error}");
+        };
+        step
+    }
+    fn settings_error_action(
+        state: &StateHandle,
+        retry: bool,
+        stale_click: bool,
+    ) -> std::thread::JoinHandle<bool> {
+        let state = Arc::clone(state);
+        std::thread::spawn(move || {
+            let (lock, cvar) = &*state;
+            let (mut guard, timeout) = cvar
+                .wait_timeout_while(
+                    lock.lock().unwrap(),
+                    std::time::Duration::from_secs(10),
+                    |s| !matches!(s.phase, WindowPhase::Error { .. } | WindowPhase::Done),
+                )
+                .unwrap();
+            let mut refused = !timeout.timed_out()
+                && matches!(&guard.phase, WindowPhase::Error { message, has_fallback: false } if message.contains("Required browser settings failed"));
+            if stale_click {
+                guard.phase = WindowPhase::LaunchAnyway;
+                cvar.notify_all();
+                let (next, timeout) = cvar
+                    .wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| {
+                        !matches!(s.phase, WindowPhase::Error { .. } | WindowPhase::Done)
+                    })
+                    .unwrap();
+                guard = next;
+                refused &= !timeout.timed_out()
+                    && matches!(
+                        &guard.phase,
+                        WindowPhase::Error {
+                            has_fallback: false,
+                            ..
+                        }
+                    );
+            }
+            guard.phase = if retry {
+                WindowPhase::RetryRequested
+            } else {
+                WindowPhase::Done
+            };
+            cvar.notify_all();
+            refused
+        })
+    }
+
+    #[test]
+    fn required_gecko_file_failures_stop_before_command_creation() {
+        for (relative, expected) in [
+            ("Data/user.js", "Gecko privacy settings"),
+            ("Browser/distribution/policies.json", "browser policies"),
+            (
+                "Browser/defaults/pref/autoconfig.js",
+                "Gecko preference locks",
+            ),
+            ("Browser/nomad.cfg", "Gecko preference locks"),
+            (
+                "Nomad/Gecko-extensions/uBlock0.xpi",
+                "browser extension policy",
+            ),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let install = settings_install(temp.path());
+            let marker = std::fs::read(install.join(".nomad-version")).unwrap();
+            std::fs::create_dir_all(temp.path().join(relative)).unwrap();
+            let browser = RequiredSettingsFixture::gecko();
+            let state = release_check_test_state(&browser);
+            let error = do_launch(
+                &browser,
+                &install,
+                &[],
+                None,
+                HardeningConfig::default(),
+                &state,
+                &egui::Context::default(),
+            )
+            .unwrap_err();
+            assert_eq!(settings_error_step(&error), expected);
+            assert_eq!(
+                browser
+                    .launch_calls
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                0
+            );
+            assert!(!matches!(state.0.lock().unwrap().phase, WindowPhase::Done));
+            assert_eq!(
+                std::fs::read(install.join(".nomad-version")).unwrap(),
+                marker
+            );
+        }
+    }
+
+    #[test]
+    fn required_chromium_privacy_failures_preserve_user_bytes_and_block_commands() {
+        for (relative, contents) in [
+            ("Local State", "not json"),
+            ("Local State", r#"{"dns_over_https":false}"#),
+            ("Default/Preferences", "[]"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let install = settings_install(temp.path());
+            let file = temp.path().join("Data").join(relative);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, contents).unwrap();
+            let browser = RequiredSettingsFixture::chromium();
+            let state = release_check_test_state(&browser);
+            let error = do_launch(
+                &browser,
+                &install,
+                &[],
+                None,
+                HardeningConfig::default(),
+                &state,
+                &egui::Context::default(),
+            )
+            .unwrap_err();
+            assert_eq!(settings_error_step(&error), "Chromium privacy settings");
+            assert_eq!(std::fs::read_to_string(file).unwrap(), contents);
+            assert_eq!(
+                browser
+                    .launch_calls
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn required_withdrawal_and_vendor_opt_out_fail_on_unreadable_user_js() {
+        for enabled in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let install = settings_install(temp.path());
+            let file = temp.path().join("Data/user.js");
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            let original = b"// unmanaged comment \xff";
+            std::fs::write(&file, original).unwrap();
+            let mut browser = RequiredSettingsFixture::gecko();
+            if enabled {
+                browser.payload = Hardening::GeckoProfile {
+                    user_js: "",
+                    policies: None,
+                    autoconfig: None,
+                    cfg: None,
+                    ublock_xpi_releases_url: None,
+                };
+            }
+            let state = release_check_test_state(&browser);
+            let error = do_launch(
+                &browser,
+                &install,
+                &[],
+                None,
+                HardeningConfig {
+                    enabled,
+                    ..Default::default()
+                },
+                &state,
+                &egui::Context::default(),
+            )
+            .unwrap_err();
+            assert!(matches!(error, BrowserError::Preparation { .. }));
+            assert_eq!(std::fs::read(&file).unwrap(), original);
+            assert_eq!(
+                browser
+                    .launch_calls
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn required_profile_and_partial_autoconfig_contracts_are_not_silently_skipped() {
+        let temp = tempfile::tempdir().unwrap();
+        let install = settings_install(temp.path());
+        let mut browser = RequiredSettingsFixture::gecko();
+        browser.profile_present = false;
+        assert_eq!(
+            settings_error_step(
+                &apply_required_hardening(&browser, &install, HardeningConfig::default())
+                    .unwrap_err()
+            ),
+            "portable profile location"
+        );
+        browser.profile_present = true;
+        browser.payload = Hardening::GeckoProfile {
+            user_js: "",
+            policies: None,
+            autoconfig: Some("pointer"),
+            cfg: None,
+            ublock_xpi_releases_url: None,
+        };
+        assert_eq!(
+            settings_error_step(
+                &apply_required_hardening(&browser, &install, HardeningConfig::default())
+                    .unwrap_err()
+            ),
+            "hardening payload"
+        );
+        assert!(!temp.path().join("Data").exists());
+    }
+
+    #[test]
+    fn required_failure_gui_offers_retry_close_and_refuses_stale_fallback_clicks() {
+        for retry in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let install = settings_install(temp.path());
+            let browser = RequiredSettingsFixture::gecko();
+            let state = release_check_test_state(&browser);
+            let user = settings_error_action(&state, retry, true);
+            let error = required_setting::<()>(
+                "Gecko privacy settings",
+                Err(std::io::Error::other("inert failure").into()),
+            )
+            .unwrap_err();
+            let action = handle_error(
+                &browser,
+                &install,
+                &[],
+                None,
+                HardeningConfig::default(),
+                &state,
+                &egui::Context::default(),
+                &error,
+            );
+            assert!(user.join().unwrap());
+            assert!(if retry {
+                matches!(action, PostErrorAction::Retry)
+            } else {
+                matches!(action, PostErrorAction::Done)
+            });
+            assert_eq!(
+                browser
+                    .launch_calls
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn required_settings_also_block_fallback_after_an_update_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let install = settings_install(temp.path());
+        std::fs::create_dir_all(temp.path().join("Data/user.js")).unwrap();
+        let browser = RequiredSettingsFixture::gecko();
+        let state = release_check_test_state(&browser);
+        let control = Arc::clone(&state);
+        let user = std::thread::spawn(move || {
+            let (lock, cvar) = &*control;
+            let (mut guard, timeout) = cvar
+                .wait_timeout_while(
+                    lock.lock().unwrap(),
+                    std::time::Duration::from_secs(10),
+                    |s| !matches!(s.phase, WindowPhase::Error { .. }),
+                )
+                .unwrap();
+            let first = !timeout.timed_out()
+                && matches!(
+                    guard.phase,
+                    WindowPhase::Error {
+                        has_fallback: true,
+                        ..
+                    }
+                );
+            guard.phase = WindowPhase::LaunchAnyway;
+            cvar.notify_all();
+            let (mut guard, timeout) = cvar
+                .wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| {
+                    !matches!(
+                        s.phase,
+                        WindowPhase::Error {
+                            has_fallback: false,
+                            ..
+                        } | WindowPhase::Done
+                    )
+                })
+                .unwrap();
+            let refused = first
+                && !timeout.timed_out()
+                && matches!(&guard.phase, WindowPhase::Error { message, has_fallback: false } if message.contains("Gecko privacy settings"));
+            guard.phase = WindowPhase::Done;
+            cvar.notify_all();
+            refused
+        });
+        let action = handle_error(
+            &browser,
+            &install,
+            &[],
+            None,
+            HardeningConfig::default(),
+            &state,
+            &egui::Context::default(),
+            &BrowserError::Network("mock download failure".into()),
+        );
+        assert!(user.join().unwrap());
+        assert!(matches!(action, PostErrorAction::Done));
+        assert_eq!(
+            browser
+                .launch_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[test]
+    fn protocol_freshness_continue_and_cancel_cannot_trigger_updates_or_bypass_preparation() {
+        for continue_link in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let install = settings_install(temp.path());
+            std::fs::create_dir_all(temp.path().join("Data/user.js")).unwrap();
+            let browser = Arc::new(RequiredSettingsFixture::gecko());
+            let state = release_check_test_state(&*browser);
+            let user_state = Arc::clone(&state);
+            let user = std::thread::spawn(move || {
+                let (lock, cvar) = &*user_state;
+                let (mut guard, timeout) = cvar
+                    .wait_timeout_while(
+                        lock.lock().unwrap(),
+                        std::time::Duration::from_secs(10),
+                        |s| !matches!(s.phase, WindowPhase::MaintenancePrompt { .. }),
+                    )
+                    .unwrap();
+                assert!(!timeout.timed_out());
+                assert!(
+                    matches!(&guard.phase, WindowPhase::MaintenancePrompt { message } if message.contains("No update runs here"))
+                );
+                // A click from an older error frame must not start an update/fallback.
+                guard.phase = WindowPhase::LaunchAnyway;
+                cvar.notify_all();
+                let (mut guard, timeout) = cvar
+                    .wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| {
+                        !matches!(s.phase, WindowPhase::MaintenancePrompt { .. })
+                    })
+                    .unwrap();
+                assert!(!timeout.timed_out());
+                guard.phase = if continue_link {
+                    WindowPhase::MaintenanceContinue
+                } else {
+                    WindowPhase::Done
+                };
+                cvar.notify_all();
+                if continue_link {
+                    let (mut guard, timeout) = cvar
+                        .wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| {
+                            !matches!(s.phase, WindowPhase::Error { .. })
+                        })
+                        .unwrap();
+                    assert!(!timeout.timed_out());
+                    assert!(
+                        matches!(&guard.phase, WindowPhase::Error { message, has_fallback: false } if message.contains("Gecko privacy settings"))
+                    );
+                    guard.phase = WindowPhase::Done;
+                    cvar.notify_all();
+                }
+            });
+            // Deliberately permissive options: protocol origin must override both.
+            pipeline_thread(
+                &browser,
+                &install,
+                UpdateOptions {
+                    check_on_launch: true,
+                    auto_download: true,
+                },
+                LaunchOrigin::Protocol { remind: true },
+                &["https://example.invalid/private?token=must-not-record".into()],
+                None,
+                HardeningConfig::default(),
+                &state,
+                &egui::Context::default(),
+            );
+            user.join().unwrap();
+            assert_eq!(
+                browser
+                    .launch_calls
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                0
+            );
+            assert!(!temp.path().join("Browser.stage").exists());
+            let ack = temp
+                .path()
+                .join("Nomad")
+                .join(protocol_freshness::REMINDER_FILE);
+            assert_eq!(ack.exists(), continue_link);
+            if continue_link {
+                assert!(!std::fs::read_to_string(ack)
+                    .unwrap()
+                    .contains("must-not-record"));
+            }
+        }
+    }
+
+    #[test]
+    fn required_settings_block_protocol_style_launch_without_network_or_provisioning() {
+        let temp = tempfile::tempdir().unwrap();
+        let install = settings_install(temp.path());
+        std::fs::create_dir_all(temp.path().join("Data/user.js")).unwrap();
+        let browser = Arc::new(RequiredSettingsFixture::gecko());
+        let state = release_check_test_state(&*browser);
+        let user = settings_error_action(&state, false, false);
+        pipeline_thread(
+            &browser,
+            &install,
+            effective_update_options(true, true, true),
+            LaunchOrigin::Protocol { remind: false },
+            &[],
+            None,
+            HardeningConfig::default(),
+            &state,
+            &egui::Context::default(),
+        );
+        assert!(user.join().unwrap());
+        assert_eq!(
+            browser
+                .launch_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
     #[test]
     fn helium_preparation_failure_stops_normal_launch() {
         let (dir, browser, state) = helium_failure_fixture();
@@ -2927,7 +3363,7 @@ mod tests {
             &state,
             &egui::Context::default(),
         );
-        assert!(matches!(result, Err(BrowserError::Parse(_))));
+        assert!(matches!(result, Err(BrowserError::Preparation { .. })));
         assert!(!matches!(state.0.lock().unwrap().phase, WindowPhase::Done));
     }
 
@@ -2998,7 +3434,7 @@ mod tests {
             },
             &state,
             &egui::Context::default(),
-            "mock update failure",
+            &BrowserError::Network("mock update failure".to_owned()),
         );
         assert!(matches!(action, PostErrorAction::Done));
         assert!(
@@ -3300,31 +3736,8 @@ mod tests {
         assert!(matches!(state.0.lock().unwrap().phase, WindowPhase::Done));
     }
 
-    #[test]
-    fn system_explorer_path_is_absolute_not_a_bare_name() {
-        // Must be an absolute path so CreateProcess cannot resolve a planted
-        // explorer.exe from the launcher dir or CWD (F-03 / CWE-426).
-        let p = system_explorer_path();
-        assert!(
-            p.is_absolute(),
-            "explorer path must be absolute, got {}",
-            p.display()
-        );
-        assert!(
-            p.file_name()
-                .is_some_and(|n| n.eq_ignore_ascii_case("explorer.exe")),
-            "must resolve to explorer.exe, got {}",
-            p.display()
-        );
-    }
-
-    /// `[hardening] enabled = false` must actually disable Gecko hardening.
-    ///
-    /// The hardening block writes files that persist between launches, so
-    /// skipping the write left the previous `user.js` fence and the locked
-    /// `nomad.cfg` in force: a user who turned the setting off to unbreak a
-    /// site saw no change, and `lockPref` cannot be overridden from
-    /// `about:config`.
+    /// Disabling hardening removes managed files, not values already persisted
+    /// by the browser in prefs.js. Content outside Nomad markers is preserved.
     #[test]
     fn disabling_hardening_withdraws_the_gecko_payloads() {
         use crate::browsers::floorp::Floorp;
@@ -3348,7 +3761,7 @@ mod tests {
             .join("channel-prefs.js");
         std::fs::write(&vendor, "vendor").unwrap();
 
-        remove_gecko_hardening(&browser, &install_dir);
+        remove_gecko_hardening(&browser, &install_dir).unwrap();
 
         let user_js = std::fs::read_to_string(profile_dir.join("user.js")).unwrap();
         assert!(
@@ -3385,7 +3798,7 @@ mod tests {
         // writing files at the paths our remover targets.
         hardening::write_autoconfig(&install_dir, "vendor pointer\n", "vendor cfg\n").unwrap();
 
-        remove_gecko_hardening(&Librewolf::new(Arch::X64), &install_dir);
+        remove_gecko_hardening(&Librewolf::new(Arch::X64), &install_dir).unwrap();
 
         assert!(
             install_dir.join("nomad.cfg").exists()
@@ -3673,115 +4086,52 @@ mod tests {
     }
 
     #[test]
-    fn lnk_target_path_parses_ansi_local_base_path() {
-        let data = make_lnk("E:\\downloads\\file.zip");
-        let target = lnk_target_path(&data).expect("must parse");
-        assert_eq!(target, std::path::PathBuf::from("E:\\downloads\\file.zip"));
-    }
-
-    #[test]
-    fn lnk_target_path_rejects_wrong_magic() {
-        let mut data = make_lnk("E:\\file.zip");
-        data[0] = 0xFF; // corrupt magic
-        assert!(lnk_target_path(&data).is_none());
-    }
-
-    #[test]
-    fn lnk_target_path_rejects_too_short() {
-        assert!(lnk_target_path(&[0u8; 10]).is_none());
-    }
-
-    #[test]
-    fn lnk_target_path_returns_none_when_no_link_info_flag() {
-        let mut data = make_lnk("E:\\file.zip");
-        // Clear bit 1 (HasLinkInfo) in LinkFlags at offset 20.
-        let flags = u32::from_le_bytes(data[20..24].try_into().unwrap());
-        let new_flags = flags & !0x02u32;
-        data[20..24].copy_from_slice(&new_flags.to_le_bytes());
-        assert!(lnk_target_path(&data).is_none());
-    }
-
-    #[test]
-    fn lnk_skips_id_list_when_present() {
-        // Build a LNK with HasLinkTargetIDList + HasLinkInfo.
-        let inner = make_lnk("E:\\with_idlist.exe");
-        // The inner already has a correct LinkInfo.  Prepend a 4-byte IDList.
-        let idlist_payload = [0xAB, 0xCD]; // 2 bytes of fake IDList data
-        let mut data = Vec::new();
-        // Copy header with updated flags.
-        data.extend_from_slice(&inner[..76]);
-        let flags = u32::from_le_bytes(data[20..24].try_into().unwrap());
-        let new_flags = flags | 0x01u32; // set HasLinkTargetIDList
-        data[20..24].copy_from_slice(&new_flags.to_le_bytes());
-        // Insert 2-byte size prefix + 2 payload bytes before the LinkInfo.
-        data.extend_from_slice(&u16::try_from(idlist_payload.len()).unwrap().to_le_bytes());
-        data.extend_from_slice(&idlist_payload);
-        // Append the LinkInfo from the original binary.
-        data.extend_from_slice(&inner[76..]);
-
-        let target = lnk_target_path(&data).expect("must parse despite IDList");
-        assert_eq!(target, std::path::PathBuf::from("E:\\with_idlist.exe"));
-    }
-
-    #[test]
-    fn scrub_prefetch_dir_removes_matching_pf_files() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("FIREFOX.EXE-12345678.pf"), b"pf").unwrap();
-        std::fs::write(dir.path().join("CHROME.EXE-ABCDEF01.pf"), b"pf").unwrap();
-        std::fs::write(dir.path().join("NOMAD-WATERFOX.EXE-11223344.pf"), b"pf").unwrap();
-        std::fs::write(dir.path().join("NOTEPAD.EXE-99999999.pf"), b"pf").unwrap();
-
-        let ok = scrub_prefetch_dir(dir.path());
-        assert!(
-            ok,
-            "scrub must not report needing elevation on writable dir"
-        );
-        assert!(!dir.path().join("FIREFOX.EXE-12345678.pf").exists());
-        assert!(!dir.path().join("CHROME.EXE-ABCDEF01.pf").exists());
-        assert!(!dir.path().join("NOMAD-WATERFOX.EXE-11223344.pf").exists());
-        assert!(
-            dir.path().join("NOTEPAD.EXE-99999999.pf").exists(),
-            "non-browser .pf must be preserved"
-        );
-    }
-
-    #[test]
-    fn scrub_prefetch_dir_returns_true_for_missing_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let ok = scrub_prefetch_dir(&dir.path().join("nonexistent"));
-        assert!(ok, "missing directory is not a permission error");
-    }
-
-    #[test]
-    fn scrub_prefetch_dir_matches_all_nomad_tokens() {
-        let dir = tempfile::tempdir().unwrap();
-        let cases = [
-            "CHROME.EXE-00000001.pf",
-            "FIREFOX.EXE-00000002.pf",
-            "FLOORP.EXE-00000003.pf",
-            "WATERFOX.EXE-00000004.pf",
-            "MULLVADBROWSER.EXE-0000000B.pf",
-            "NOMAD-FIREFOX.EXE-00000005.pf",
-            "NOMAD-FIREFOX-ESR.EXE-00000006.pf",
-            "NOMAD-FLOORP.EXE-00000007.pf",
-            "NOMAD-WATERFOX.EXE-00000008.pf",
-            "NOMAD-HELIUM.EXE-00000009.pf",
-            "NOMAD-UNGOOGLED-CHROMIUM.EXE-0000000A.pf",
-            "NOMAD-MULLVAD.EXE-0000000C.pf",
-            "NOMAD-BITWARDEN.EXE-0000000D.pf",
-            "BITWARDEN-PORTABLE.EXE-0000000E.pf",
-            "BITWARDEN.EXE-0000000F.pf",
-        ];
-        for name in &cases {
-            std::fs::write(dir.path().join(name), b"pf").unwrap();
-        }
-        scrub_prefetch_dir(dir.path());
-        for name in &cases {
-            assert!(
-                !dir.path().join(name).exists(),
-                "{name} must have been deleted"
+    fn legacy_prefetch_setting_cannot_reach_cleanup_child_arguments() {
+        let config = Config::parse(
+            "[browser]\ninstall_dir = \"Browser\"\n[hardening]\nscrub_prefetch = true\n",
+        )
+        .unwrap();
+        for enabled in [false, true] {
+            let args = cleanup_watcher_args(
+                55,
+                r"C:\owned\Browser\chrome.exe",
+                HardeningConfig {
+                    enabled,
+                    ..config.hardening
+                },
+            );
+            assert_eq!(
+                args,
+                [
+                    "--nomad-cleanup-pid",
+                    "55",
+                    "--nomad-cleanup-exe",
+                    r"C:\owned\Browser\chrome.exe",
+                    "--nomad-recover-cleanup",
+                ]
             );
         }
+    }
+
+    #[test]
+    fn retired_prefetch_cannot_replace_supported_thumbnail_request() {
+        let args = cleanup_watcher_args(
+            55,
+            r"C:\owned\Browser\chrome.exe",
+            HardeningConfig {
+                scrub_thumbnail_cache: true,
+                scrub_prefetch: true,
+                ..HardeningConfig::default()
+            },
+        );
+        assert!(args.iter().any(|arg| arg == "--nomad-scrub-thumbcache"));
+        assert!(!args.iter().any(|arg| arg == "--nomad-scrub-prefetch"));
+        assert_eq!(args.len(), 6);
+    }
+
+    #[test]
+    fn legacy_prefetch_handler_is_a_successful_no_op() {
+        assert_eq!(handle_retired_prefetch_flag(), ExitCode::SUCCESS);
     }
 
     #[test]
@@ -3959,6 +4309,39 @@ mod tests {
     }
 
     #[test]
+    fn ungoogled_component_disclosure_is_visible_and_does_not_enable_updates() {
+        use browsers::ungoogled::UngoogledChromium;
+        let browser = UngoogledChromium::new(Arch::X64);
+        let view = build_initial_view(&browser, Arch::X64, &[]);
+        assert_eq!(
+            view.component_update_notice.as_deref(),
+            Some("CRLSet refresh not assured")
+        );
+        for enabled in [false, true] {
+            let mut config = Config::parse(config::DEFAULT_NOMAD_TOML).unwrap();
+            config.hardening.enabled = enabled;
+            let flags = build_launch_args(&browser, &config);
+            assert_eq!(
+                flags.iter().any(|f| f == "--disable-component-update"),
+                enabled
+            );
+            assert_eq!(
+                flags.iter().any(|f| f == "--disable-background-networking"),
+                enabled
+            );
+            assert!(!flags.iter().any(|f| f.starts_with("--component-updater=")));
+            assert_eq!(
+                view.component_update_notice.as_deref(),
+                browser.component_update_notice()
+            );
+        }
+        let helium = browsers::helium::Helium::new(Arch::X64);
+        assert!(build_initial_view(&helium, Arch::X64, &[])
+            .component_update_notice
+            .is_none());
+    }
+
+    #[test]
     fn protocol_invocations_cannot_check_or_download_updates() {
         let direct = effective_update_options(true, true, false);
         assert!(direct.check_on_launch);
@@ -4008,7 +4391,7 @@ mod tests {
                 browser_pid: 1234,
                 browser_exe: Some("firefox.exe".to_owned()),
                 scrub_thumbnail_cache: false,
-                scrub_prefetch: false,
+                recover_missed_cleanup: false,
             })
         );
 
@@ -4023,7 +4406,7 @@ mod tests {
                 browser_pid: 9999,
                 browser_exe: None,
                 scrub_thumbnail_cache: false,
-                scrub_prefetch: false,
+                recover_missed_cleanup: false,
             })
         );
 
@@ -4050,13 +4433,32 @@ mod tests {
         ];
         let result = parse_cleanup_pid(&args).expect("must parse");
         assert!(result.scrub_thumbnail_cache);
-        assert!(!result.scrub_prefetch);
         assert_eq!(result.browser_pid, 42);
         assert_eq!(result.browser_exe.as_deref(), Some("firefox.exe"));
     }
 
     #[test]
-    fn parse_cleanup_pid_sets_scrub_prefetch_flag() {
+    fn cleanup_recovery_flag_is_independent_of_shared_cache_opt_in() {
+        let args = vec![
+            "nomad.exe".into(),
+            "--nomad-cleanup-pid".into(),
+            "42".into(),
+            "--nomad-recover-cleanup".into(),
+        ];
+        let parsed = parse_cleanup_pid(&args).unwrap();
+        assert!(parsed.recover_missed_cleanup);
+        assert!(!parsed.scrub_thumbnail_cache);
+        let config: HardeningConfig = toml::from_str("enabled = false").unwrap();
+        assert!(config.recover_missed_cleanup);
+        let opted_out: HardeningConfig = toml::from_str("recover_missed_cleanup = false").unwrap();
+        assert!(!opted_out.recover_missed_cleanup);
+        assert!(!config.enabled && !config.scrub_thumbnail_cache);
+        let args = cleanup_watcher_args(42, r"C:\owned\Browser\chrome.exe", opted_out);
+        assert!(!args.iter().any(|a| a == "--nomad-recover-cleanup"));
+    }
+
+    #[test]
+    fn parse_cleanup_pid_ignores_retired_prefetch_flag() {
         let args = vec![
             "nomad-firefox.exe".to_owned(),
             "--nomad-cleanup-pid".to_owned(),
@@ -4066,7 +4468,9 @@ mod tests {
             "--nomad-scrub-prefetch".to_owned(),
         ];
         let result = parse_cleanup_pid(&args).expect("must parse");
-        assert!(result.scrub_prefetch);
+        let without_legacy_flag = &args[..args.len() - 1];
+        assert_eq!(Some(result), parse_cleanup_pid(without_legacy_flag));
+        let result = parse_cleanup_pid(&args).unwrap();
         assert!(!result.scrub_thumbnail_cache);
         assert_eq!(result.browser_pid, 55);
     }

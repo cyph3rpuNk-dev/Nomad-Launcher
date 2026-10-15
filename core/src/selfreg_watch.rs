@@ -83,8 +83,8 @@ pub(crate) fn run_repair_loop(
 }
 
 /// Name of the per-install mutex that lets only one watcher run the live
-/// repair. Every clicked link spawns its own cleanup watcher for the whole
-/// session; without this, each would sweep the registry on every change.
+/// repair. The cleanup-session lock normally coalesces workers first; this
+/// additional guard also protects standalone live-repair callers.
 /// Derived from the lowercased install dir so it is stable for one portable
 /// folder and distinct between folders, and contains no backslash after the
 /// `Local\` namespace prefix (a kernel-object name requirement).

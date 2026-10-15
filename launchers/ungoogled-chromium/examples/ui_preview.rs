@@ -23,6 +23,7 @@ fn main() {
         progress: nomad_core::ui::ProgressState::Indeterminate,
         icon_bytes: Some(ICON),
         accent: nomad_core::ui::theme::ACCENT,
+        component_update_notice: Some("CRLSet refresh not assured".to_owned()),
     };
 
     if let Err(e) = nomad_core::ui::show_window(view) {

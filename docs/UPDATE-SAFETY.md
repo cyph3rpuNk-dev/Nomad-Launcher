@@ -25,6 +25,23 @@ branding marker can exist. A newly downloaded browser is branded while it is
 still staged. If any required overlay is incompatible, the atomic swap is
 aborted and the currently working browser remains in place.
 
+## Required preparation before launch
+
+Every launch origin uses the same required privacy/policy and portability
+preparation, including fallback and an existing-browser protocol invocation.
+A preparation error stops launch and offers Retry/Close. Launch anyway after
+an update error still runs this preparation and cannot bypass a failure.
+Gecko hardening withdrawal also must complete before launch. Shape-invalid
+settings are preserved for repair rather than interpreted as empty defaults.
+See [required-settings failure safety](HARDENING-FAILURE-SAFETY.md) for exact
+checks, tests, already-correct read-only files and runtime limits.
+
+Enabled-hardening staged Gecko policy/autoconfig errors stop finalization before
+the version marker and swap. Active-profile preparation runs after a successful
+swap, so a later profile failure can leave the new browser installed while launch
+is stopped. Its successful swap is not rolled back by a profile-write error.
+Managed settings use individual atomic replacements, not a multi-file transaction.
+
 ## Update transaction
 
 Each portable folder uses `Nomad/install.lock` to serialize launcher attempts.
@@ -48,6 +65,11 @@ and rollback both fail, the backup remains for recovery on the next direct run.
 Protocol launches and disabled headless checks do not restore, delete or swap
 staging/backup directories. Protocol launches still acquire the GUI lock before
 launch preparation so they cannot race an active update.
+Their optional maintenance reminder reads local cache/check/acknowledgment state
+under that lock. It cannot enable update permissions, perform a lookup, recover
+staging or provision software. Continue resumes required preparation and the
+existing-browser handoff; Close cancels. See [protocol update freshness](PROTOCOL-UPDATE-FRESHNESS.md).
+
 
 ```text
 resolve release
@@ -272,8 +294,8 @@ live-upstream compatibility and signing-key freshness are separate checks.
 
 ## Settings and extension preservation
 
-Chromium preference merges accept missing or empty files as first-run state;
-other read errors and invalid existing JSON stop the write. An unreadable file
+Chromium preference merges accept missing files as first-run state; empty files,
+other read errors and invalid/nonobject existing JSON stop the write. An unreadable file
 must never be silently replaced with defaults. Hardening writers prepare and
 flush a complete replacement in an exclusively created sibling directory before
 promoting it. The old settings file is never opened for truncation. Replacement
@@ -329,8 +351,10 @@ folders; they never install an extension into a running browser.
 
 Helium and Ungoogled Chromium seed `preferences.json` into
 `Browser/initial_preferences` only when `[hardening] enabled = true`. Disabled
-hardening writes the base developer-mode template; Helium additionally forces
-its built-in browser updater off, independently of privacy hardening. This
+hardening writes the base developer-mode template. Helium separately blocks
+component/updater access for unreviewed versions/targets; the reviewed x64
+0.19.2.1 flat layout permits consented component updates while the upstream
+installer eligibility guard excludes that layout. This
 matches the existing gating of Chromium privacy flags and profile-state seeds.
 The portable profile/storage switches remain required in either mode.
 
@@ -340,10 +364,13 @@ profile. Parse/write errors propagate and block preparation; the atomic writer
 preserves the old seed on replacement failure. Chromium consults this seed for
 new profiles. Disabling hardening does not reset values already saved in an
 existing profile, because Nomad cannot distinguish past defaults from the
-user's own choices. Existing preferences survive preparation except for
-Helium's mandatory updater-disable field. Tests cover fresh/existing profiles,
+user's own choices. Existing Helium preferences are preserved byte-for-byte
+for the reviewed component capability; unreviewed builds still force the
+updater-disable field. See [Helium component-update safety](HELIUM-COMPONENT-UPDATES.md)
+for the exact capability, consent rules and recorded Sandbox results.
+Tests cover fresh/existing profiles,
 false/true/false toggles, and read-only replacement failures using inert owned
-temporary files. Actual browser first-run behavior has not been retested here.
+temporary files. Live Helium results and their limits are recorded separately.
 
 ## Network and extraction budgets
 
@@ -411,10 +438,22 @@ and waits for Retry or Close. It does not automatically mark the attempt done,
 offer another fallback bypass, or start cleanup for a process that never existed.
 Retry hands control back to the existing pipeline loop; Close ends the attempt.
 
-Only a successful native spawn invokes the post-spawn callback, starts the
-cleanup watcher and signals the window to close. Success here means process
-creation, not a completed browser startup or a visible browser window. Existing
-preparation, branding and ownership rules still apply.
+Only a spawn that passes the one-second immediate-failure watch invokes the
+post-spawn callback, starts a cleanup worker and signals the window to close.
+An NTSTATUS failure during that interval is reported as failed startup. This
+is not proof of a usable browser window or successful navigation. Ordinary
+remoting exits can be successful. Cleanup workers acquire one owned per-folder
+`Nomad/cleanup.lock`; duplicates exit without repeating post-exit actions.
+The OS releases this coordination lock when its worker exits, including a
+crash. A separate default-on journal records owned image/path intent before
+spawn, under the install lock. Later GUI direct/protocol launch attempts can
+retry attributed Recent/WER cleanup before update work, under both locks and a
+conservative idle check. Post-exit cleanup takes the same install lock before
+deletion, including nested browser layouts. Journal failures permit launch with
+a warning; missed sessions without a usable record remain unrecoverable.
+[Recovery scope, data and test limits](MISSED-CLEANUP-RECOVERY.md) apply; shared
+cache actions and registry operations are never replayed.
+Existing preparation, branding and ownership rules still apply.
 
 Tests use an absent absolute executable in an owned temporary folder and
 controlled error/success results with in-memory UI choices. The success result
@@ -438,15 +477,48 @@ fails closed and leaves host traces intact.
 
 Recent cleanup removes only individual links whose safely parsed local target
 resolves inside this folder; it does not use a drive letter as an ownership
-boundary. Links with competing IDList, relative, network, or environment
-targets, opaque records, or unresolved targets are preserved. WER cleanup
+boundary. Recognized local IDList, LinkInfo, Unicode and relative records must
+all agree on one existing target. Bounded known-folder anchors must also match
+the stored IDList prefix and current built-in folder mapping. Unsupported or
+conflicting records, network/environment targets, and missing targets are
+preserved. The Windows decoder loads metadata from memory and requests RAWPATH;
+it never calls Resolve, saves the shortcut, executes a target or searches for
+moved files. See [Recent shortcut safety](RECENT-SHORTCUT-SAFETY.md) for the
+format allowlist, native trust boundary and Windows test limits. WER cleanup
 requires one absolute `AppPath` in bounded, valid UTF-8 or UTF-16 `Report.wer`
-metadata that resolves to this exact browser image. Directory links and
-junctions are not followed. File metadata reads are capped at 64 KiB.
+metadata that identifies this exact existing browser image. Both current-user
+Local AppData and machine-wide ProgramData queues/archives are covered. AppPath
+is checked against the owned folder before lookup and must pass reparse/path
+checks before canonicalization. Only flat reports with at most 256 ordinary
+files are supported. Windows sharing checks preflight every attachment before
+mutation; attribution is reread through the metadata handle. Attachments,
+including dumps inside that attributed report, are removed before Report.wer;
+the last operation removes an empty folder, without recursive deletion. Reports
+that fail access preflight, or contain linked/nested/over-budget entries, are
+preserved. An attachment
+failure leaves attribution for a later completed session's retry, although
+partial deletion can occur. These checks do not prevent a hostile writer's
+concurrent replacement. File metadata reads are capped at 64 KiB. See
+[WER cleanup safety](WER-CLEANUP-SAFETY.md) for coverage and remaining limits.
 
 Host browser/profile directories, Gecko install maps, shared temporary files,
-raw crash dumps, and whole compound Jump Lists are never automatic deletion
+standalone crash dumps, and whole compound Jump Lists are never automatic deletion
 targets. A matching brand name, filename, or missing executable is not proof
 that a file belongs to the portable instance. Unknown ownership means leaving
-a trace. Explicit thumbnail/icon-cache and Prefetch options keep their
-documented opt-in behavior; no real host cleanup runs in regression tests.
+a trace. Explicit thumbnail/icon-cache clearing keeps its documented opt-in
+behavior. Prefetch deletion and its UAC path are retired: the legacy config
+key and internal flag cannot delete host records. Regression tests cover old
+configuration/argument compatibility without real host cleanup or elevation.
+
+## Ungoogled Chromium component data
+
+Browser release checks and verified bundle replacement do not certify CRLSet
+freshness. Nomad's default flags suppress component registration, and the pinned
+Windows/core source review finds neutralized normal service URLs. Removing the
+flag or disabling hardening alone does not restore the default service path.
+The launcher therefore discloses the gap without globally enabling unreviewed
+component behavior. Existing profile/component files are not changed or deleted
+by that disclosure. [Ungoogled component-update safety](UNGOOGLED-COMPONENT-UPDATES.md)
+records source pins, the inert endpoint reproduction, limits and pending live
+validation. The separately reviewed Helium capability is browser-service consent
+based; its result must not be generalized to Ungoogled Chromium.

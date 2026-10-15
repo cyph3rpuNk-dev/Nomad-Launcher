@@ -1,7 +1,7 @@
 // Nomad Launcher — curated safe Waterfox privacy profile (SPEC §5).
 // Derived from arkenfox user.js <https://github.com/arkenfox/user.js>.
-// Waterfox is based on Firefox ESR 115; aggressive or site-breaking settings
-// are intentionally excluded.
+// Waterfox engine versions change with upstream releases; preference support
+// and effective behavior require separate runtime checks.
 
 // --- Telemetry & data collection ---
 user_pref("toolkit.telemetry.enabled", false);
@@ -55,8 +55,8 @@ user_pref("dom.security.https_only_mode", true);
 user_pref("dom.security.https_only_mode_ever_enabled", true);
 
 // --- Fingerprinting protection ---
-// privacy.fingerprintingProtection requires Firefox 119+; Waterfox ESR 115
-// uses the older privacy.resistFingerprinting API instead.
+// Keep Nomad's existing Waterfox RFP choice; do not infer engine support
+// from a historical ESR version or enable a second protection framework.
 user_pref("privacy.resistFingerprinting", true);
 
 // --- Search & URL bar ---
@@ -103,10 +103,10 @@ user_pref("browser.ping-centre.telemetry", false);
 user_pref("network.http.referer.XOriginTrimmingPolicy", 2);
 
 // --- DNS over HTTPS ---
-// Intentionally not set: Waterfox defaults to DNS-over-Oblivious-HTTP (DoOH),
-// which is stronger than standard DoH (mode 2) — the intermediary proxy means
-// the resolver never sees the user's IP. Overriding trr.mode would downgrade
-// that to plain DoH; we defer to Waterfox's own, superior DNS privacy posture.
+// DNS transport/provider preferences are intentionally not set here or in
+// Waterfox's shared autoconfig. Upstream 6.7.6 defaults to TRR-first (mode 2)
+// with an oblivious HTTP relay; explicit profile choices remain authoritative.
+// Mode 2 permits native DNS fallback. These settings alone do not prove traffic.
 
 // --- Enhanced Tracking Protection ---
 user_pref("privacy.trackingprotection.cryptomining.enabled", true);
