@@ -2391,3 +2391,40 @@ native DNS fallback. The full limitations and provenance are in
 [Waterfox DNS defaults](WATERFOX-DNS-DEFAULTS.md). No production installation or
 release was performed; subsequent commit/push delivery does not extend these
 test results. The broader audit/release hold remains.
+
+## Waterfox runtime DNS observations completed (2026-10-15)
+
+**Tested guest / host-verified selected evidence:** The clean `4951d05` unsigned
+x64 launcher with Waterfox 6.7.6 observed two completed OHTTP address-response
+sequences normally. A fresh disposable guest with the same pinned binaries and
+a program-scoped HTTPS block present at startup observed native/system probe
+resolution, status-0 native completion records and effective request mode 2.
+This supersedes the earlier statement that all Waterfox traffic/fallback remains
+unverified, only for these two specific runs. The original confirmation-domain
+probe remains inconclusive.
+
+The two temporary guest rules were verified at closure/collection, removed,
+and separately inspected as absent in both stores. Original test config and
+selected DNS fields were preserved. The host verified bounded typed selected
+exports, exact digests, public-format/numeric correspondence, helper provenance,
+192 source hashes and byte-identical preservation outside guest-writable output.
+PowerShell 5.1/7 offline outage safety fixtures passed. Raw logs/profiles stayed
+inside their disposable guests. [Exact result, commands, receipts and limits](WATERFOX-DNS-DEFAULTS.md#runtime-address-responses-and-startup-outage-fallback-2026-10-15)
+are recorded separately from the settings/relaunch check.
+
+**Inference / remaining:** Mode 2 permits native/system fallback when encrypted
+DNS is unavailable. That is consistent with upstream policy, not evidence that
+the successful normal DoH test failed. Native/system resolution does not prove
+plaintext OS packets. Broader browser/platform/profile coverage, independent-key
+recovery and genuine Windows-generated Recent/WER fixtures remain separate gaps.
+Ungoogled CRLSet refresh remains unresolved; rating 3/5 and the release hold stay.
+Only documentation is being committed; experimental target helpers/evidence are
+not part of the production change. No push, CI or release result follows from
+this local record.
+
+**Tested before this documentation commit:** `pwsh -NoProfile -File
+scripts/check.ps1` passed on Windows: 550 Rust tests passed, 16 ignored,
+formatting, strict Clippy, offline safety fixtures and the structured dependency
+audit with the existing documented RSA advisory exception. Log:
+`target/waterfox-dns-evidence-check.log`. No new Rust/runtime change was needed.
+Remote checks for this new local documentation commit have not run.
