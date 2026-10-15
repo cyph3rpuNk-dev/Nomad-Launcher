@@ -13,7 +13,7 @@ use super::{
 };
 use crate::config::Arch;
 
-/// Curated safe user.js payload for Waterfox (ESR 115 Gecko engine).
+/// Curated user.js payload for Waterfox; supported preferences vary by release.
 const USER_JS: &str = include_str!("../../payloads/waterfox/user.js");
 
 /// Distribution-level policies.json — shared Gecko payload (LibreWolf-derived, MPL-2.0).
@@ -22,7 +22,8 @@ const POLICIES_JSON: &str = include_str!("../../payloads/firefox/policies.json")
 /// Autoconfig pointer — shared Gecko payload.
 const AUTOCONFIG_JS: &str = include_str!("../../payloads/firefox/autoconfig.js");
 
-/// Main `lockPref()` payload — shared Gecko payload.
+/// Shared privacy defaults without Floorp DNS overrides: retain upstream
+/// oblivious DNS defaults and explicit profile choices.
 const NOMAD_CFG: &str = include_str!("../../payloads/firefox/nomad.cfg");
 
 // Waterfox GitHub repo (BrowserWorks org; no binary assets on GitHub —

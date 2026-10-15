@@ -14,7 +14,8 @@ pub const CONFIG_FILE_NAME: &str = "nomad.toml";
 
 /// Name of the per-launcher subdirectory that houses every Nomad-managed
 /// file (`nomad.toml`, `nomad.log`, `nomad-version-cache.toml`,
-/// `nomad.reg-state.json`, plus the `Gecko-extensions/` XPI staging dir).
+/// `nomad.reg-state.json`, advisory check/reminder receipts, plus the
+/// `Gecko-extensions/` staging and `cleanup-pending/` protected intent records).
 /// Lives beside the launcher executable.
 pub const NOMAD_SUBDIR: &str = "Nomad";
 
@@ -37,6 +38,7 @@ arch = \"x64\"                 # \"x64\" | \"x86\" | \"arm64\"
 [update]
 check_on_launch = true       # false = skip the update check, launch immediately
 auto_download = true         # false = prompt in the status window before downloading
+remind_on_protocol = true    # local reminder; links never check or download updates
 
 [launch]
 language = \"en-US\"           # Chromium/Helium UI language; omit or leave blank for browser default
@@ -46,34 +48,28 @@ incognito = false            # true = launch Chromium browsers in --incognito mo
 [hardening]
 enabled = true               # false = launch with no privacy hardening applied
 sanitize_on_shutdown = true  # false = disable clear-on-exit in Gecko user.js
+recover_missed_cleanup = true # retry recorded attributed cleanup; false = opt out
 # Safe to toggle between launches: the switches that decide how the portable
 # profile is *stored* (machine-ID binding, cookie/token encryption, TPM session
 # binding) are applied on every launch regardless of this setting, so your
 # extensions, cookies, and sign-ins are unaffected either way.
-scrub_thumbnail_cache = false  # true = enable thumbcache scrub on exit (briefly restarts Explorer)
+scrub_thumbnail_cache = false  # true = try clearing unlocked thumbnail/icon caches; Explorer is never stopped
 clear_data_on_exit = false   # true = wipe Chromium cookies/sessions/history on exit (strong privacy, breaks \"stay signed in\")
-scrub_prefetch = false       # true = delete Windows Prefetch entries on exit (requires UAC prompt for non-admin accounts)
-
-# PREFETCH NOTE: Windows Prefetch (C:\\Windows\\Prefetch\\) records the full path
-# to each launched executable. Enabling scrub_prefetch removes those entries on
-# exit but requires administrator privileges — a UAC prompt appears on every
-# browser close for standard-user accounts. Only enable on forensics-sensitive
-# machines where you control the account type. To reduce exposure without the
-# UAC overhead, keep launcher paths short and non-identifying.
+# Windows Prefetch records are preserved. The legacy scrub_prefetch option is
+# accepted for compatibility but has no effect and never requests elevation.
 
 # SECURITY NOTE: When hardening is enabled, browser Safe Browsing is disabled
 # for privacy (it phones home to Google / Mozilla every ~30 minutes). This
 # removes browser-level phishing and malware URL protection. Use a DNS-level
 # block list or a network-layer filter as a substitute if needed.
 
-# WEBRTC NOTE: WebRTC is disabled by default. This prevents sites from
-# discovering your real IP address via STUN — including when behind a VPN,
-# where WebRTC is one of the most common sources of IP leaks. For video or
-# audio calls (Google Meet, Teams, Discord, Zoom in-browser), use a different
-# browser. If you use a VPN, choose one that explicitly provides WebRTC and
-# IP leak protection, and verify it independently at https://browserleaks.com/webrtc
-# before relying on it. To re-enable WebRTC in this browser, set
-# disable_webrtc = false — but understand your real IP may become visible.
+# WEBRTC NOTE: On Floorp, LibreWolf and Waterfox this disables peer connections.
+# On Chromium and Helium it restricts non-proxied UDP; TCP and proxied UDP can
+# still work, so WebRTC is not fully disabled and IP anonymity is not guaranteed.
+# Mullvad keeps its own upstream behavior. Verify your actual network setup at
+# https://browserleaks.com/webrtc before relying on leak protection.
+# Set disable_webrtc = false to stop adding Nomad's override; persisted Gecko
+# preferences may also need adjustment in the browser.
 disable_webrtc = true
 
 # FINGERPRINTING NOTE: reduce_system_info adds the ungoogled ReducedSystemInfo
@@ -191,6 +187,9 @@ pub struct UpdateConfig {
     /// Whether to download a found update without prompting.
     #[serde(default = "default_true")]
     pub auto_download: bool,
+    /// Show local maintenance reminders on launch-only protocol invocations.
+    #[serde(default = "default_true")]
+    pub remind_on_protocol: bool,
 }
 
 impl Default for UpdateConfig {
@@ -198,6 +197,7 @@ impl Default for UpdateConfig {
         Self {
             check_on_launch: true,
             auto_download: true,
+            remind_on_protocol: true,
         }
     }
 }
@@ -223,7 +223,7 @@ pub struct LaunchConfig {
 /// The `[hardening]` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[allow(clippy::struct_excessive_bools)] // six distinct user-facing config toggles, not algorithm state
+#[allow(clippy::struct_excessive_bools)] // independent user-facing config toggles, not algorithm state
 pub struct HardeningConfig {
     /// Whether to apply Nomad's curated privacy-hardening profile.
     #[serde(default = "default_true")]
@@ -232,13 +232,16 @@ pub struct HardeningConfig {
     /// overridden to disabled. Has no effect when `enabled = false`.
     #[serde(default = "default_true")]
     pub sanitize_on_shutdown: bool,
-    /// When `true`, the cleanup watcher terminates Explorer briefly after the
-    /// browser exits to delete thumbnail and icon cache files that may record
-    /// file names from the portable drive. Explorer is restarted immediately.
-    /// Defaults to `false` (opt-in): the scrub restarts Explorer on every
-    /// exit, an acceptable trade-off only on forensics-sensitive machines.
+    /// When `true`, try deleting unlocked thumbnail/icon cache files after
+    /// browser exit. Never stop or restart Explorer; files in use are preserved.
+    /// Defaults to `false` (opt-in) because these caches contain shared host data.
+    /// Best-effort deletion does not guarantee complete cache clearing.
     #[serde(default)]
     pub scrub_thumbnail_cache: bool,
+    /// Best-effort host/user-bound replay of attributed Recent/WER cleanup.
+    /// Independent of privacy hardening; shared cache actions are never replayed.
+    #[serde(default = "default_true")]
+    pub recover_missed_cleanup: bool,
     /// When `true`, Chromium-engine browsers are launched with the
     /// `ClearDataOnExit` feature enabled — cookies, history, downloads, and
     /// sessions are wiped on every exit. Defaults to `false` because it breaks
@@ -246,19 +249,12 @@ pub struct HardeningConfig {
     /// Has no effect on Gecko-engine browsers.
     #[serde(default)]
     pub clear_data_on_exit: bool,
-    /// When `true`, WebRTC is fully disabled rather than merely restricted to
-    /// the public-facing interface.  Prevents real public-IP exposure via STUN
-    /// even without a VPN, but breaks **all** WebRTC video/audio calls (Google
-    /// Meet, Teams, Discord video, etc.).
-    ///
-    /// Chromium: appends `--webrtc-ip-handling-policy=disable_non_proxied_udp`.
-    /// Gecko: adds `user_pref("media.peerconnection.enabled", false)` to the
-    /// managed `user.js` block.
-    ///
-    /// Has no effect when `enabled = false`. Defaults to `true` — WebRTC is
-    /// fully disabled by default because STUN exposes the real WAN IP even
-    /// through a VPN. Set `false` to restore the restricted mode (public
-    /// interface only; WAN IP still visible via STUN).
+    /// Chromium: restrict non-proxied UDP; TCP/proxied UDP may still work.
+    /// This does not fully disable WebRTC or guarantee IP anonymity.
+    /// Floorp/LibreWolf/Waterfox: disable peer connections through managed
+    /// user.js. Mullvad retains its upstream behavior. Defaults to `true`.
+    /// Has no effect when hardening is disabled. Setting this false stops
+    /// adding the override but does not reset persisted Gecko preferences.
     #[serde(default = "default_true")]
     pub disable_webrtc: bool,
     /// When `true`, Chromium-engine browsers add the `ReducedSystemInfo` feature
@@ -273,12 +269,9 @@ pub struct HardeningConfig {
     /// `enabled = false`.
     #[serde(default = "default_true")]
     pub reduce_system_info: bool,
-    /// When `true`, the cleanup watcher attempts to delete Windows Prefetch
-    /// entries (`C:\Windows\Prefetch\`) for the launcher and browser executables.
-    /// Requires administrator privileges: a UAC elevation prompt will appear on
-    /// browser exit for non-admin accounts. Defaults to `false` (opt-in) because
-    /// the UAC prompt appears on every exit — only enable this on
-    /// forensics-sensitive machines where you control the account type.
+    /// Retired compatibility key. Both values are accepted so existing configs
+    /// continue loading, but no Prefetch deletion or elevation is performed.
+    /// A true value causes a retirement warning when cleanup is scheduled.
     #[serde(default)]
     pub scrub_prefetch: bool,
 }
@@ -289,6 +282,7 @@ impl Default for HardeningConfig {
             enabled: true,
             sanitize_on_shutdown: true,
             scrub_thumbnail_cache: false,
+            recover_missed_cleanup: true,
             clear_data_on_exit: false,
             disable_webrtc: true,
             reduce_system_info: true,
@@ -594,6 +588,23 @@ mod tests {
     }
 
     #[test]
+    fn protocol_freshness_reminders_default_on_and_allow_explicit_opt_out() {
+        let legacy = DEFAULT_NOMAD_TOML
+            .lines()
+            .filter(|line| !line.starts_with("remind_on_protocol"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(Config::parse(&legacy).unwrap().update.remind_on_protocol);
+        let off =
+            DEFAULT_NOMAD_TOML.replace("remind_on_protocol = true", "remind_on_protocol = false");
+        assert!(!Config::parse(&off).unwrap().update.remind_on_protocol);
+        assert!(Config::parse(
+            &DEFAULT_NOMAD_TOML.replace("remind_on_protocol = true", "remind_on_protocol = 1")
+        )
+        .is_err());
+    }
+
+    #[test]
     fn parses_a_complete_config() {
         let cfg = Config::parse(DEFAULT_NOMAD_TOML).expect("default config must parse");
         assert_eq!(cfg.browser.install_dir, PathBuf::from("Browser"));
@@ -660,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    fn scrub_prefetch_defaults_to_false_and_can_be_enabled() {
+    fn retired_prefetch_setting_remains_compatible_without_a_default_opt_in() {
         let minimal = Config::parse("[browser]\ninstall_dir = \"browser\"\n")
             .expect("minimal config must parse");
         assert!(
@@ -673,6 +684,7 @@ mod tests {
         )
         .expect("config must parse");
         assert!(enabled.hardening.scrub_prefetch);
+        assert!(!DEFAULT_NOMAD_TOML.contains("scrub_prefetch ="));
 
         // When [hardening] is present but the key is absent (pre-existing configs),
         // the serde default applies — must stay false, never enable silently.

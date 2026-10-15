@@ -103,7 +103,8 @@ impl VersionCache {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        now.saturating_sub(self.fetched_at) < CACHE_TTL_SECS
+        now.checked_sub(self.fetched_at)
+            .is_some_and(|age| age < CACHE_TTL_SECS)
     }
 
     /// Returns whether this cache entry contains at least one verification
@@ -116,9 +117,9 @@ impl VersionCache {
     /// Reads and deserialises a cache from `path`.  Returns `None` on any
     /// error (missing file, malformed TOML, etc.).
     pub fn load(path: &Path) -> Option<Self> {
-        crate::fs_safety::ensure_file(path).ok()?;
-        let text = std::fs::read_to_string(path).ok()?;
-        toml::from_str(&text).ok()
+        let bytes = read_bounded(path, 64 * 1024)?;
+        let text = std::str::from_utf8(&bytes).ok()?;
+        toml::from_str(text).ok()
     }
 
     /// Serialises the cache to `path` via a temp file + atomic rename, so a
@@ -178,6 +179,59 @@ pub fn update_ubo_version(path: &Path, version: &str) {
     });
     cache.ubo_version = Some(version.to_owned());
     cache.save(path);
+}
+
+/// Bounded ordinary-file reads for local advisory state. Invalid data is unknown.
+pub(crate) fn read_bounded(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    crate::fs_safety::ensure_file(path).ok()?;
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).ok()?;
+    (u64::try_from(bytes.len()).ok()? <= limit).then_some(bytes)
+}
+
+/// Successful lookup, kept separately from the durable installed-version cache.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExtensionCheck {
+    pub schema: u8,
+    pub checked_at: u64,
+    pub version: String,
+}
+pub(crate) const EXTENSION_CHECK_FILE: &str = "managed-extension-check.json";
+pub(crate) fn extension_check(cache_path: &Path) -> Option<ExtensionCheck> {
+    let bytes = read_bounded(&cache_path.with_file_name(EXTENSION_CHECK_FILE), 4096)?;
+    let check: ExtensionCheck = serde_json::from_slice(&bytes).ok()?;
+    (check.schema == 1 && valid_extension_version(&check.version)).then_some(check)
+}
+fn valid_extension_version(version: &str) -> bool {
+    !version.is_empty() && version.len() <= 128 && !version.chars().any(char::is_control)
+}
+/// Records a lookup, not installation, activation, filtering, or archive verification.
+pub(crate) fn record_ubo_check(path: &Path, version: &str) {
+    if !valid_extension_version(version) {
+        return;
+    }
+    let check = ExtensionCheck {
+        schema: 1,
+        checked_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        version: version.to_owned(),
+    };
+    let record = path.with_file_name(EXTENSION_CHECK_FILE);
+    let result = (|| -> std::io::Result<()> {
+        if let Some(parent) = record.parent() {
+            crate::fs_safety::create_dir_all(parent)?;
+        }
+        let bytes = serde_json::to_vec(&check)?;
+        crate::fs_safety::atomic_write(&record, &bytes)
+    })();
+    if let Err(error) = result {
+        tracing::warn!(%error, "cannot record managed-extension metadata check");
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -292,6 +346,30 @@ mod tests {
         assert_eq!(roundtripped.browser_version, info.browser_version);
         assert_eq!(roundtripped.download_url, info.download_url);
         assert_eq!(roundtripped.sha256, info.sha256);
+    }
+
+    #[test]
+    fn protocol_freshness_future_browser_timestamp_is_not_a_fresh_cache() {
+        let mut cache = fixture_cache("1.0");
+        cache.fetched_at = u64::MAX;
+        assert!(!cache.is_fresh());
+    }
+    #[test]
+    fn protocol_freshness_extension_lookup_preserves_installation_cache_and_browser_timestamp() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("cache.toml");
+        update_ubo_version(&path, "1.0");
+        let original = std::fs::read(&path).unwrap();
+        record_ubo_check(&path, "2.0");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let receipt = extension_check(&path).unwrap();
+        assert_eq!(receipt.version, "2.0");
+        assert!(receipt.checked_at > 0);
+        let loaded = VersionCache::load(&path).unwrap();
+        assert_eq!(loaded.ubo_version.as_deref(), Some("1.0"));
+        assert_eq!(loaded.fetched_at, 0);
+        record_ubo_check(&path, "bad\nversion");
+        assert_eq!(extension_check(&path).unwrap().version, "2.0");
     }
 
     #[test]

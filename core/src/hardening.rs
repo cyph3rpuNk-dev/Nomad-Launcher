@@ -17,6 +17,20 @@ use crate::browsers::{BrowserError, Result};
 const MARKER_BEGIN: &str = "// === Nomad Launcher hardening — begin ===";
 const MARKER_END: &str = "// === Nomad Launcher hardening — end ===";
 
+/// Preserve an already-correct managed file, including on read-only bundles.
+/// Unreadable existing bytes cannot establish correctness and must fail.
+fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {
+    crate::fs_safety::ensure_file(path)?;
+    match std::fs::read(path) {
+        Ok(existing) if existing == bytes => return Ok(()),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    crate::fs_safety::atomic_write(path, bytes)?;
+    Ok(())
+}
+
 /// Writes `user_js_content` into `<profile_dir>/user.js`, fenced by Nomad
 /// markers so successive writes replace only the managed section.
 ///
@@ -28,8 +42,8 @@ const MARKER_END: &str = "// === Nomad Launcher hardening — end ===";
 /// Returns [`BrowserError::Io`] if the directory cannot be created, the file
 /// cannot be written, or an *existing* `user.js` cannot be read (non-UTF-8,
 /// locked, …) — treating an unreadable file as empty would overwrite the
-/// user's own prefs with just the managed block. The launch path logs the
-/// error and launches without refreshing the block.
+/// user's own prefs with just the managed block. Required launch preparation
+/// propagates the error and stops before browser creation.
 pub fn write_user_js(profile_dir: &Path, user_js_content: &str) -> Result<()> {
     crate::fs_safety::create_dir_all(profile_dir)?;
     let path = profile_dir.join("user.js");
@@ -47,7 +61,7 @@ pub fn write_user_js(profile_dir: &Path, user_js_content: &str) -> Result<()> {
     } else {
         format!("{existing}\n\n{managed}")
     };
-    crate::fs_safety::atomic_write(&path, new_content.as_bytes())?;
+    write_if_changed(&path, new_content.as_bytes())?;
     Ok(())
 }
 
@@ -62,12 +76,14 @@ pub fn write_user_js(profile_dir: &Path, user_js_content: &str) -> Result<()> {
 ///
 /// # Errors
 /// Returns [`BrowserError::Io`] if the file exists but cannot be rewritten or
-/// removed.
+/// removed, or existing bytes cannot be read as UTF-8.
 pub fn remove_managed_user_js(profile_dir: &Path) -> Result<()> {
     let path = profile_dir.join("user.js");
     crate::fs_safety::ensure_file(&path)?;
-    let Ok(existing) = std::fs::read_to_string(&path) else {
-        return Ok(()); // no file (or unreadable) — nothing to remove
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
     };
     if !existing.contains(MARKER_BEGIN) {
         return Ok(()); // no Nomad block — leave the user's own file untouched
@@ -87,11 +103,13 @@ pub fn remove_managed_user_js(profile_dir: &Path) -> Result<()> {
 /// install time on the stage directory, so the file is swapped in atomically.
 ///
 /// # Errors
-/// Returns [`BrowserError::Io`] if the directory or file cannot be written.
+/// Returns [`BrowserError::Io`] if the directory or file cannot be written, and
+/// [`BrowserError::Parse`] for an invalid root or policies object.
 pub fn write_policies_json(install_dir: &Path, policies_content: &str) -> Result<()> {
+    validate_policy_payload(policies_content)?;
     let dist = install_dir.join("distribution");
     crate::fs_safety::create_dir_all(&dist)?;
-    crate::fs_safety::atomic_write(&dist.join("policies.json"), policies_content.as_bytes())?;
+    write_if_changed(&dist.join("policies.json"), policies_content.as_bytes())?;
     Ok(())
 }
 
@@ -115,11 +133,11 @@ pub fn write_autoconfig(
 ) -> Result<()> {
     let pref_dir = install_dir.join("defaults").join("pref");
     crate::fs_safety::create_dir_all(&pref_dir)?;
-    crate::fs_safety::atomic_write(
+    write_if_changed(
         &pref_dir.join("autoconfig.js"),
         autoconfig_content.as_bytes(),
     )?;
-    crate::fs_safety::atomic_write(&install_dir.join("nomad.cfg"), cfg_content.as_bytes())?;
+    write_if_changed(&install_dir.join("nomad.cfg"), cfg_content.as_bytes())?;
     Ok(())
 }
 
@@ -169,7 +187,9 @@ pub fn remove_autoconfig(install_dir: &Path) -> Result<()> {
 ///   are made on the `<basename>` part before `@` so a user-modified
 ///   `<flag>@2` is left alone even when our default is `<flag>@1`.
 /// - **Scalars**: only set when the key is absent. Once a user has changed a
-///   value via the browser UI, we do not roll it back.
+///   value via the browser UI, we do not roll it back unless the key is in
+///   `LOCKED_SCALAR_PATHS`. Those required values (including `DoH` mode/resolver)
+///   are re-enforced from the payload on every enabled-hardening launch.
 ///
 /// Either `local_state_json` or `preferences_json` may be `None`. The
 /// `Default/` profile directory is created if absent so `Preferences` can be
@@ -214,7 +234,7 @@ pub fn write_chromium_state(
 pub fn write_chromium_initial_preferences(install_dir: &Path, payload: &str) -> Result<()> {
     let path = install_dir.join("initial_preferences");
     crate::fs_safety::create_dir_all(install_dir)?;
-    crate::fs_safety::atomic_write(&path, payload.as_bytes())?;
+    write_if_changed(&path, payload.as_bytes())?;
     Ok(())
 }
 
@@ -241,6 +261,11 @@ pub fn build_initial_preferences(template: &str, profile_prefs: &str) -> Result<
         .map_err(|e| BrowserError::Parse(format!("invalid initial_preferences template: {e}")))?;
     let overlay: Value = serde_json::from_str(profile_prefs)
         .map_err(|e| BrowserError::Parse(format!("invalid Chromium preferences payload: {e}")))?;
+    if !base.is_object() || !overlay.is_object() {
+        return Err(BrowserError::Parse(
+            "initial preferences payloads must contain JSON objects".to_owned(),
+        ));
+    }
     let merged = merge_value(base, overlay);
     serde_json::to_string(&merged)
         .map_err(|e| BrowserError::Parse(format!("could not serialize initial_preferences: {e}")))
@@ -274,22 +299,32 @@ fn get_by_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
 }
 
 /// Writes `val` into `root` at the `.`-separated `path`, creating any missing
-/// intermediate objects.  Does nothing when a non-final path segment is not an
+/// intermediate objects. Returns an error when a non-final path segment is not an
 /// object (i.e. a scalar blocks the descent).
-fn set_by_path(root: &mut Value, path: &str, val: Value) {
+fn set_by_path(root: &mut Value, path: &str, val: Value) -> Result<()> {
     let mut keys: Vec<&str> = path.split('.').collect();
-    let Some(last) = keys.pop() else { return };
+    let last = keys
+        .pop()
+        .ok_or_else(|| BrowserError::Parse("empty required preference path".to_owned()))?;
     let mut cur = root;
     for key in keys {
-        let Value::Object(m) = cur else { return };
+        let Value::Object(m) = cur else {
+            return Err(BrowserError::Parse(format!(
+                "required preference {path} has a non-object container"
+            )));
+        };
         cur = m.entry(key).or_insert_with(|| Value::Object(Map::new()));
     }
-    if let Value::Object(m) = cur {
-        m.insert(last.to_owned(), val);
-    }
+    let Value::Object(m) = cur else {
+        return Err(BrowserError::Parse(format!(
+            "required preference {path} has a non-object container"
+        )));
+    };
+    m.insert(last.to_owned(), val);
+    Ok(())
 }
 
-/// Reads `path` (treating missing or empty files as an empty object), parses
+/// Reads `path` (treating only missing files as an empty object), parses
 /// `defaults_json`, merges with `merge_value` semantics, then re-applies all
 /// entries from [`LOCKED_SCALAR_PATHS`] from the defaults so that
 /// privacy-critical settings cannot be silently re-enabled by the browser.
@@ -299,6 +334,7 @@ fn merge_json_file(path: &Path, defaults_json: &str) -> Result<()> {
     crate::fs_safety::ensure_file(path)?;
     let defaults: Value = serde_json::from_str(defaults_json)
         .map_err(|e| BrowserError::Parse(format!("invalid Chromium hardening payload: {e}")))?;
+    let mut existed = true;
     let existing: Value = match std::fs::read_to_string(path) {
         Ok(s) if !s.trim().is_empty() => serde_json::from_str(&s).map_err(|e| {
             BrowserError::Parse(format!(
@@ -306,15 +342,30 @@ fn merge_json_file(path: &Path, defaults_json: &str) -> Result<()> {
                 path.display()
             ))
         })?,
-        Ok(_) => Value::Object(Map::new()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
+        Ok(_) => {
+            return Err(BrowserError::Parse(
+                "existing Chromium settings file is empty".to_owned(),
+            ))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            existed = false;
+            Value::Object(Map::new())
+        }
         Err(e) => return Err(e.into()),
     };
-    let mut merged = merge_value(existing, defaults.clone());
+    if !defaults.is_object() || !existing.is_object() {
+        return Err(BrowserError::Parse(
+            "Chromium settings must contain a JSON object".to_owned(),
+        ));
+    }
+    let mut merged = merge_value(existing.clone(), defaults.clone());
     for &locked in LOCKED_SCALAR_PATHS {
         if let Some(enforced) = get_by_path(&defaults, locked) {
-            set_by_path(&mut merged, locked, enforced.clone());
+            set_by_path(&mut merged, locked, enforced.clone())?;
         }
+    }
+    if existed && merged == existing {
+        return Ok(());
     }
     if let Some(parent) = path.parent() {
         crate::fs_safety::create_dir_all(parent)?;
@@ -379,48 +430,49 @@ fn merge_array_aware(key: &str, existing: Value, defaults: Value) -> Value {
     }
 }
 
+fn validate_policy_payload(payload: &str) -> Result<Value> {
+    let root: Value = serde_json::from_str(payload)
+        .map_err(|e| BrowserError::Parse(format!("invalid browser policies JSON: {e}")))?;
+    if !root.is_object() || !root.get("policies").is_some_and(Value::is_object) {
+        return Err(BrowserError::Parse(
+            "browser policies must contain a policies object".to_owned(),
+        ));
+    }
+    Ok(root)
+}
+
 /// Injects (or replaces) the `uBlock0@raymondhill.net` entry in the
 /// `ExtensionSettings` section of `policies_json` with a `file://` URL
 /// pointing at `xpi_path`, so Firefox installs the extension without
 /// contacting AMO.
 ///
-/// The `policies` and `ExtensionSettings` objects are created if absent — the
-/// curated Nomad `policies.json` does not declare an `ExtensionSettings`
-/// section, so the entry must be added from scratch rather than merged into an
-/// existing one.
+/// The `policies` object is required. `ExtensionSettings` is created if absent;
+/// the curated payload does not declare that section, so the entry is added
+/// without silently accepting a malformed policy object.
 ///
-/// Returns the modified JSON string on success, or the original unchanged
-/// string if the document is not a JSON object (e.g. parse failure).
-pub(crate) fn inject_ublock_policy(policies_json: &str, xpi_path: &Path) -> String {
-    let url = format!("file:///{}", xpi_path.to_string_lossy().replace('\\', "/"));
-    let Ok(mut root) = serde_json::from_str::<Value>(policies_json) else {
-        return policies_json.to_owned();
-    };
-    // The document root must be an object to host the "policies" key.
-    let Some(root_obj) = root.as_object_mut() else {
-        return policies_json.to_owned();
-    };
-    // Ensure "policies" -> "ExtensionSettings" exist as objects, creating each
-    // if the curated payload did not declare it.
-    let policies = root_obj.entry("policies").or_insert_with(|| json!({}));
-    let Some(policies_obj) = policies.as_object_mut() else {
-        return policies_json.to_owned();
-    };
-    let ext = policies_obj
+/// # Errors
+/// Returns an error for malformed/nonobject policies or an invalid local path;
+/// never silently returns an uninjected payload.
+pub(crate) fn inject_ublock_policy(policies_json: &str, xpi_path: &Path) -> Result<String> {
+    let url = reqwest::Url::from_file_path(xpi_path).map_err(|()| {
+        BrowserError::Parse("cached extension requires an absolute local file path".to_owned())
+    })?;
+    let mut root = validate_policy_payload(policies_json)?;
+    let policies = root
+        .get_mut("policies")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| BrowserError::Parse("missing policies object".to_owned()))?;
+    let ext = policies
         .entry("ExtensionSettings")
         .or_insert_with(|| json!({}));
-    let Some(ext_settings) = ext.as_object_mut() else {
-        return policies_json.to_owned();
-    };
-    ext_settings.insert(
-        "uBlock0@raymondhill.net".to_owned(),
-        json!({
-            "install_url": url,
-            "installation_mode": "normal_installed",
-            "private_browsing": true
-        }),
-    );
-    serde_json::to_string_pretty(&root).unwrap_or_else(|_| policies_json.to_owned())
+    let ext_settings = ext.as_object_mut().ok_or_else(|| {
+        BrowserError::Parse("ExtensionSettings must contain an object".to_owned())
+    })?;
+    ext_settings.insert("uBlock0@raymondhill.net".to_owned(), json!({
+        "install_url": url.as_str(), "installation_mode": "normal_installed", "private_browsing": true
+    }));
+    serde_json::to_string_pretty(&root)
+        .map_err(|e| BrowserError::Parse(format!("could not serialize browser policies: {e}")))
 }
 
 /// Replaces the Nomad-managed fenced section in `existing` with `managed_block`.
@@ -460,6 +512,145 @@ fn strip_fenced(existing: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn correct_readonly_managed_files_are_accepted_without_rewriting() {
+        let temp = tempfile::tempdir().unwrap();
+        write_user_js(temp.path(), "user_pref(\"fixture\", true);").unwrap();
+        write_policies_json(temp.path(), r#"{"policies":{"DisableAppUpdate":true}}"#).unwrap();
+        write_autoconfig(temp.path(), "// pointer\n", "// config\n").unwrap();
+        write_chromium_initial_preferences(temp.path(), "{}").unwrap();
+        let paths: Vec<_> = [
+            "user.js",
+            "distribution/policies.json",
+            "defaults/pref/autoconfig.js",
+            "nomad.cfg",
+            "initial_preferences",
+        ]
+        .iter()
+        .map(|name| temp.path().join(name))
+        .collect();
+        let saved: Vec<_> = paths
+            .iter()
+            .map(|path| std::fs::metadata(path).unwrap().permissions())
+            .collect();
+        for path in &paths {
+            let mut permissions = std::fs::metadata(path).unwrap().permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(path, permissions).unwrap();
+        }
+        let results = [
+            write_user_js(temp.path(), "user_pref(\"fixture\", true);"),
+            write_policies_json(temp.path(), r#"{"policies":{"DisableAppUpdate":true}}"#),
+            write_autoconfig(temp.path(), "// pointer\n", "// config\n"),
+            write_chromium_initial_preferences(temp.path(), "{}"),
+        ];
+        for (path, permissions) in paths.iter().zip(saved) {
+            std::fs::set_permissions(path, permissions).unwrap();
+        }
+        for result in results {
+            assert!(
+                result.is_ok(),
+                "matching read-only file must not require a write: {result:?}"
+            );
+        }
+        let state = temp.path().join("Local State");
+        let original = r#"{ "dns_over_https": { "mode": "secure" } }"#;
+        std::fs::write(&state, original).unwrap();
+        let saved = std::fs::metadata(&state).unwrap().permissions();
+        let mut permissions = saved.clone();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&state, permissions).unwrap();
+        let unchanged = write_chromium_state(
+            temp.path(),
+            Some(r#"{"dns_over_https":{"mode":"secure"}}"#),
+            None,
+        );
+        let changed = write_chromium_state(
+            temp.path(),
+            Some(r#"{"dns_over_https":{"mode":"off"}}"#),
+            None,
+        );
+        std::fs::set_permissions(&state, saved).unwrap();
+        assert!(unchanged.is_ok());
+        assert!(changed.is_err());
+        assert_eq!(std::fs::read_to_string(state).unwrap(), original);
+    }
+
+    #[test]
+    fn required_json_shape_failures_preserve_existing_state() {
+        for original in [
+            "[]",
+            "false",
+            "null",
+            "",
+            " ",
+            r#"{"dns_over_https":false}"#,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let file = temp.path().join("Local State");
+            std::fs::write(&file, original).unwrap();
+            assert!(write_chromium_state(
+                temp.path(),
+                Some(r#"{"dns_over_https":{"mode":"secure"}}"#),
+                None
+            )
+            .is_err());
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
+            assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn required_payload_shapes_are_rejected_before_overwriting_policy_or_seed() {
+        let temp = tempfile::tempdir().unwrap();
+        write_policies_json(temp.path(), r#"{"policies":{"DisableAppUpdate":true}}"#).unwrap();
+        let file = temp.path().join("distribution/policies.json");
+        let original = std::fs::read(&file).unwrap();
+        for bad in ["bad", "[]", "{}", r#"{"policies":false}"#] {
+            assert!(write_policies_json(temp.path(), bad).is_err());
+            assert_eq!(std::fs::read(&file).unwrap(), original);
+        }
+        for bad in ["[]", "false", "null"] {
+            assert!(build_initial_preferences(bad, "{}").is_err());
+            assert!(build_initial_preferences("{}", bad).is_err());
+        }
+    }
+
+    #[test]
+    fn removal_of_unreadable_user_preferences_fails_without_erasing_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("user.js");
+        let original = b"// unreadable comment \xff\nuser_pref(\"mine\", true);";
+        std::fs::write(&file, original).unwrap();
+        assert!(remove_managed_user_js(temp.path()).is_err());
+        assert_eq!(std::fs::read(file).unwrap(), original);
+    }
+
+    #[test]
+    fn local_extension_policy_url_round_trips_reserved_characters() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp
+            .path()
+            .join("space # percent % unicode \u{03c0}")
+            .join("uBlock0.xpi");
+        let payload = inject_ublock_policy(r#"{"policies":{}}"#, &path).unwrap();
+        let value: Value = serde_json::from_str(&payload).unwrap();
+        let url = reqwest::Url::parse(
+            value
+                .pointer("/policies/ExtensionSettings/uBlock0@raymondhill.net/install_url")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(url.to_file_path().unwrap(), path);
+        assert!(url.fragment().is_none());
+        assert!(
+            inject_ublock_policy(r#"{"policies":{}}"#, Path::new("relative/uBlock0.xpi")).is_err()
+        );
+    }
 
     #[test]
     fn unreadable_chromium_preferences_are_preserved_without_resetting_to_defaults() {
@@ -555,6 +746,131 @@ mod tests {
         assert_eq!(healed.matches(MARKER_BEGIN).count(), 1);
         assert_eq!(healed.matches(MARKER_END).count(), 1);
         assert!(healed.ends_with(MARKER_END));
+    }
+
+    #[test]
+    fn waterfox_omits_dns_overrides_without_dropping_other_hardening() {
+        use crate::browsers::{floorp::Floorp, waterfox::Waterfox, BrowserFamily, Hardening};
+        use crate::Arch;
+        let Hardening::GeckoProfile {
+            user_js,
+            cfg: Some(waterfox),
+            policies: Some(policies),
+            ..
+        } = Waterfox::new(Arch::X64).hardening()
+        else {
+            panic!("missing Waterfox payloads");
+        };
+        let Hardening::GeckoProfile {
+            cfg: Some(floorp), ..
+        } = Floorp::new(Arch::X64).hardening()
+        else {
+            panic!("missing Floorp autoconfig");
+        };
+        assert_eq!(
+            floorp.strip_suffix(include_str!("../payloads/firefox/dns.cfg")),
+            Some(waterfox),
+            "all non-DNS autoconfig must remain identical across both adapters"
+        );
+        for payload in [waterfox, user_js, policies] {
+            for line in payload.lines().map(str::trim) {
+                if line.starts_with("//") {
+                    continue;
+                }
+                assert!(!line.contains("network.trr.") && !line.contains("doh-rollout."));
+            }
+        }
+        assert!(!policies.contains("DNSOverHTTPS"));
+        assert!(floorp.contains("defaultPref(\"network.trr.mode\", 5);"));
+        assert!(floorp.contains("https://dns.quad9.net/dns-query"));
+        assert!(user_js.contains("user_pref(\"privacy.resistFingerprinting\", true);"));
+        // Floorp's user.js still supplies its TRR-first user preference.
+        let Hardening::GeckoProfile { user_js, .. } = Floorp::new(Arch::X64).hardening() else {
+            unreachable!();
+        };
+        assert!(user_js.contains("user_pref(\"network.trr.mode\", 2);"));
+    }
+
+    #[test]
+    fn waterfox_dns_upgrade_replaces_stale_autoconfig_and_preserves_user_choices() {
+        use crate::browsers::{waterfox::Waterfox, BrowserFamily, Hardening};
+        use crate::Arch;
+        let Hardening::GeckoProfile {
+            user_js,
+            autoconfig: Some(pointer),
+            cfg: Some(cfg),
+            ..
+        } = Waterfox::new(Arch::X64).hardening()
+        else {
+            panic!("missing Waterfox autoconfig");
+        };
+        // Fresh, explicitly disabled and custom-resolver profiles: do not guess
+        // which saved choices were intentional or reset them during migration.
+        for user_choice in [
+            "",
+            "user_pref(\"network.trr.mode\", 5);\n",
+            "user_pref(\"network.trr.mode\", 3);\nuser_pref(\"network.trr.uri\", \"https://resolver.example/dns-query\");\nuser_pref(\"network.trr.use_ohttp\", false);\n",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let install = dir.path().join("Browser");
+            let profile = dir.path().join("Data");
+            std::fs::create_dir_all(&profile).unwrap();
+            std::fs::write(profile.join("user.js"), user_choice).unwrap();
+            std::fs::write(profile.join("prefs.js"), user_choice).unwrap();
+            let old = format!("{cfg}\ndefaultPref(\"network.trr.mode\", 5);\n");
+            write_autoconfig(&install, pointer, &old).unwrap();
+            for _ in 0..2 {
+                write_autoconfig(&install, pointer, cfg).unwrap();
+                write_user_js(&profile, user_js).unwrap();
+                let actual = std::fs::read_to_string(install.join("nomad.cfg")).unwrap();
+                assert_eq!(actual, cfg);
+                assert!(!actual.contains("network.trr.mode"));
+                let managed = std::fs::read_to_string(profile.join("user.js")).unwrap();
+                assert!(managed.starts_with(user_choice));
+                assert_eq!(managed.matches(MARKER_BEGIN).count(), 1);
+                assert_eq!(std::fs::read_to_string(profile.join("prefs.js")).unwrap(), user_choice);
+            }
+        }
+    }
+
+    #[test]
+    fn waterfox_dns_upgrade_refuses_a_non_file_cfg_target() {
+        use crate::browsers::{waterfox::Waterfox, BrowserFamily, Hardening};
+        use crate::Arch;
+        let Hardening::GeckoProfile {
+            autoconfig: Some(pointer),
+            cfg: Some(cfg),
+            ..
+        } = Waterfox::new(Arch::X64).hardening()
+        else {
+            panic!("missing Waterfox autoconfig");
+        };
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("nomad.cfg")).unwrap();
+        assert!(write_autoconfig(dir.path(), pointer, cfg).is_err());
+        assert!(dir.path().join("nomad.cfg").is_dir());
+    }
+
+    #[test]
+    fn gecko_autoconfig_keeps_general_extension_security_updates_user_configurable() {
+        use crate::browsers::{floorp::Floorp, waterfox::Waterfox};
+        use crate::{Arch, BrowserFamily, Hardening};
+        for hardening in [
+            Floorp::new(Arch::X64).hardening(),
+            Waterfox::new(Arch::X64).hardening(),
+        ] {
+            let Hardening::GeckoProfile { cfg: Some(cfg), .. } = hardening else {
+                panic!("expected shared Gecko autoconfig");
+            };
+            for pref in [
+                "extensions.update.enabled",
+                "extensions.update.autoUpdateDefault",
+            ] {
+                assert!(cfg.contains(&format!("defaultPref(\"{pref}\", true);")));
+                assert!(!cfg.contains(&format!("lockPref(\"{pref}\",")));
+                assert!(!cfg.contains(&format!("defaultPref(\"{pref}\", false);")));
+            }
+        }
     }
 
     #[test]
@@ -990,8 +1306,9 @@ mod tests {
     #[test]
     fn inject_ublock_creates_extension_settings_when_absent() {
         let curated = r#"{"policies":{"DisableAppUpdate":true,"DisableTelemetry":true}}"#;
-        let xpi = Path::new(r"C:\Portables\Floorp\Nomad\Gecko-extensions\uBlock0.xpi");
-        let out = inject_ublock_policy(curated, xpi);
+        let temp = tempfile::tempdir().unwrap();
+        let xpi = temp.path().join("uBlock0.xpi");
+        let out = inject_ublock_policy(curated, &xpi).unwrap();
         let v: Value = serde_json::from_str(&out).expect("output must be valid JSON");
 
         let ubo = v
@@ -1022,8 +1339,9 @@ mod tests {
     fn inject_ublock_preserves_existing_extension_settings_entries() {
         let with_existing =
             r#"{"policies":{"ExtensionSettings":{"other@ext":{"installation_mode":"blocked"}}}}"#;
-        let xpi = Path::new("/tmp/uBlock0.xpi");
-        let out = inject_ublock_policy(with_existing, xpi);
+        let temp = tempfile::tempdir().unwrap();
+        let xpi = temp.path().join("uBlock0.xpi");
+        let out = inject_ublock_policy(with_existing, &xpi).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(
             v.pointer("/policies/ExtensionSettings/other@ext/installation_mode")
@@ -1039,9 +1357,17 @@ mod tests {
     }
 
     #[test]
-    fn inject_ublock_returns_original_on_malformed_json() {
-        let bad = "this is not json";
-        let out = inject_ublock_policy(bad, Path::new("/tmp/uBlock0.xpi"));
-        assert_eq!(out, bad, "malformed input must be returned unchanged");
+    fn inject_ublock_refuses_malformed_or_nonobject_policies() {
+        let temp = tempfile::tempdir().unwrap();
+        let xpi = temp.path().join("uBlock0.xpi");
+        for bad in [
+            "this is not json",
+            "[]",
+            "{}",
+            r#"{"policies":false}"#,
+            r#"{"policies":{"ExtensionSettings":false}}"#,
+        ] {
+            assert!(inject_ublock_policy(bad, &xpi).is_err());
+        }
     }
 }

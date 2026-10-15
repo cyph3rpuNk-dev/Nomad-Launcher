@@ -21,8 +21,11 @@ const POLICIES_JSON: &str = include_str!("../../payloads/firefox/policies.json")
 /// Autoconfig pointer — shared Gecko payload.
 const AUTOCONFIG_JS: &str = include_str!("../../payloads/firefox/autoconfig.js");
 
-/// Main `lockPref()` payload — shared Gecko payload.
-const NOMAD_CFG: &str = include_str!("../../payloads/firefox/nomad.cfg");
+/// Shared privacy defaults plus Floorp-only DNS defaults.
+const NOMAD_CFG: &str = concat!(
+    include_str!("../../payloads/firefox/nomad.cfg"),
+    include_str!("../../payloads/firefox/dns.cfg"),
+);
 
 const API_URL: &str = "https://api.github.com/repos/floorp-projects/floorp/releases/latest";
 
