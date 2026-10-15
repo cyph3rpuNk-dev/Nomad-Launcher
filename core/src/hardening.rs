@@ -749,6 +749,109 @@ mod tests {
     }
 
     #[test]
+    fn waterfox_omits_dns_overrides_without_dropping_other_hardening() {
+        use crate::browsers::{floorp::Floorp, waterfox::Waterfox, BrowserFamily, Hardening};
+        use crate::Arch;
+        let Hardening::GeckoProfile {
+            user_js,
+            cfg: Some(waterfox),
+            policies: Some(policies),
+            ..
+        } = Waterfox::new(Arch::X64).hardening()
+        else {
+            panic!("missing Waterfox payloads");
+        };
+        let Hardening::GeckoProfile {
+            cfg: Some(floorp), ..
+        } = Floorp::new(Arch::X64).hardening()
+        else {
+            panic!("missing Floorp autoconfig");
+        };
+        assert_eq!(
+            floorp.strip_suffix(include_str!("../payloads/firefox/dns.cfg")),
+            Some(waterfox),
+            "all non-DNS autoconfig must remain identical across both adapters"
+        );
+        for payload in [waterfox, user_js, policies] {
+            for line in payload.lines().map(str::trim) {
+                if line.starts_with("//") {
+                    continue;
+                }
+                assert!(!line.contains("network.trr.") && !line.contains("doh-rollout."));
+            }
+        }
+        assert!(!policies.contains("DNSOverHTTPS"));
+        assert!(floorp.contains("defaultPref(\"network.trr.mode\", 5);"));
+        assert!(floorp.contains("https://dns.quad9.net/dns-query"));
+        assert!(user_js.contains("user_pref(\"privacy.resistFingerprinting\", true);"));
+        // Floorp's user.js still supplies its TRR-first user preference.
+        let Hardening::GeckoProfile { user_js, .. } = Floorp::new(Arch::X64).hardening() else {
+            unreachable!();
+        };
+        assert!(user_js.contains("user_pref(\"network.trr.mode\", 2);"));
+    }
+
+    #[test]
+    fn waterfox_dns_upgrade_replaces_stale_autoconfig_and_preserves_user_choices() {
+        use crate::browsers::{waterfox::Waterfox, BrowserFamily, Hardening};
+        use crate::Arch;
+        let Hardening::GeckoProfile {
+            user_js,
+            autoconfig: Some(pointer),
+            cfg: Some(cfg),
+            ..
+        } = Waterfox::new(Arch::X64).hardening()
+        else {
+            panic!("missing Waterfox autoconfig");
+        };
+        // Fresh, explicitly disabled and custom-resolver profiles: do not guess
+        // which saved choices were intentional or reset them during migration.
+        for user_choice in [
+            "",
+            "user_pref(\"network.trr.mode\", 5);\n",
+            "user_pref(\"network.trr.mode\", 3);\nuser_pref(\"network.trr.uri\", \"https://resolver.example/dns-query\");\nuser_pref(\"network.trr.use_ohttp\", false);\n",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let install = dir.path().join("Browser");
+            let profile = dir.path().join("Data");
+            std::fs::create_dir_all(&profile).unwrap();
+            std::fs::write(profile.join("user.js"), user_choice).unwrap();
+            std::fs::write(profile.join("prefs.js"), user_choice).unwrap();
+            let old = format!("{cfg}\ndefaultPref(\"network.trr.mode\", 5);\n");
+            write_autoconfig(&install, pointer, &old).unwrap();
+            for _ in 0..2 {
+                write_autoconfig(&install, pointer, cfg).unwrap();
+                write_user_js(&profile, user_js).unwrap();
+                let actual = std::fs::read_to_string(install.join("nomad.cfg")).unwrap();
+                assert_eq!(actual, cfg);
+                assert!(!actual.contains("network.trr.mode"));
+                let managed = std::fs::read_to_string(profile.join("user.js")).unwrap();
+                assert!(managed.starts_with(user_choice));
+                assert_eq!(managed.matches(MARKER_BEGIN).count(), 1);
+                assert_eq!(std::fs::read_to_string(profile.join("prefs.js")).unwrap(), user_choice);
+            }
+        }
+    }
+
+    #[test]
+    fn waterfox_dns_upgrade_refuses_a_non_file_cfg_target() {
+        use crate::browsers::{waterfox::Waterfox, BrowserFamily, Hardening};
+        use crate::Arch;
+        let Hardening::GeckoProfile {
+            autoconfig: Some(pointer),
+            cfg: Some(cfg),
+            ..
+        } = Waterfox::new(Arch::X64).hardening()
+        else {
+            panic!("missing Waterfox autoconfig");
+        };
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("nomad.cfg")).unwrap();
+        assert!(write_autoconfig(dir.path(), pointer, cfg).is_err());
+        assert!(dir.path().join("nomad.cfg").is_dir());
+    }
+
+    #[test]
     fn gecko_autoconfig_keeps_general_extension_security_updates_user_configurable() {
         use crate::browsers::{floorp::Floorp, waterfox::Waterfox};
         use crate::{Arch, BrowserFamily, Hardening};

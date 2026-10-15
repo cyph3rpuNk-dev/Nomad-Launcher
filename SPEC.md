@@ -367,6 +367,18 @@ Two layers, written to separate profile and installation locations:
 1. **`user.js`** — written to the portable profile returned by `profile_dir` (`Data/` for these browsers), outside the replaceable installation. A Nomad-curated "safe" profile derived from the arkenfox `user.js` template: the arkenfox core sections minus every preference arkenfox itself tags as site-breaking (`[SETUP-WEB]`), aggressive (`[SETUP-HARDEN]`), or optional (sections 4000+, including RFP). The Nomad-written block is fenced with marker comments; preferences outside the fence — including the user's own — are preserved, and the block is re-seeded idempotently on every launch.
 2. **`policies.json`** — written to `<install_dir>/distribution/policies.json`. Carries the structural locks `user.js` cannot enforce: disable the browser's built-in updater (Nomad is the sole updater), disable telemetry / studies / crash reporting, disable Pocket and Firefox accounts. This file is fully Nomad-managed. Shared autoconfig defaults general extension update checking and automatic updating to enabled without locking those preferences; other installed extensions retain their browser update path.
 
+### Waterfox — preserve upstream DNS defaults and user choices
+
+Floorp and Waterfox share the non-DNS `firefox/nomad.cfg` autoconfig. Floorp
+appends `firefox/dns.cfg`; Waterfox does not. Neither Waterfox's managed `user.js`,
+autoconfig nor policies set TRR/provider/rollout preferences. This removes the
+previous shared mode-5 default on the next hardened launch, including existing
+installations and staged updates. Explicit saved user choices are not reset.
+Reviewed upstream 6.7.6 defaults to mode 2 with OHTTP enabled, using a Waterfox
+relay and Cloudflare endpoint. Mode 2 permits native DNS fallback and does not
+supply Quad9 malware filtering. Effective settings and network behavior are
+separate validation claims; see [Waterfox DNS evidence](docs/WATERFOX-DNS-DEFAULTS.md).
+
 ### LibreWolf — own minimal `user.js`, shares `policies.json`, skips the autoconfig pair
 
 LibreWolf already ships arkenfox-equivalent hardening, so the full Firefox `user.js` is almost entirely redundant on it. A pref-by-pref diff against the live `librewolf.cfg` confirmed it: 44 of 73 Firefox prefs are no-ops (telemetry, Safe Browsing, prefetch, search suggestions, `sessionstore.privacy_level`, referrer trimming, disk cache, HTTPS-only, `app.update` — all `lockPref`'d or `defaultPref`'d to the same values), Strict ETP (`browser.contentblocking.category = "strict"`) subsumes the tracking-protection prefs, and `privacy.resistFingerprinting` subsumes `privacy.fingerprintingProtection`. Many of the redundant prefs are `lockPref`'d, so Nomad could not override them even if it tried.

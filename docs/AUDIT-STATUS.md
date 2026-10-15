@@ -2287,3 +2287,107 @@ path exists. A newer browser bundle, a removed flag or a manually copied list
 cannot stand in for fresh verified revocation data. Independent-key recovery,
 genuine Windows 10/11 Recent/WER coverage and other browser/runtime checks remain
 separate gaps. The rating stays 3/5 and the release hold remains.
+
+
+## Ungoogled Chromium default runtime snapshot (2026-10-14)
+
+**Tested guest / verified selected copied evidence:** A fresh Windows 11 x64
+155.0.8059.39-1.1 fixture built from committed `a59035c` opened after one Retry
+following a response-body download failure. The user screenshot says no
+components are installed. Status reports the component-disable/background-network
+switches present, no component-URL override, a neutralized updater-host literal
+in the loaded module's file and no CertificateRevocation directory in this fresh
+profile. Literal presence is not active routing; file/directory absence is not
+proof of every certificate-verifier state. Loaded version/refresh are not claimed.
+
+The host verified the four frozen workflow inputs, receipt scope, selected bytes/
+hash, typed assertions and screenshot. Receipt SHA256:
+`967FEDCE5A454A2801009623DF932D99157848AAD6BC6290BB8492CD8D9ED2B0`.
+Nine unchanged evidence/provenance/screenshot files plus HOST-VERIFICATION.json
+are preserved outside Sandbox mappings. Full profiles, network logs and browser
+binaries were not exported. [Exact identities, checks and limits](UNGOOGLED-COMPONENT-UPDATES.md#windows-11-default-runtime-snapshot-2026-10-14)
+distinguish guest module inventory from independent host binary attestation.
+
+**Remaining:** This closes the observed default-component-page/published-module
+literal snapshot gap. It does not restore fresh CRLSet data, measure updater
+traffic, validate loading of an existing component or establish the effect of
+removing a switch. A supported authenticated refresh path still needs design and
+validation. Current source/documentation already discloses the limitation; no
+production flag, endpoint or trust check was changed to obtain this result.
+Different-user/independent-machine recovery, genuine Recent/WER and wider browser/
+platform runtime checks remain separate gaps. Rating 3/5 and release hold remain.
+
+The completed DNS work is committed locally as `a59035c`; these two evidence
+document updates were uncommitted at collection. Their whitespace/UTF-8/LF and
+preserved copy checks passed; the prior 546-test canonical gate is historical,
+not rerun for this evidence-only update. Subsequent branch publication does not
+establish remote CI or release qualification.
+
+
+## CRLSet-only refresh feasibility review (2026-10-14)
+
+**Verified pinned source / scoped inference:** The native unpacker verifies CRX
+signatures against component key requirements before extraction, and CRLSet's
+policy pins SPKI SHA256 `75daf8cb77684033654c97e5c51bcd817b1eeb112ce1a4338cf5725eedb84397`.
+The referenced fetch utility extracts raw data without performing that verification.
+Normal registration includes other components; URL overrides are debug controls
+for the shared service. Cached-data selection/loading depends on registration
+and its manifest/file checks are not a new CRX signature verification on each load.
+The verifier's current-sequence comparison does not alone prove a durable launcher
+rollback/freshness policy. No supported narrow route was identified in the inspected
+interfaces; this is not an exhaustive negative claim about every custom build.
+
+**Tested offline:** Twenty pinned source snapshots were hash-checked and the
+publisher-hash-derived component ID matched the pinned fetch utility. No upstream
+code or verifier was executed, component endpoint contacted, list downloaded,
+profile written or browser launched during this investigation. The
+[feasibility record and upstream capability proposal](CRLSET-REFRESH-FEASIBILITY.md)
+include exact source links, unavailable paths, candidate dispositions and a
+concrete signed-data-only interface/acceptance contract. The proposal is local;
+it has not been posted or sent upstream.
+
+No production workaround, provider consent, endpoint, dependency or flag change
+was introduced. Previous runtime evidence remains unchanged. These documentation
+changes were uncommitted at this review checkpoint; the prior `a59035c` gate is
+historical. The supported
+refresh gap remains unresolved and requires separately validated browser/loading
+capability before an integration can be represented as a fix. Rating 3/5 and the
+release hold remain.
+
+## Waterfox DNS default conflict confirmed (2026-10-15)
+
+The fresh x64 6.7.6 Sandbox screenshots show mode 5, OHTTP true and the upstream
+Waterfox/Cloudflare endpoints. The shared autoconfig disabled TRR despite the
+Waterfox payload comment promising upstream defaults. After normal closure,
+selected guest settings were exported and host-verified against the frozen
+inputs; original evidence is preserved. This does not establish DNS traffic.
+
+A local correction separates the shared non-DNS autoconfig from Floorp-only
+DNS defaults and preserves Waterfox upstream/user choices. Explicit saved DNS
+choices are not reset. The corrected settings/relaunch check below now passed; mode 2
+allows native fallback and does not provide Quad9 malware filtering. See
+[Waterfox DNS defaults, provenance and limits](WATERFOX-DNS-DEFAULTS.md).
+
+The correction's canonical gate passed locally: 549 Rust tests, 16 ignored,
+formatting, strict Clippy, offline safety fixtures and structured dependency
+audit (the existing documented RSA exception remains). These offline results
+do not establish network behavior or remote CI/release qualification.
+
+### Waterfox corrected settings and relaunch result
+
+The user confirmed mode 2 on first corrected launch, then mode 2, OHTTP true,
+the authored **Nomad DNS test** bookmark and enabled uBlock Origin after normal
+closure and one helper relaunch. These are user text confirmations, without a
+corrected-build screenshot. Final guest collection reports original config
+restoration, unchanged installed marker and the expected corrected autoconfig;
+all seven selected DNS user values remain absent. Host verification checked
+selected bytes, provenance and the six original/corrected input files and
+preserved eight unchanged evidence/helper files. Receipt SHA256:
+`85E0AC589BA86A6FD04BFC3881252546B70500569F711A3F073B6E0962062139`.
+
+The settings/preservation check is complete for this instance; actual OHTTP/DNS
+traffic and broader platform/profile coverage remain unverified. Mode 2 allows
+native DNS fallback. The full limitations and provenance are in
+[Waterfox DNS defaults](WATERFOX-DNS-DEFAULTS.md). No production installation or
+release was performed; subsequent commit/push delivery does not extend these
+test results. The broader audit/release hold remains.
