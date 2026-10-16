@@ -2746,3 +2746,39 @@ code validation is `f560926`: full canonical gate, 558 passed / 18 ignored,
 Rust 1.92, six release PE guards. No redundant gate or remote CI is claimed for
 this text-only change. Rating 3/5 and overall release hold remain for other
 outstanding scope/acceptance decisions. No push, tag, signing or release occurred.
+
+## Bounded browser metadata observation (2026-10-16)
+
+**Tested:** clean source `7df4600`, authenticated Helium 0.19.2.1 and a fresh
+offline Windows 11 Sandbox. A public loopback page/beacon established browser
+navigation. A command-line debug-URL request did not produce an observed main
+process exit. A separately pinned native DebugBreakProcess follow-up succeeded
+on a retained exact owned PID/image handle, but still obtained no observed exit
+or matching Report.wer. Nine owned browser processes remained in the snapshot.
+A later process snapshot had no WER fault process; its event query returned
+System.Exception, so no successful event-log or complete-history claim is made.
+The token-filename Recent check is not exhaustive target resolution.
+
+**Not qualified:** no new report bytes or production cleanup replay, spontaneous
+browser crash, Explorer navigation, user-store variant or Windows 10 pass. No
+WER policy change, custom report, rewritten AppPath or substitute synthetic
+capture was used to manufacture success. Existing Shell/custom-WER results stand.
+Direct upstream browser launch is not retail Nomad watcher/cleanup coverage.
+No personal host browser/profile/store was used or faulted; raw report/dump/
+profile data stayed in the guest and was not exported.
+
+**Verified selected evidence:** frozen capture/fault/diagnostic inputs, typed
+campaign/source/observation linkage and explicit non-success fields passed host
+review. Six unsafe verifier mutations were refused. Sixteen bounded selected/
+helper/provenance files plus reports were preserved outside mappings; after
+rechecking every digest, exact owned Sandbox stop exited zero and final inventory
+showed it absent. The original verification remains unchanged and a separate
+disposal receipt links it. [Full scope, commands and identities](BROWSER-METADATA-OBSERVATION.md).
+
+Tracked changes are documentation only. Syntax/host-refusal checks, selected
+verification, copy hashes, disposal, document links/anchors and UTF-8/LF/whitespace
+passed. No new Rust or redundant full gate was run; the latest code result stays
+`f560926` (558 passed / 18 ignored, clean audit, Rust 1.92, six release PE guards).
+CRLSet's v1.0.9 acceptance and independent-VM deferral are separate. This bounded
+attempt leaves the remaining metadata gap, rating 3/5 and release hold intact.
+No push, remote CI, tag, signing or publication occurred.
