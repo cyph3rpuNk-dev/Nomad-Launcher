@@ -122,3 +122,11 @@ preserved. The final refactored build also passed, alongside the 551-test gate
 [Commands, exact evidence and limits](WINDOWS-METADATA-QUALIFICATION.md) distinguish
 Shell API serialization from an actual Explorer/browser navigation session.
 Windows 10 and those navigation-generated variants remain unqualified.
+
+## Navigation coverage disposition (2026-10-16)
+
+The owner accepted and deferred the natural browser-crash and Explorer-navigation
+metadata coverage gap for v1.0.9. Navigation-generated link variants remain
+unverified; the earlier Shell API serialization/replay pass is not extended to
+them. This is not a blanket acceptance of Windows 10 or wider platform coverage.
+[Release decision and limits](RELEASE-READINESS.md#metadata-coverage-disposition-2026-10-16).

@@ -138,3 +138,9 @@ establish an unhandled crash. No new metadata was available for production
 cleanup replay; this is an inconclusive capture attempt, not a WER cleanup defect
 or pass. [Observations, selected verification and discarded-guest record](BROWSER-METADATA-OBSERVATION.md)
 retain natural-crash/user-store/Windows 10 coverage as unqualified.
+
+**Owner disposition (2026-10-16):** The missing natural browser-crash and
+Explorer-navigation metadata qualification was explicitly accepted and deferred
+for v1.0.9. This is a coverage decision, not a WER capture/replay pass or complete
+cleanup guarantee. Genuine user-store variants and wider Windows 10/platform
+coverage remain unqualified. [Exact scope and separate remaining decisions](RELEASE-READINESS.md#metadata-coverage-disposition-2026-10-16).

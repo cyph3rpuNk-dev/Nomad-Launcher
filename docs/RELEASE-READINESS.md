@@ -16,6 +16,13 @@ not passed or accepted as a verified isolation guarantee. No tag, publication,
 broader risk acceptance or removal of the overall release hold is authorized by
 these decisions.
 
+**Metadata disposition (2026-10-16):** The owner also accepted and deferred the
+natural browser-crash and Explorer-navigation metadata coverage gap for v1.0.9.
+Those cases remain unverified; this resolves their release-specific disposition,
+not their technical qualification. It does not accept the separate independent
+recovery-isolation or wider platform/production-path gaps. See the
+[recorded decision](#metadata-coverage-disposition-2026-10-16).
+
 **Tested repository state:** main was independently read through GitHub's API at
 `4951d05b0b4c3305324daee3696bfa577d5b9ba1` (PR #79 merged). All seven reported
 check runs for that exact commit were completed/success: canonical check,
@@ -72,13 +79,15 @@ does not make that decision for the owner.
 | Priority | Open item | Next concrete action / acceptance evidence |
 |---|---|---|
 | 2 | Recovery isolation across independent Windows contexts (deferred by user, unverified) | User deferred this qualification on 2026-10-16. No acceptance of the unverified isolation claim was given. To resume, use a separately initialized disposable Windows machine and a separately created user. Exchange only the public-payload ciphertext fixture, verify refusal and retained intent, and preserve receipts. The second Sandbox's machine-only sample decrypted; another identical Sandbox rerun cannot qualify independent keys. Never export keys or bypass the current Sandbox-only runner guards to test personal stores. A [separately guarded VM package](INDEPENDENT-WINDOWS-RECOVERY.md) is now prepared, with source/peer/foreign/return phases and strict host verification; preparation is not a native isolation pass. |
-| 3 | Remaining natural-crash/navigation metadata variants | Windows 11 Shell API Recent links and custom queued WER metadata now passed unmodified-byte replay; the Recent flag defect was reproduced and corrected. Actual Explorer/browser navigation, natural browser-crash reports, genuine user-store variants and Windows 10 remain separate qualification targets. Continue only in disposable environments without report upload or personal host data, preserving encodings and unrelated sentinels. A subsequent [bounded browser capture attempt](BROWSER-METADATA-OBSERVATION.md) observed public navigation but no browser-process exit/matching WER, so it did not qualify new cleanup coverage. [Scope](WINDOWS-METADATA-QUALIFICATION.md). |
+| 3 | Natural-crash/navigation metadata coverage (accepted and deferred for v1.0.9; unverified) | The owner explicitly accepted and deferred this coverage gap for v1.0.9; no further test is required to resolve that specific release decision. The [bounded browser capture attempt](BROWSER-METADATA-OBSERVATION.md) produced no matching report or new cleanup replay. Windows 11 Shell/custom-WER passes retain their narrower scope. Future technical qualification must use original bounded bytes and unrelated sentinels in a disposable environment without upload or personal host data. Genuine user-store variants and Windows 10 remain unqualified; the wider platform decision stays in priority 4. [Disposition](#metadata-coverage-disposition-2026-10-16), [scope](WINDOWS-METADATA-QUALIFICATION.md). |
 | 4 | Remaining platform and production-path coverage | Windows 10, remaining hardening-error origins/Gecko/staged UI, other browser/platform Windows-association and live-browser combinations, independent-machine sign-in, real version-transition compatibility, physical interruption/media-loss and wider recovery/fault cases retain specific gaps. Bounded native failed-promotion/restore/recovery, Mullvad startup, fresh-browser protocol prompts, already-running Helium handoff and the bounded Windows-selected Helium Shell matrix are completed above. Automatic health-based rollback after successful promotion is not implemented; assess that disclosed structural limit separately from unrun tests. Choose a bounded disposable scenario from its runbook, preserve profile/sentinels and record exact build/OS/results. Historical removed-Firefox coverage is not current six-browser coverage. |
 | 5 | Final candidate and delivery | After the hold is resolved, select the full reviewed commit rather than reuse `bc3f889`; recheck its actual CI/compatibility and release notes. Tag/push remain separate authorized actions. The tag workflow must build/attest the six launchers, checksums and licenses; verify exact artifacts/provenance, then the owner signs the checksum manifest offline before publication. A local gate is not release integrity. |
 
 The Windows 11 Shell/custom-WER metadata track now has a scoped pass and
-correction; its natural-crash/navigation/Windows 10 extensions remain in priority
-3. Independent Windows initialization for priority 2 has not been qualified.
+correction. Its natural-crash/navigation extension is accepted and deferred for
+v1.0.9 in priority 3, with no technical pass. Windows 10 and wider coverage remain
+separate in priority 4. Independent Windows initialization for priority 2 has not
+been qualified.
 Further preparation must preserve the no-upload boundary; a custom queued WER
 report must not be relabelled as a natural browser crash. The CRLSet technical
 gap remains open, with explicit owner acceptance for v1.0.9 as recorded above. That acceptance does not turn the investigative
@@ -181,3 +190,32 @@ no new remote CI or full gate is claimed for this text-only checkpoint.
 Rating 3/5 and the overall release hold remain pending the other listed scope
 and acceptance decisions. No push, signing, tag or publication is authorized or
 performed by this disposition.
+
+## Metadata coverage disposition (2026-10-16)
+
+**User decision, recorded verbatim:** "Accept and defer this metadata coverage
+gap for v1.0.9". The question identified the offline attempt's missing WER report
+and the resulting unverified natural browser-crash and Explorer-navigation
+cleanup coverage. This is acceptance and deferral of that specific coverage gap
+for v1.0.9, not a successful crash capture, cleanup replay or guarantee of complete
+trace removal. It does not pre-accept future releases.
+
+The [bounded observation](BROWSER-METADATA-OBSERVATION.md) and its selected
+verification/disposal receipts retain their original inconclusive and unqualified
+results. The earlier Windows 11 Shell API Recent/custom queued WER passes remain
+valid only for their captured forms. No runtime behavior, cleanup scope, test
+result, receipt or public protection claim is changed by this disposition.
+
+The separate CRLSet limitation already has its v1.0.9 acceptance. Independent
+Windows recovery isolation remains deferred and unverified without a release
+acceptance of that claim. Genuine user-store variants, Windows 10 and other
+wider platform/production paths retain their documented qualification limits;
+this metadata response is not a blanket acceptance of those separate items.
+Rating 3/5 and the overall hold remain pending the other scope/acceptance
+decisions and final candidate/delivery checks. No push, tag, signing or publication
+is authorized by this decision.
+
+**Validation:** documentation links/anchors, UTF-8/LF and whitespace checked. No
+browser, fault, cleanup or full gate was rerun for this text-only disposition.
+The code checks at `f560926` remain the latest recorded local validation, not
+remote CI for subsequent commits.
