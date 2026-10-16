@@ -2597,3 +2597,47 @@ remain applicable, with no new full gate or remote CI claim. CRLSet freshness,
 independently initialized Windows recovery and other specific coverage limits
 remain in the [checklist](RELEASE-READINESS.md). Rating 3/5 and release hold remain.
 No push, tag or publication was performed.
+
+## Windows-selected Helium Shell handoff (2026-10-16 UTC)
+
+**Tested:** production source `4c94a88` (Rust unchanged from `187771c`) ran in the
+offline Windows 11 guest with a separate authenticated Helium 0.19.2.1 import.
+The user selected HTTP/HTTPS/.html in Default apps. Selected ProgIDs plus native
+command queries matched the exact launcher. Normal Windows ShellExecute supplied
+only each target: cold HTTP reached the public server; a local HTML filename with
+spaces produced its image-beacon receipt in the live browser; HTTPS dispatched
+to that same session but had no TLS content success. Original main/worker identity,
+portable Data argument, protected files and stage/backup/profile sentinels passed.
+The user closed the browser normally; all test processes were verified absent.
+
+**Tested registration:** a production-linked guarded helper registered two copies
+with distinct derived identities and resolved Shell commands. Removing copy B
+preserved A. It exercised the shared registry API, not retail message boxes. The
+initial PID-variable/controller failure, canonical-path correction and false
+Hashtable comparison fields remain preserved; independent typed UserChoice hashes
+were unchanged before operator selection. No production defect/fix was inferred.
+
+**Verified selected evidence:** 18 bounded receipts, main/additional input hashes,
+identity/target/process/profile linkage, public routes, selected choice and final
+idle state passed host review. Five unsafe verifier mutations were refused; 52
+files plus an immutable report were retained with a 155-file unchanged source
+inventory. Release compilation, GUI/console PE guards and 17 inert registration
+regressions passed. [Exact scope and identities](WINDOWS-SHELL-HANDOFF-QUALIFICATION.md)
+distinguish this from HTTPS navigation, other families/platforms and raw-profile replay.
+
+**Cleanup:** computer-use native pipe was unavailable after retry/reset; the user
+performed Windows selection, normal closure and confirmed guest discard. Edge was
+unavailable for restoring the old selections, so the active candidate was not
+removed while selected and UserChoice was never written directly. The closed
+window left the background Sandbox running; the authorized exact-ID CLI stop
+exited zero and final inventory was empty. A separate disposal report links/rechecks
+the original snapshot without rewriting its pre-discard pending status. No
+individual unregister-A or restored-default-hash success is claimed.
+
+The local `codex/windows-shell-associations` checkpoint is documentation only.
+Prior canonical 551-test/17-ignored and Rust 1.92 results remain applicable; no
+new full gate or remote CI was claimed. The completed bounded Shell matrix is
+carried forward in [readiness](RELEASE-READINESS.md); other browser/platform
+combinations, CRLSet freshness and independently initialized Windows recovery
+remain separate. Rating 3/5 and release hold remain. No push, tag or publication
+was performed.
