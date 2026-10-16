@@ -2718,3 +2718,31 @@ This closes only the new dependency-gate blocker. The VM package stays pinned to
 its original clean source and no native isolation result is claimed. CRLSet,
 independent-Windows and other documented coverage limits remain. Rating 3/5 and
 release hold remain. No push, tag, remote CI pass, signing or release occurred.
+
+## Owner CRLSet acceptance and VM-test deferral (2026-10-16)
+
+**User decision:** "Retain Ungoogled Chromium and explicitly accept the disclosed
+CRLSet limitation for v1.0.9". Recorded in [release readiness](RELEASE-READINESS.md#release-specific-residual-risk-decision-2026-10-16)
+and linked from the component limitation/feasibility records. This resolves only
+the owner disposition for the known v1.0.9 gap. Technical refresh/loading remains
+unresolved; existing flags, endpoints, trust checks and public/runtime disclosures
+are unchanged. No acceptance for future releases or provider/browser changes,
+revocation pass, broader residual risk or release publication was inferred.
+
+The user separately deferred independent-VM setup/testing. The prepared package
+and failed second-Sandbox observation remain within their original scopes; none
+of the four independent-VM native phases ran. Deferral is not evidence of
+isolation and is not release acceptance of that unverified claim. Hyper-V was
+enabled through the separately approved no-restart host script; its receipt
+reported restart required, with no automatic restart requested. No guest VM or
+ISO download was created/performed by the assistant. No further host setup is
+part of this deferral checkpoint.
+
+**Read-only verification:** current official Windows release metadata still names
+155.0.8059.39-1.1. Nomad's existing standing notice, warning log and disclosure
+regression assertions were reread; no browser/component traffic or new CRLSet
+runtime test ran. Documentation links, UTF-8/LF and whitespace passed. The latest
+code validation is `f560926`: full canonical gate, 558 passed / 18 ignored,
+Rust 1.92, six release PE guards. No redundant gate or remote CI is claimed for
+this text-only change. Rating 3/5 and overall release hold remain for other
+outstanding scope/acceptance decisions. No push, tag, signing or release occurred.
