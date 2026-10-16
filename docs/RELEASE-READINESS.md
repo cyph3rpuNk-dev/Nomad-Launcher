@@ -2,26 +2,33 @@
 
 ## Current decision (2026-10-16)
 
-**On hold.** The scoped privacy/security rating remains **3/5**. This checklist
-reconciles the existing audit records; it is not a new exhaustive audit or
-permission to tag, push, sign or publish. Completed checks below should not be
-repeated merely because older chronological entries still say pending.
+**Release-scope decisions resolved; candidate CI and delivery checks pending.**
+The scoped privacy/security rating remains **3/5**. The owner has accepted the
+listed residual risks and unverified coverage for v1.0.9. This permits proceeding
+to candidate review without repeating deferred tests; it is not a technical pass,
+a new exhaustive audit or permission to push, merge, tag, sign or publish.
+Historical checkpoints below retain the decisions and results known at their
+recording; this current summary and the latest acceptance section supersede their
+pending-decision wording. Completed checks should not be repeated just because
+older entries say pending.
 
 **Owner disposition (2026-10-16):** Retain Ungoogled Chromium in v1.0.9 and
 explicitly accept its disclosed CRLSet freshness limitation for that release.
 This resolves the owner decision for that item; it does not fix or qualify
 revocation refresh. The standing launcher/README/SECURITY disclosures remain.
-Independent-VM recovery testing was separately deferred at the user's request,
-not passed or accepted as a verified isolation guarantee. No tag, publication,
-broader risk acceptance or removal of the overall release hold is authorized by
-these decisions.
+Independent-user/machine recovery testing is now explicitly accepted and deferred
+for v1.0.9, with recovery remaining enabled and isolation labelled unverified.
+The owner also accepted the listed broader coverage and post-promotion rollback
+limits for v1.0.9. No verification guarantee or future-release acceptance follows;
+see the [latest scope decision](#remaining-scope-acceptance-2026-10-16).
 
 **Metadata disposition (2026-10-16):** The owner also accepted and deferred the
 natural browser-crash and Explorer-navigation metadata coverage gap for v1.0.9.
 Those cases remain unverified; this resolves their release-specific disposition,
-not their technical qualification. It does not accept the separate independent
-recovery-isolation or wider platform/production-path gaps. See the
-[recorded decision](#metadata-coverage-disposition-2026-10-16).
+not their technical qualification. Independent recovery isolation and wider
+platform/production-path gaps have their own subsequent explicit acceptance.
+See the [metadata decision](#metadata-coverage-disposition-2026-10-16) and
+[remaining scope decision](#remaining-scope-acceptance-2026-10-16).
 
 **Tested repository state:** main was independently read through GitHub's API at
 `4951d05b0b4c3305324daee3696bfa577d5b9ba1` (PR #79 merged). All seven reported
@@ -76,18 +83,19 @@ completed campaign. Resolving a technical gap and explicitly accepting a
 well-disclosed residual risk are different release decisions; this checklist
 does not make that decision for the owner.
 
-| Priority | Open item | Next concrete action / acceptance evidence |
+| Priority | Item / disposition | Next concrete action / acceptance evidence |
 |---|---|---|
-| 2 | Recovery isolation across independent Windows contexts (deferred by user, unverified) | User deferred this qualification on 2026-10-16. No acceptance of the unverified isolation claim was given. To resume, use a separately initialized disposable Windows machine and a separately created user. Exchange only the public-payload ciphertext fixture, verify refusal and retained intent, and preserve receipts. The second Sandbox's machine-only sample decrypted; another identical Sandbox rerun cannot qualify independent keys. Never export keys or bypass the current Sandbox-only runner guards to test personal stores. A [separately guarded VM package](INDEPENDENT-WINDOWS-RECOVERY.md) is now prepared, with source/peer/foreign/return phases and strict host verification; preparation is not a native isolation pass. |
-| 3 | Natural-crash/navigation metadata coverage (accepted and deferred for v1.0.9; unverified) | The owner explicitly accepted and deferred this coverage gap for v1.0.9; no further test is required to resolve that specific release decision. The [bounded browser capture attempt](BROWSER-METADATA-OBSERVATION.md) produced no matching report or new cleanup replay. Windows 11 Shell/custom-WER passes retain their narrower scope. Future technical qualification must use original bounded bytes and unrelated sentinels in a disposable environment without upload or personal host data. Genuine user-store variants and Windows 10 remain unqualified; the wider platform decision stays in priority 4. [Disposition](#metadata-coverage-disposition-2026-10-16), [scope](WINDOWS-METADATA-QUALIFICATION.md). |
-| 4 | Remaining platform and production-path coverage | Windows 10, remaining hardening-error origins/Gecko/staged UI, other browser/platform Windows-association and live-browser combinations, independent-machine sign-in, real version-transition compatibility, physical interruption/media-loss and wider recovery/fault cases retain specific gaps. Bounded native failed-promotion/restore/recovery, Mullvad startup, fresh-browser protocol prompts, already-running Helium handoff and the bounded Windows-selected Helium Shell matrix are completed above. Automatic health-based rollback after successful promotion is not implemented; assess that disclosed structural limit separately from unrun tests. Choose a bounded disposable scenario from its runbook, preserve profile/sentinels and record exact build/OS/results. Historical removed-Firefox coverage is not current six-browser coverage. |
-| 5 | Final candidate and delivery | After the hold is resolved, select the full reviewed commit rather than reuse `bc3f889`; recheck its actual CI/compatibility and release notes. Tag/push remain separate authorized actions. The tag workflow must build/attest the six launchers, checksums and licenses; verify exact artifacts/provenance, then the owner signs the checksum manifest offline before publication. A local gate is not release integrity. |
+| 2 | Recovery isolation across independent Windows contexts (accepted and deferred for v1.0.9; unverified) | The owner explicitly accepted deferring the independent-user/machine test with recovery remaining enabled and isolation labelled unverified. Same-context evidence remains valid; all four [VM phases](INDEPENDENT-WINDOWS-RECOVERY.md) remain unrun. The second Sandbox's machine-only sample decrypted; another identical Sandbox cannot qualify independent keys. Future qualification needs separately initialized disposable Windows contexts, public-payload ciphertext only and preserved receipts; no personal stores or relaxed guards. [Acceptance](#remaining-scope-acceptance-2026-10-16). |
+| 3 | Natural-crash/navigation metadata coverage (accepted and deferred for v1.0.9; unverified) | The owner explicitly accepted and deferred this coverage gap for v1.0.9. The [bounded capture](BROWSER-METADATA-OBSERVATION.md) produced no matching report or new cleanup replay. Windows 11 Shell/custom-WER passes retain their narrower scope; genuine user-store and Windows 10 variants remain unqualified. Future qualification needs original bounded bytes and unrelated sentinels in a disposable environment without upload or personal host data. [Metadata disposition](#metadata-coverage-disposition-2026-10-16), [scope](WINDOWS-METADATA-QUALIFICATION.md). |
+| 4 | Remaining platform/production coverage and rollback limit (accepted for v1.0.9) | The owner accepted the disclosed Windows 10, other browser/UI/association combinations, cross-machine sign-in, remaining version transitions and physical interruption/media-loss coverage gaps. These remain unverified within their documented scopes. The owner also accepted retaining the lack of automatic health-based rollback after successful promotion; bounded promotion rollback/recovery already passed. No wider compatibility or future-release guarantee is added. [Exact decision](#remaining-scope-acceptance-2026-10-16), [rollback boundary](UPDATE-SAFETY.md#promotion-and-rollback-boundary). |
+| 5 | Final candidate and delivery (pending) | The listed release-scope decisions are resolved. Select the full reviewed commit rather than reuse `bc3f889`; obtain actual candidate CI/compatibility results and reconcile release notes. Push/PR/merge/tag remain separate authorized actions. The tag workflow must build/attest six launchers, checksums and licenses; verify exact artifacts/provenance, then the owner signs the checksum manifest offline before publication. A local gate is not release integrity. |
 
 The Windows 11 Shell/custom-WER metadata track now has a scoped pass and
 correction. Its natural-crash/navigation extension is accepted and deferred for
 v1.0.9 in priority 3, with no technical pass. Windows 10 and wider coverage remain
-separate in priority 4. Independent Windows initialization for priority 2 has not
-been qualified.
+accepted for v1.0.9 in priority 4. Independent Windows initialization for priority
+2 remains unqualified, with that test now explicitly accepted and deferred for
+v1.0.9. The current acceptance resolves release disposition only.
 Further preparation must preserve the no-upload boundary; a custom queued WER
 report must not be relabelled as a natural browser crash. The CRLSet technical
 gap remains open, with explicit owner acceptance for v1.0.9 as recorded above. That acceptance does not turn the investigative
@@ -108,7 +116,8 @@ regression/guarded replay tests. It changes no browser setting, configuration,
 endpoint, dependency or key. The canonical/MSRV results above apply to the final
 Rust correction; later evidence-only documentation edits did not trigger another
 gate rerun. New local commits have no remote checks until published and checked.
-Nothing here clears the existing rating or release hold.
+These validation records do not raise the rating or establish completed delivery.
+The latest owner scope acceptance below resolves the listed risk decisions only.
 
 ## Independent VM preparation checkpoint (2026-10-16)
 
@@ -249,3 +258,34 @@ was inferred and no push, tag, signing or release mutation occurred.
 **Validation:** the three documentation files passed UTF-8/LF, local link/anchor
 and whitespace checks. No production code changed and no full gate or browser
 test was rerun solely for this release-note update.
+
+## Remaining scope acceptance (2026-10-16)
+
+**User decisions, recorded verbatim:**
+
+- Independent-user/machine recovery: "Accept and defer for v1.0.9". The question
+  explicitly retained enabled recovery with isolation labelled unverified, noted
+  the same-context pass and stated that the independent VM matrix has not run.
+- Broader coverage/rollback: "Accept disclosed limits for v1.0.9". The question
+  named Windows 10, other browser/UI/association combinations, cross-machine
+  sign-in, remaining version transitions and physical interruption/media loss.
+  It also explicitly retained the lack of automatic health rollback after
+  successful promotion and distinguished the bounded rollback/recovery passes.
+
+Together with the earlier CRLSet and natural-crash/navigation metadata decisions,
+these resolve the currently listed v1.0.9 release-scope choices. No deferred test
+is relabelled as passed, no isolation/compatibility guarantee is added, and the
+post-promotion health-rollback limit remains a disclosed structural risk. Recovery
+stays enabled; no code, default, guard or immutable receipt changes. The rating
+remains 3/5. These decisions apply only to v1.0.9 and do not pre-accept new
+findings, future releases or changed browser/provider behavior.
+
+The next work is exact-candidate CI/compatibility and delivery verification.
+Existing green checks for main `4951d05` do not qualify the local follow-up chain.
+No branch push, PR, merge, tag, signature or publication is authorized by these
+risk answers. The release is not yet built, signed or ready for publication.
+
+**Validation:** five documentation files passed UTF-8/LF, local link/anchor and
+whitespace checks. This is a disposition-only update; no browser, VM or full gate
+was rerun. The `f560926` local validation remains prior evidence for unchanged
+build/test source, not candidate CI.

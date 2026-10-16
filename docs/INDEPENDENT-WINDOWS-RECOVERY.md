@@ -23,6 +23,16 @@ or creates a user/VM. The inert image is a text marker that is never executed.
 ReturnOrigin retires its own journal through an inert successful callback; this
 is not a Recent/WER cleanup effectiveness test.
 
+## v1.0.9 owner disposition (2026-10-16)
+
+The owner explicitly chose "Accept and defer for v1.0.9" for the independent-
+user/machine test, with recovery remaining enabled and isolation labelled
+unverified. All four native VM phases remain unrun; the prepared-only status
+and failed machine-only second-Sandbox observation are unchanged. This resolves
+the v1.0.9 release-scope decision, not the cryptographic qualification. No VM
+setup, account creation, guard relaxation or host change follows from this
+acceptance. [Release decision and remaining delivery checks](RELEASE-READINESS.md#remaining-scope-acceptance-2026-10-16).
+
 ## Required environments
 
 Use two disposable x64 Windows installations initialized separately from trusted
@@ -170,5 +180,6 @@ protection, real crash/power loss or storage durability result follows.
 After host verification, revert/discard only the explicitly owned disposable
 VMs through the operator's VM controls. The runner does not recursively clean
 personal data or delete a VM. Prepared tooling and inert metadata tests leave
-[rating/release readiness](RELEASE-READINESS.md) unchanged. The CRLSet disposition
-remains a separate owner decision.
+[rating/release readiness](RELEASE-READINESS.md) unchanged by tooling or fixtures.
+The owner has separately accepted the disclosed CRLSet limitation for v1.0.9;
+its technical gap remains unresolved.
