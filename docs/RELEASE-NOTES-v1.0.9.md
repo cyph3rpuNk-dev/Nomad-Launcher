@@ -77,7 +77,9 @@ is disabled for portability, independently of the hardening toggle.
 passed 550 Rust tests (16 ignored). The subsequent final Windows metadata
 correction passed 551 tests (17 ignored), formatting, strict Clippy, safety
 fixtures, structured dependency audit with the existing RSA advisory exception,
-and Rust 1.92 workspace/all-target checking.
+and Rust 1.92 workspace/all-target checking. The
+[subsequent scoped GUI check](HARDENING-GUI-QUALIFICATION.md) used a successful
+release build of that committed source; its documentation adds no Rust change.
 **Tested read-only on GitHub:** all seven checks for merged main `4951d05`
 completed successfully on inspection. Neither result is a tagged-release build
 or CI for subsequent local commits.
@@ -88,8 +90,8 @@ or CI for subsequent local commits.
 | Floorp | 12.20.1 smoke tests, profile/extension preservation, hardening, offline launch, registration/handoff, missing-runtime error and retry after installing the verified runtime in Sandbox. |
 | LibreWolf | Corrected site-fix settings and user-confirmed relaunch/bookmark/uBlock preservation. A verified browser bundle was imported after a Sandbox download interruption; this does not establish uninterrupted download reliability. |
 | Waterfox | Corrected settings/relaunch and profile preservation; 6.7.6 normal OHTTP address-response observation and native/system resolution under a controlled startup HTTPS outage, in different disposable profiles. No OS packet capture. |
-| Helium | Reviewed 0.19.2.1 startup, built-in uBlock/bookmark/service preservation, CRLSet 10833 refresh/relaunch; scoped secure-DNS baseline/outage/restoration and one interrupted-cleanup-worker/direct-relaunch scenario. Installer exclusion is source/layout inference plus snapshots, not exhaustive updater-history proof. |
-| Mullvad | Signing-key/checksum verification evidence exists. A live startup/profile campaign remains open. |
+| Helium | Reviewed 0.19.2.1 startup, built-in uBlock/bookmark/service preservation, CRLSet 10833 refresh/relaunch; scoped secure-DNS baseline/outage/restoration and one interrupted-cleanup-worker/direct-relaunch scenario. Native direct-launch required-JSON error/blocked Retry/repaired Retry/Close also exercised, with protected-file preservation. Installer exclusion is source/layout inference plus snapshots, not exhaustive updater-history proof. |
+| Mullvad | 15.0.25 signed/hash-verified import and production extraction, initially absent portable profile startup, normal close/relaunch, active bundled-extension records and public sentinel preservation passed. Online updater delivery, bookmark/account migration and effective extension blocking remain unqualified. |
 
 The [current checklist](RELEASE-READINESS.md) links the individual evidence records
 and preserves the limits of each build/run. In particular:
@@ -103,13 +105,17 @@ and preserves the limits of each build/run. In particular:
   interruption and genuine Windows crash-report forms remain unqualified.
 - Windows 11 Shell API Recent links and custom queued WER metadata passed
   fake-root replay after the narrow Recent flag correction. Natural crash forms,
-  actual Explorer/browser navigation, Windows 10 execution, some visible
-  failure/prompt paths, post-replacement rollback and cross-machine sign-in retain
-  gaps. Download-failure preservation does not prove post-replacement rollback.
+  actual Explorer/browser navigation, Windows 10 execution, other native failure
+  origins, Windows-association/already-running-browser combinations, post-replacement rollback and
+  cross-machine sign-in retain gaps. Download-failure preservation does not prove post-replacement rollback.
 - Safe Browsing is disabled by Nomad hardening in Chromium/managed Gecko.
   DNS filtering does not replace browser-level phishing/malware protection.
   Host forensics, compromised computers and read/write access to an unencrypted
   portable drive remain outside the protective claims.
+
+The [subsequent startup/handoff qualification](BROWSER-STARTUP-HANDOFF-QUALIFICATION.md)
+adds Mullvad runtime and four native protocol-prompt cases; no Rust change or new
+remote CI result follows from this evidence.
 
 The broader audit rating stays 3/5 and v1.0.9 remains on hold. Final commit
 selection, tag/push, tagged build/compatibility checks, six-artifact/checksum/
