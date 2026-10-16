@@ -2566,3 +2566,34 @@ remote CI was claimed. The [readiness checklist](RELEASE-READINESS.md) carries
 forward completed checks and separates CRLSet/independent-Windows gaps and
 remaining fault/platform coverage. Rating 3/5 and release hold remain. No push,
 tag or publication was performed.
+
+## Already-running Helium protocol handoff (2026-10-16 UTC)
+
+**Tested:** exact source `9e0188f` (Rust unchanged from `187771c`) ran in the
+existing offline Windows 11 Sandbox with a separate digest-verified Helium
+0.19.2.1 import. Native URL/file Close/Continue prompts preserved the original
+browser main process and cleanup worker. URL cancellation made no public target
+request; file cancellation left the target tab absent. Continue delivered the
+public loopback URL/local HTML into that same browser alongside the baseline.
+Two duplicate cleanup workers exited through the coordinator lock; just one
+worker-start event was recorded. Native-created bookmark, uBlock toolbar presence,
+protected files and authored stage/backup/profile sentinels were retained. Normal
+browser closure and owned server shutdown left all fixture processes absent.
+
+**Verified selected evidence:** all main/supplemental input hashes, 23 typed
+receipts, chronological UI/PID/target/acknowledgment/coordinator observations,
+closed bookmark count and final idle state passed host review. Four unsafe
+verifier mutations were refused; 42 files plus the verification report were
+retained outside the guest-writable mapping, with a 155-file source inventory.
+Release compilation, GUI PE checks and four targeted reminder regressions passed.
+The [qualification](LIVE-PROTOCOL-HANDOFF-QUALIFICATION.md) records exact commands,
+input identities, pre-execution matcher correction and fixture limitations.
+
+The scoped live-browser protocol-argument track is completed. No registry/default-
+app association resolution, other browser family, Windows 10, packet capture or
+extension-effectiveness result is claimed. Raw profile/bookmark/log data remains
+in the guest. Production behavior is unchanged; prior canonical/MSRV results
+remain applicable, with no new full gate or remote CI claim. CRLSet freshness,
+independently initialized Windows recovery and other specific coverage limits
+remain in the [checklist](RELEASE-READINESS.md). Rating 3/5 and release hold remain.
+No push, tag or publication was performed.
