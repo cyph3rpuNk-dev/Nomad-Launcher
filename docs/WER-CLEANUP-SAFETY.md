@@ -99,8 +99,9 @@ persistent user/system configuration. Local Windows tests were run on Windows
 11 build 26200. Native file-share tests do not establish real WER activity or
 compatibility with Windows 10's serialized report variants.
 
-Real Windows 10/11 Report.wer captures and live browser-crash cleanup remain
-unverified. For further qualification, use a disposable Sandbox/VM with an inert
+Natural Windows 10/11 browser-crash Report.wer captures and live browser-crash
+cleanup remain unverified. A later [Windows 11 custom API-report replay](WINDOWS-METADATA-QUALIFICATION.md)
+qualifies that narrower OS-serialized metadata case, not natural crash forms. For further qualification, use a disposable Sandbox/VM with an inert
 owned instance and unrelated-report sentinels. Retain the original encoding of
 captured metadata and label any AppPath rebinding/redactions; replay under owned
 fake-host roots before considering live deletion. Never test against real host
@@ -109,3 +110,37 @@ native crash recovery need separate disposable validation. Microsoft documents c
 LocalDumps storage independently of other WER behavior
 ([user-mode dumps](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps));
 Nomad does not change those settings.
+
+## Windows-generated custom report replay (2026-10-15)
+
+**Tested in an offline Windows 11 Sandbox:** native WER APIs queued two inert
+noncritical custom reports with controlled owned/foreign application paths.
+Both original ProgramData reports were UTF-16LE with BOM and were retained
+without rebinding, redaction or encoding conversion. Copies were replayed through
+the production scanner under fake user/machine queue/archive roots. Attributed
+copies/attachments were removed; foreign reports/attachments, a standalone inert
+sentinel and the source captures were preserved, including repeated cleanup.
+The existing WER production logic needed no correction for this captured form.
+
+No browser was crashed or launched, memory dump requested, original live WER
+store passed to cleanup or raw report content exported. Queue-only submission
+and disabled networking were fixture controls, not a new Nomad WER policy.
+Four replay placements are not four captured OS variants. [Full provenance,
+commands and limitations](WINDOWS-METADATA-QUALIFICATION.md) retain the distinction
+from natural crashes, live service races and Windows 10. The full final gate
+passed 551 Rust tests (17 ignored); Rust 1.92 passed. Work is local/uncommitted.
+
+## Bounded browser capture follow-up (2026-10-16)
+
+An offline Helium navigation/induced-fault attempt obtained no observed browser
+process exit or matching Report.wer. A successful breakpoint API return did not
+establish an unhandled crash. No new metadata was available for production
+cleanup replay; this is an inconclusive capture attempt, not a WER cleanup defect
+or pass. [Observations, selected verification and discarded-guest record](BROWSER-METADATA-OBSERVATION.md)
+retain natural-crash/user-store/Windows 10 coverage as unqualified.
+
+**Owner disposition (2026-10-16):** The missing natural browser-crash and
+Explorer-navigation metadata qualification was explicitly accepted and deferred
+for v1.0.9. This is a coverage decision, not a WER capture/replay pass or complete
+cleanup guarantee. Genuine user-store variants and wider Windows 10/platform
+coverage remain unqualified. [Exact scope and separate remaining decisions](RELEASE-READINESS.md#metadata-coverage-disposition-2026-10-16).

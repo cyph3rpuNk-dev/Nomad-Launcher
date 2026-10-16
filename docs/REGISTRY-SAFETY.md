@@ -143,3 +143,22 @@ Ownership tests cover two copies in one fake registry, deletion of one while
 preserving the other, copied-state rejection, stable/distinct identities,
 legacy migration without shared-key writes, archive failures and retries, and
 tampered scoped paths. No live HKCU entries are changed by these tests.
+
+## Scoped native registration and Windows handoff follow-up
+
+**Tested, 2026-10-16 UTC:** in an offline Windows 11 guest, a guarded helper linked
+the actual production core and registered two owned Helium launcher locations.
+Native Shell queries resolved distinct ProgIDs to their exact launcher commands;
+removing copy B preserved copy A. UserChoice value/type/hash snapshots were
+unchanged before the operator's subsequent Default-apps selections. After actual
+selection, Windows ShellExecute delivered HTTP/HTML targets through copy A and
+kept HTTPS dispatch in the same portable session. HTTPS content was not qualified.
+
+The [qualification](WINDOWS-SHELL-HANDOFF-QUALIFICATION.md) records selected-field
+verification, original controller failures/corrections, UI-control unavailability,
+operator actions and cleanup. The previous Edge choice was unavailable; no
+UserChoice hash was forged. Copy A remained selected until the operator-authorized
+disposable guest discard, verified through CLI stop/empty inventory. Individual
+copy-A unregister or original-hash restoration is not claimed. This does not
+supersede the separate ignored native tests or qualify retail registration dialogs,
+other families/platforms, every association combination or hostile registry writers.

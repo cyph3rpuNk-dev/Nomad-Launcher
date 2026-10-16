@@ -26,7 +26,8 @@ tokio = { version = "1", features = ["sync", "fs", "io-util", "rt", "rt-multi-th
 toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-zip = "2"
+# Retain the previous ZIP format set; avoid adding new optional decoders.
+zip = { version = "9.0.4", default-features = false, features = ["aes-crypto", "bzip2", "deflate", "deflate64", "lzma", "time", "xz", "zstd"] }
 
 [target.'cfg(not(windows))'.dependencies]
 eframe = { version = "0.34.3", default-features = false, features = ["glow"] }
@@ -58,7 +59,7 @@ chrono = "0.4"
 httpmock = "0.8.3"
 rand = "0.8"
 tempfile = "3"
-zip = "2"
+zip = { version = "9.0.4", default-features = false, features = ["aes-crypto", "bzip2", "deflate", "deflate64", "lzma", "time", "xz", "zstd"] }
 
 [[test]]
 name = "integration"

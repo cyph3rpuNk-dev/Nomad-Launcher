@@ -376,8 +376,11 @@ previous shared mode-5 default on the next hardened launch, including existing
 installations and staged updates. Explicit saved user choices are not reset.
 Reviewed upstream 6.7.6 defaults to mode 2 with OHTTP enabled, using a Waterfox
 relay and Cloudflare endpoint. Mode 2 permits native DNS fallback and does not
-supply Quad9 malware filtering. Effective settings and network behavior are
-separate validation claims; see [Waterfox DNS evidence](docs/WATERFOX-DNS-DEFAULTS.md).
+supply Quad9 malware filtering. Scoped Windows 11 x64 6.7.6 browser-log tests
+observed OHTTP address responses normally and native/system resolution during
+a program-scoped HTTPS outage at startup. The two runs used different disposable
+profiles; neither is an OS packet capture or an every-lookup guarantee. See
+[Waterfox DNS evidence](docs/WATERFOX-DNS-DEFAULTS.md).
 
 ### LibreWolf — own minimal `user.js`, shares `policies.json`, skips the autoconfig pair
 

@@ -110,7 +110,7 @@ fn extract_zip_with_budget(package: &Path, install_dir: &Path, budget: u64) -> R
         .map(|i| {
             archive
                 .by_index(i)
-                .map(|e| e.name().replace('\\', "/"))
+                .and_then(|e| e.name().map(|name| name.replace('\\', "/")))
                 .map_err(|e| BrowserError::Extract(e.to_string()))
         })
         .collect::<Result<_>>()?;
@@ -120,7 +120,10 @@ fn extract_zip_with_budget(package: &Path, install_dir: &Path, budget: u64) -> R
         let mut entry = archive
             .by_index(i)
             .map_err(|e| BrowserError::Extract(e.to_string()))?;
-        let name = entry.name().replace('\\', "/");
+        let name = entry
+            .name()
+            .map_err(|e| BrowserError::Extract(e.to_string()))?
+            .replace('\\', "/");
         if name.contains("..") || name.starts_with('/') {
             continue;
         }
@@ -797,6 +800,50 @@ mod tests {
         let install_ok = dir.path().join("install-ok");
         extract_zip_with_budget(&zip_path, &install_ok, 2048).unwrap();
         assert!(install_ok.join("payload.bin").is_file());
+    }
+
+    #[test]
+    fn independent_zip_fixtures_preserve_formats_and_layouts() {
+        for bytes in [
+            include_bytes!("../tests/fixtures/zip-compat/flat.zip").as_slice(),
+            include_bytes!("../tests/fixtures/zip-compat/wrapped-stream.zip").as_slice(),
+        ] {
+            let fixture = tempfile::tempdir().unwrap();
+            let archive = fixture.path().join("public.zip");
+            let output = fixture.path().join("stage");
+            std::fs::write(&archive, bytes).unwrap();
+            extract_zip(&archive, &output).unwrap();
+            for (name, expected) in [
+                (
+                    "browser.exe",
+                    b"INERT browser marker; never executed\n".as_slice(),
+                ),
+                ("zip64.txt", b"small forced ZIP64 payload\n".as_slice()),
+                ("bzip2.txt", b"bzip2 payload\n".as_slice()),
+                ("lzma.txt", b"lzma payload\n".as_slice()),
+                ("assets/caf\u{e9}.txt", b"utf8 path\n".as_slice()),
+            ] {
+                assert_eq!(std::fs::read(output.join(name)).unwrap(), expected);
+            }
+            assert_eq!(
+                std::fs::read(output.join("resources/app.pak")).unwrap(),
+                b"PUBLIC ZIP compatibility payload\n".repeat(16)
+            );
+            assert!(output.join("empty").is_dir());
+        }
+    }
+
+    #[test]
+    fn independent_zip_corruption_fails_closed() {
+        for bytes in [
+            include_bytes!("../tests/fixtures/zip-compat/corrupt-crc.zip").as_slice(),
+            include_bytes!("../tests/fixtures/zip-compat/truncated.zip").as_slice(),
+        ] {
+            let fixture = tempfile::tempdir().unwrap();
+            let archive = fixture.path().join("invalid.zip");
+            std::fs::write(&archive, bytes).unwrap();
+            assert!(extract_zip(&archive, &fixture.path().join("stage")).is_err());
+        }
     }
 
     #[test]

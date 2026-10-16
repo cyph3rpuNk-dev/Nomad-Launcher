@@ -91,6 +91,29 @@ download -> authenticate -> extract to staging
                        +-> no swap   atomic swap -> launch
 ```
 
+### Promotion and rollback boundary
+
+Successful promotion ends the automatic rollback window. `atomic_swap_locked`
+attempts to restore the old bundle only if the stage-to-active rename fails.
+After that rename succeeds, it removes the old backup best-effort before browser
+startup; it does not wait for a healthy window or navigation. Later profile
+preparation or browser-startup failure does not automatically restore the old
+bundle. An orphaned backup is cleanup/recovery state, not a promised rollback
+slot. These are rename transactions, not a filesystem durability guarantee.
+
+The [native Windows 11 qualification](NATIVE-SWAP-RECOVERY-QUALIFICATION.md)
+passed an induced failed promotion with restoration, blocked backup restoration
+with retained state, subsequent retail direct-launch recovery and successful
+promotion, using one authenticated same-version Helium bundle and a real profile.
+Its interruption was authored; physical crashes, media loss, combined promotion/
+rollback failure and real version-transition compatibility were not qualified.
+
+**v1.0.9 owner disposition (2026-10-16):** the owner explicitly accepted the
+disclosed remaining transition/interruption/media-loss coverage limits and the
+lack of automatic health rollback after successful promotion. Those tests remain
+unqualified and the structural limit remains; no updater behavior or guarantee
+changed. [Exact acceptance and delivery boundary](RELEASE-READINESS.md#remaining-scope-acceptance-2026-10-16).
+
 Authentication and compatibility answer different questions. A valid digest or
 signature proves that a package matches what upstream published. The
 compatibility gate proves that this launcher understands that package's layout
@@ -428,7 +451,13 @@ That OS protocol path is launch-only:
 
 A direct launcher invocation remains the only path that may install or update
 software. This keeps ordinary link clicks from becoming hidden provisioning
-events and makes unexpected installs attributable and reproducible.
+events and makes unexpected installs attributable and reproducible. The
+[already-running Helium qualification](LIVE-PROTOCOL-HANDOFF-QUALIFICATION.md)
+exercised native URL/file cancellation and delivery to the original browser with
+its cleanup coordinator retained. The [subsequent Windows-selected fixture](WINDOWS-SHELL-HANDOFF-QUALIFICATION.md)
+qualified Helium HTTP/HTML handoff and HTTPS dispatch through actual ShellExecute
+after user selection. HTTPS content and other browser/platform combinations
+remain separate; that fixture explicitly disabled the already-tested reminder.
 
 ## Fallback process creation
 

@@ -2,6 +2,11 @@
 
 ## Disposition
 
+**Owner decision for v1.0.9 (2026-10-16):** Retain Ungoogled Chromium and accept
+this disclosed CRLSet freshness limitation for that release. This is a
+release-specific risk acceptance, not a refresh fix, effective-revocation test,
+or approval for future releases. [Recorded scope and remaining hold](RELEASE-READINESS.md#release-specific-residual-risk-decision-2026-10-16).
+
 **Verified in Nomad code:** Default hardening passes
 `--disable-component-update` and `--disable-background-networking`
 (`core/src/browsers/ungoogled.rs:80`). Turning hardening off omits those flags;
