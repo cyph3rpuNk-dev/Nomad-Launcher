@@ -161,8 +161,10 @@ adds release compilation and scoped runtime evidence, not another full gate.
 Document links/encoding/whitespace and retained evidence were checked separately.
 
 Windows 10, online updater delivery, already-running browser/Windows association
-combinations, post-replacement rollback, account/profile migration and independent
-Windows recovery isolation remain unqualified. These runs do not resolve the
-Ungoogled Chromium CRLSet gap. Rating 3/5 and the release hold remain; the
+combinations, account/profile migration and independent Windows recovery isolation
+remain unqualified. The [subsequent native swap qualification](NATIVE-SWAP-RECOVERY-QUALIFICATION.md)
+covers failed promotion, blocked restore, direct-launch recovery and successful
+promotion within its same-version fixture; no post-success health rollback
+exists. These runs do not resolve the Ungoogled Chromium CRLSet gap. Rating 3/5 and the release hold remain; the
 [current checklist](RELEASE-READINESS.md) distinguishes completed evidence from
 remaining risks and coverage decisions.

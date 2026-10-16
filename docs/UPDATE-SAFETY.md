@@ -91,6 +91,23 @@ download -> authenticate -> extract to staging
                        +-> no swap   atomic swap -> launch
 ```
 
+### Promotion and rollback boundary
+
+Successful promotion ends the automatic rollback window. `atomic_swap_locked`
+attempts to restore the old bundle only if the stage-to-active rename fails.
+After that rename succeeds, it removes the old backup best-effort before browser
+startup; it does not wait for a healthy window or navigation. Later profile
+preparation or browser-startup failure does not automatically restore the old
+bundle. An orphaned backup is cleanup/recovery state, not a promised rollback
+slot. These are rename transactions, not a filesystem durability guarantee.
+
+The [native Windows 11 qualification](NATIVE-SWAP-RECOVERY-QUALIFICATION.md)
+passed an induced failed promotion with restoration, blocked backup restoration
+with retained state, subsequent retail direct-launch recovery and successful
+promotion, using one authenticated same-version Helium bundle and a real profile.
+Its interruption was authored; physical crashes, media loss, combined promotion/
+rollback failure and real version-transition compatibility were not qualified.
+
 Authentication and compatibility answer different questions. A valid digest or
 signature proves that a package matches what upstream published. The
 compatibility gate proves that this launcher understands that package's layout

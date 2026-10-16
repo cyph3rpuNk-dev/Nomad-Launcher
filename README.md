@@ -19,6 +19,8 @@ runtime files are checked in staging before replacement; an incomplete update
 leaves the working installation intact. The browser bundle, profile,
 and Nomad configuration are stored beside the launcher rather than installed
 into `Program Files`.
+After successful bundle replacement, later browser/profile startup failures are
+not automatically rolled back; see the [rollback boundary](docs/UPDATE-SAFETY.md#promotion-and-rollback-boundary).
 
 Windows and browsers can still create host-level traces while running. Nomad
 performs best-effort cleanup after exit, but it is not an anti-forensics tool.

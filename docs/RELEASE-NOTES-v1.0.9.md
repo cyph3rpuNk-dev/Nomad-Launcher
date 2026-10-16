@@ -106,8 +106,12 @@ and preserves the limits of each build/run. In particular:
 - Windows 11 Shell API Recent links and custom queued WER metadata passed
   fake-root replay after the narrow Recent flag correction. Natural crash forms,
   actual Explorer/browser navigation, Windows 10 execution, other native failure
-  origins, Windows-association/already-running-browser combinations, post-replacement rollback and
-  cross-machine sign-in retain gaps. Download-failure preservation does not prove post-replacement rollback.
+  origins, Windows-association/already-running-browser combinations and
+  cross-machine sign-in retain gaps. Native failed-promotion rollback, blocked
+  restoration and subsequent direct recovery now have a [scoped Windows 11 pass](NATIVE-SWAP-RECOVERY-QUALIFICATION.md).
+  Successful promotion removes the old backup before browser startup; later
+  profile/startup failure has no automatic health-based rollback. Real version
+  transitions, physical interruption and media-loss cases remain separate.
 - Safe Browsing is disabled by Nomad hardening in Chromium/managed Gecko.
   DNS filtering does not replace browser-level phishing/malware protection.
   Host forensics, compromised computers and read/write access to an unencrypted
