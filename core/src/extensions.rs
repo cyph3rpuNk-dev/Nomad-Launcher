@@ -240,7 +240,10 @@ fn extract_zip_into_with_budget(zip_bytes: &[u8], dest: &Path, budget: u64) -> R
         let mut entry = archive
             .by_index(i)
             .map_err(|e| BrowserError::Extract(e.to_string()))?;
-        let raw_name = entry.name().replace('\\', "/");
+        let raw_name = entry
+            .name()
+            .map_err(|e| BrowserError::Extract(e.to_string()))?
+            .replace('\\', "/");
         if raw_name.contains("..") || raw_name.starts_with('/') {
             continue;
         }
@@ -283,7 +286,10 @@ fn detect_top_prefix<R: std::io::Read + std::io::Seek>(
         let entry = archive
             .by_index(i)
             .map_err(|e| BrowserError::Extract(e.to_string()))?;
-        let name = entry.name().replace('\\', "/");
+        let name = entry
+            .name()
+            .map_err(|e| BrowserError::Extract(e.to_string()))?
+            .replace('\\', "/");
         let Some(first_slash) = name.find('/') else {
             return Ok(None);
         };
@@ -315,6 +321,45 @@ mod tests {
             zw.finish().unwrap();
         }
         buf
+    }
+
+    #[test]
+    fn independent_extension_zips_keep_manifest_and_payloads() {
+        for bytes in [
+            include_bytes!("../tests/fixtures/zip-compat/flat.zip").as_slice(),
+            include_bytes!("../tests/fixtures/zip-compat/wrapped-stream.zip").as_slice(),
+        ] {
+            let fixture = tempfile::tempdir().unwrap();
+            extract_zip_into(bytes, fixture.path()).unwrap();
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(fixture.path().join("manifest.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(manifest["version"], "1.0.0");
+            assert_eq!(
+                std::fs::read(fixture.path().join("zip64.txt")).unwrap(),
+                b"small forced ZIP64 payload\n"
+            );
+            assert_eq!(
+                std::fs::read(fixture.path().join("resources/app.pak")).unwrap(),
+                b"PUBLIC ZIP compatibility payload\n".repeat(16)
+            );
+            assert!(
+                extract_zip_into_with_budget(bytes, &fixture.path().join("over-budget"), 16)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn independent_extension_corruption_fails_closed() {
+        for bytes in [
+            include_bytes!("../tests/fixtures/zip-compat/corrupt-crc.zip").as_slice(),
+            include_bytes!("../tests/fixtures/zip-compat/truncated.zip").as_slice(),
+        ] {
+            let fixture = tempfile::tempdir().unwrap();
+            assert!(extract_zip_into(bytes, fixture.path()).is_err());
+        }
     }
 
     fn working_extension(path: &Path) {

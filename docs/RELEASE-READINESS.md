@@ -62,7 +62,6 @@ does not make that decision for the owner.
 
 | Priority | Open item | Next concrete action / acceptance evidence |
 |---|---|---|
-| 0 | Current dependency gate failure | The 2026-10-16 full gate reached dependency auditing after 553 Rust tests passed (18 ignored), then refused the existing locked `zip 2.4.2` as yanked. No vulnerability advisory was reported in that run. Review a supported replacement and extraction compatibility in a separate dependency change; retain the deny-warnings gate. The VM package adds no dependency or exception. |
 | 1 | Ungoogled Chromium revocation-data freshness | A supported signed CRLSet-only loading/refresh capability needs separate design and runtime validation, including effective rejection of a controlled revoked certificate. No supported narrow route was identified in the reviewed interfaces. Do not remove a flag, change an endpoint or copy an unverified list as a claimed fix. Any release retaining the disclosed gap needs an explicit owner disposition. |
 | 2 | Recovery isolation across independent Windows contexts | Use a separately initialized disposable Windows machine and a separately created user. Exchange only the public-payload ciphertext fixture, verify refusal and retained intent, and preserve receipts. The second Sandbox's machine-only sample decrypted; another identical Sandbox rerun cannot qualify independent keys. Never export keys or bypass the current Sandbox-only runner guards to test personal stores. A [separately guarded VM package](INDEPENDENT-WINDOWS-RECOVERY.md) is now prepared, with source/peer/foreign/return phases and strict host verification; preparation is not a native isolation pass. |
 | 3 | Remaining natural-crash/navigation metadata variants | Windows 11 Shell API Recent links and custom queued WER metadata now passed unmodified-byte replay; the Recent flag defect was reproduced and corrected. Actual Explorer/browser navigation, natural browser-crash reports, genuine user-store variants and Windows 10 remain separate qualification targets. Continue only in disposable environments without report upload or personal host data, preserving encodings and unrelated sentinels. [Scope](WINDOWS-METADATA-QUALIFICATION.md). |
@@ -110,3 +109,31 @@ PowerShell 5.1 VM metadata regressions and `cargo +1.92 check --workspace
 --all-targets --locked --target x86_64-pc-windows-msvc` passed. Logs are retained
 under `target/vm-recovery-validation-9936920862714a969b6032dba2975841/`.
 No remote CI, push, tag or publication was performed at this checkpoint.
+
+## ZIP dependency gate resolved (2026-10-16)
+
+The failed yanked-crate check in the preparation checkpoint above is resolved by
+a separate change based on `a779970`. Production/test dependencies now resolve
+`zip 9.0.4` in the committed lockfile, with the previous optional format set
+explicitly retained. All three ZIP consumers handle the new fallible filename
+API by propagating errors. Ownership, traversal, size, verification and promotion
+checks are retained. No audit exception was added or gate weakened.
+
+**Tested:** the full `pwsh -NoProfile -File scripts/check.ps1` now passes,
+including safety fixtures, formatting, strict Clippy, 558 Rust tests (18 ignored)
+and the structured dependency audit with the existing RSA exception. Rust 1.92
+workspace/all-targets checking passed. All six unsigned release launchers built
+and passed the metadata-only PE import/CRT/mitigation guard; none was executed,
+signed or published. Independent Python-authored fixtures cover flat/wrapped
+ZIPs, streaming descriptors, Stored/Deflate/Bzip2/LZMA, a small forced-ZIP64 entry,
+UTF-8 paths, CRC corruption and truncation across the applicable consumers.
+These are bounded archive checks, not fresh live browser/version-transition tests.
+Logs and artifact identities are retained under
+`target/zip-refresh-4cc6bb695d184c9a850f7355bfcc47ce/`.
+
+The dependency gate is no longer an open item. Independent Windows recovery
+qualification, Ungoogled CRLSet disposition and remaining platform/production
+coverage retain the scopes listed above. The previously prepared VM package
+remains pinned to `a779970`; it is not silently rebuilt or relabelled for this
+new dependency graph. No native VM phase, remote CI or release approval follows
+from this local pass. Rating 3/5 and release hold remain.
