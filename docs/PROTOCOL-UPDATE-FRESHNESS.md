@@ -138,6 +138,9 @@ and exact limits. Native argv handoff is now exercised; Windows association
 resolution and Windows 10 remain separate. The [already-running Helium follow-up](LIVE-PROTOCOL-HANDOFF-QUALIFICATION.md)
 now records URL/file Close/Continue with original browser/worker identity, native
 bookmark preservation and coordinator-lock exits; other live-browser combinations
-remain unqualified.
+remain unqualified. A [subsequent Windows-selected Shell fixture](WINDOWS-SHELL-HANDOFF-QUALIFICATION.md)
+exercised actual HTTP/HTML handoff and HTTPS dispatch after the user selected the
+Nomad candidate; its reminder was explicitly disabled to isolate OS dispatch.
+HTTPS content and other browser/platform combinations remain separate.
 The prompt's explanatory text appeared low contrast, recorded as a minor UI
 follow-up. No production behavior was changed for this evidence checkpoint.

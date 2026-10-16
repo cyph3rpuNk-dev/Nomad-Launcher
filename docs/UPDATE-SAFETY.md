@@ -448,8 +448,10 @@ software. This keeps ordinary link clicks from becoming hidden provisioning
 events and makes unexpected installs attributable and reproducible. The
 [already-running Helium qualification](LIVE-PROTOCOL-HANDOFF-QUALIFICATION.md)
 exercised native URL/file cancellation and delivery to the original browser with
-its cleanup coordinator retained. OS association resolution and other families
-remain separate from that protocol-argument fixture.
+its cleanup coordinator retained. The [subsequent Windows-selected fixture](WINDOWS-SHELL-HANDOFF-QUALIFICATION.md)
+qualified Helium HTTP/HTML handoff and HTTPS dispatch through actual ShellExecute
+after user selection. HTTPS content and other browser/platform combinations
+remain separate; that fixture explicitly disabled the already-tested reminder.
 
 ## Fallback process creation
 
