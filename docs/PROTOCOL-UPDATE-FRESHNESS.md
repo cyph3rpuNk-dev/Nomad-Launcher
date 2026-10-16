@@ -135,6 +135,9 @@ fixture to expose the file prompt. No managed-extension receipt was created.
 The [qualification record](BROWSER-STARTUP-HANDOFF-QUALIFICATION.md#native-protocol-reminder-and-handoff)
 contains build/input hashes, native control/image evidence, typed host verification
 and exact limits. Native argv handoff is now exercised; Windows association
-resolution, already-running browser combinations and Windows 10 remain separate.
+resolution and Windows 10 remain separate. The [already-running Helium follow-up](LIVE-PROTOCOL-HANDOFF-QUALIFICATION.md)
+now records URL/file Close/Continue with original browser/worker identity, native
+bookmark preservation and coordinator-lock exits; other live-browser combinations
+remain unqualified.
 The prompt's explanatory text appeared low contrast, recorded as a minor UI
 follow-up. No production behavior was changed for this evidence checkpoint.

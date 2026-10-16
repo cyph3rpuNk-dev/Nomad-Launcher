@@ -445,7 +445,11 @@ That OS protocol path is launch-only:
 
 A direct launcher invocation remains the only path that may install or update
 software. This keeps ordinary link clicks from becoming hidden provisioning
-events and makes unexpected installs attributable and reproducible.
+events and makes unexpected installs attributable and reproducible. The
+[already-running Helium qualification](LIVE-PROTOCOL-HANDOFF-QUALIFICATION.md)
+exercised native URL/file cancellation and delivery to the original browser with
+its cleanup coordinator retained. OS association resolution and other families
+remain separate from that protocol-argument fixture.
 
 ## Fallback process creation
 
