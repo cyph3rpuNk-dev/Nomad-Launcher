@@ -2466,3 +2466,66 @@ Changes are included in this local correction checkpoint on
 No remote CI, push or release is claimed. Windows 10, actual Explorer/browser
 navigation, natural crash/user-store WER forms, independent-context recovery and
 CRLSet freshness remain open; rating 3/5 and release hold remain.
+
+## Required-settings native GUI follow-up (2026-10-15)
+
+**Tested:** after committing the Windows metadata correction as `187771c`, a
+release build of that exact production source passed PE checks and ran in the
+existing offline Windows 11 Sandbox with a digest-verified Helium 0.19.2.1 import.
+Malformed required Local State stopped launch; native UI exposed Retry/Close
+without Launch anyway. Retry repeated the error until the authored JSON was
+repaired, then started the exact portable browser with one native owned watcher.
+A second malformed case closed through the actual Close button without launch.
+Protected EXE/DLL, version/identity/configuration markers and profile sentinel
+retained hashes. The browser closed without force; final owned process count
+was zero. Earlier original Recent/WER records and captures were also unchanged.
+
+**Verified selected evidence:** nine phase receipts and 52 unmapped retained
+files passed host schema/hash/provenance, typed assertion and UI-button checks;
+unsafe mutation cases were refused. Initial UIA ProcessId/logging assumptions,
+a normal-close child-exit race, cropped image and verifier-schema failure remain
+recorded with their corrections. No numeric launcher exit-zero claim follows
+from the Close receipt's unavailable exit code. The
+[qualification record](HARDENING-GUI-QUALIFICATION.md) distinguishes these from
+production failures and saved requests from effective settings.
+
+Only evidence documentation is uncommitted on `codex/hardening-error-gui`.
+The existing 551-test/17-ignored canonical and Rust 1.92 results still apply to
+unchanged Rust; release compilation and scoped native interaction add evidence,
+not remote CI. Other native origins/platforms, staged rollback, independent
+Windows contexts and CRLSet freshness remain open. Rating 3/5 and release hold
+remain; no push or publication was performed.
+
+## Mullvad startup and native protocol-prompt follow-up
+
+**Tested, receipts dated 2026-10-16 UTC:** production source remained `187771c`.
+A signed/hash-verified official Mullvad 15.0.25 package passed production adapter
+extraction inside a fresh offline Windows 11 Sandbox. No profile directory was
+pre-created. Startup, normal close and relaunch passed; uBlock, NoScript and the
+Mullvad extension were recorded active on both runs. Only the updater policy was
+written, no profile user.js was present, and exact protected files/public sentinel
+were preserved. This is a signed import/startup test, not automatic updater or
+real-user bookmark/account migration qualification.
+
+**Tested native handoff:** four Helium freshness-prompt cases exercised the
+production `-- <target>` entry: URL/file Close canceled without acknowledgment or
+browser; Continue opened the public guest-loopback URL/local HTML and saved the
+expected acknowledgment. Permissive update config left cache and authored stage/
+backup sentinels unchanged. Native UI controls and one complete prompt image were
+captured. Windows association resolution and already-running-browser combinations
+were not repeated. Prompt explanatory text appeared low contrast; it is recorded
+as a minor presentation follow-up, not a functional pass for every UI property.
+
+**Verified selected evidence:** 29 typed receipts, all input hashes/addon linkage,
+activation/policy/prompt semantics, preserved files and final idle/server shutdown
+passed host review. Three unsafe verifier mutations were refused; 52 unmapped
+files were preserved and rehashed. Exact commands, identities and limits are in
+the [combined qualification](BROWSER-STARTUP-HANDOFF-QUALIFICATION.md).
+
+The local `codex/browser-release-qualification` documentation checkpoint includes
+these results and the preceding required-settings GUI evidence. Rust is unchanged;
+its prior 551-test/17-ignored canonical and Rust 1.92 results still apply. Mullvad
+release compilation/PE checks and the scoped runtime results add evidence without
+claiming remote CI. Independent Windows recovery, CRLSet freshness, native
+post-replacement rollback and remaining platform variants stay open. No push,
+tag or publication was performed; rating 3/5 and the release hold remain.

@@ -110,7 +110,8 @@ x86_64-pc-windows-msvc --target-dir target/msrv-1.92` passed compilation.
 Logs: `target/protocol-freshness-check.log` and
 `target/protocol-freshness-msrv-check.log`.
 
-**Not tested:** Actual Windows URL/file handoff through this new visible prompt,
+**Not tested in the initial fixture campaign:** Actual Windows URL/file handoff
+through this new visible prompt,
 Windows 10 rendering/execution, interaction with a live running browser, and
 cross-machine clocks. Headless egui tests verify fixed-window button bounds,
 not a native display screenshot. A disposable Windows 10/11 check should compare
@@ -121,3 +122,19 @@ triggered. These checks remain pending; no remote CI result is claimed.
 Delivery is local/uncommitted on `codex/privacy-security-followup`, base
 `ca4633d676ddac433eff4248950de8242d90405a`, alongside the preceding Recent,
 WER and required-hardening working-tree changes. v1.0.9 remains on hold.
+
+## Subsequent native prompt qualification
+
+**Tested:** the production Helium launcher ran four native protocol-argument
+cases in an offline Windows 11 Sandbox: URL Close/Continue and file Close/Continue.
+Close left no browser, page request or acknowledgment; Continue opened the public
+guest-loopback URL/local HTML and saved the bounded acknowledgment. Browser
+metadata and authored staging/backup sentinels retained hashes despite permissive
+update config. The previous URL acknowledgment was archived only within the new
+fixture to expose the file prompt. No managed-extension receipt was created.
+The [qualification record](BROWSER-STARTUP-HANDOFF-QUALIFICATION.md#native-protocol-reminder-and-handoff)
+contains build/input hashes, native control/image evidence, typed host verification
+and exact limits. Native argv handoff is now exercised; Windows association
+resolution, already-running browser combinations and Windows 10 remain separate.
+The prompt's explanatory text appeared low contrast, recorded as a minor UI
+follow-up. No production behavior was changed for this evidence checkpoint.

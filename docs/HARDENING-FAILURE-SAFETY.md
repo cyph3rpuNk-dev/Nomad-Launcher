@@ -90,7 +90,8 @@ x86_64-pc-windows-msvc --target-dir target/msrv-1.92` passed compilation.
 Logs: `target/required-hardening-failures.log`,
 `target/required-hardening-check.log`, `target/required-hardening-msrv-check.log`.
 
-**Not tested:** Visible Windows GUI interaction for these new errors, effective
+**Not tested in the initial regression campaign:** Visible Windows GUI interaction
+for these new errors, effective
 browser preferences/first-run behavior after this patch, Windows 10 execution,
 read-denied ACLs and exhaustive concurrent-writer scenarios. Existing-readonly
 checks exercise actual Windows filesystem permissions; JSON/directory fixtures
@@ -101,6 +102,22 @@ failure and inspect actual browser settings after a successful launch. Such live
 checks were not substituted with host provisioning or real personal-profile
 mutations.
 
-Delivery remains local and uncommitted on `codex/privacy-security-followup`,
+Delivery at initial collection was local and uncommitted on
+`codex/privacy-security-followup`,
 base `ca4633d676ddac433eff4248950de8242d90405a`. Prior Recent/WER working-tree
 changes are included in the full validation; no remote CI/release is claimed.
+
+## Native GUI follow-up (2026-10-15)
+
+**Tested:** Windows 11 Sandbox exercised the production Helium direct-launch
+required-JSON error: visible Retry/Close with no Launch anyway, a repeated
+refusal while malformed bytes remained, successful Retry after repair, and
+Close without launch in a second case. Exact browser/profile arguments, one
+native watcher after successful launch, protected-file preservation and final
+idle state were checked. A DPI-aware image confirmed button visibility.
+The [qualification record](HARDENING-GUI-QUALIFICATION.md) preserves exact build
+hashes, failed controller attempts and host verification limits. This closes
+that bounded native GUI gap; the other origins, Gecko, staged native UI,
+effective preferences, Windows 10 and ACL/concurrency cases remain unqualified.
+No production change was needed; this new evidence is local documentation on
+`codex/hardening-error-gui`, based on committed `187771c`.
