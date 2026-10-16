@@ -2813,3 +2813,30 @@ the five documentation files. The latest code validation remains `f560926`
 existing RSA exception, Rust 1.92 and six release PE guards). No new full gate
 or remote CI is claimed for this documentation-only disposition. No push, tag,
 signing or publication occurred.
+
+## Draft release notes and delivery-state reconciliation (2026-10-16)
+
+**Tested read-only:** main remains `4951d05b0b4c3305324daee3696bfa577d5b9ba1`
+with seven completed/success checks. Successful paginated inventories found no
+exact v1.0.9 tag or visible release. The clean starting local checkpoint `d856c37`
+is 12 commits ahead; attribution and complete messages for those local commits
+were inspected. No push or CI result for that local chain follows from this read.
+
+The tracked diff from validated code checkpoint `f560926` contains documentation
+only. Five saved validation-log hashes and eleven non-documentation source/fixture
+hashes match its receipt. Existing 558-pass/18-ignored, Rust 1.92 and six unsigned
+release PE-guard results therefore remain applicable within their original scope;
+no redundant gate or execution of those artifacts was performed. The post-main
+Recent-link and ZIP production changes were reread; this bounded review is not
+a new whole-repository audit.
+
+The draft release notes now describe the local Recent/ZIP fixes, latest local
+validation, and separate CRLSet/metadata v1.0.9 acceptances. Independent-context
+recovery and wider platform/production-path release decisions remain unresolved;
+none was inferred from proceeding with preparation. The current draft remains
+on hold, with exact-candidate remote CI, compatibility, artifacts/provenance,
+offline owner signature and publication still future work. No remote mutation,
+tag, signing, browser run, VM setup or persistent host change occurred.
+
+**Validation:** three UTF-8/LF documentation files, local links/anchors and
+whitespace checked. [Release-readiness checkpoint](RELEASE-READINESS.md#draft-release-note-reconciliation-2026-10-16).

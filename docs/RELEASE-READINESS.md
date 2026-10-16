@@ -219,3 +219,33 @@ is authorized by this decision.
 browser, fault, cleanup or full gate was rerun for this text-only disposition.
 The code checks at `f560926` remain the latest recorded local validation, not
 remote CI for subsequent commits.
+
+## Draft release-note reconciliation (2026-10-16)
+
+**Tested read-only:** main still resolves to
+`4951d05b0b4c3305324daee3696bfa577d5b9ba1`, with seven reported check runs all
+completed/success. Successful paginated tag and release inventories found no
+exact v1.0.9 tag or visible release. The local review began at clean `d856c37`,
+12 commits ahead of that main commit; those commits' author, committer and full
+messages were inspected. This does not publish them or establish their remote CI.
+
+The diff from `f560926` to that local checkpoint contains documentation only.
+All five saved validation-log hashes and eleven non-documentation changed-source/
+fixture hashes in its local receipt were rechecked successfully. The existing
+558-pass/18-ignored gate, Rust 1.92 and six unsigned PE-guard results are carried
+forward as prior local evidence, not a new run or runtime/browser qualification.
+The post-main production diff was reread for the Recent-link flag correction
+and ZIP consumers; VM/metadata qualification additions remain test-only. This
+is a bounded change review, not a second exhaustive security audit.
+
+The [draft release notes](RELEASE-NOTES-v1.0.9.md) now identify the local fixes,
+latest validation and both accepted v1.0.9 limitations. The draft remains on hold.
+Independent-context recovery isolation is deferred/unverified and still needs a
+release-scope decision; wider platform/production coverage has its separate open
+scope. Final exact-commit CI, compatibility, artifact/provenance verification and
+owner signing/publication remain future delivery steps. No new owner acceptance
+was inferred and no push, tag, signing or release mutation occurred.
+
+**Validation:** the three documentation files passed UTF-8/LF, local link/anchor
+and whitespace checks. No production code changed and no full gate or browser
+test was rerun solely for this release-note update.

@@ -1,8 +1,10 @@
 # Nomad Launcher v1.0.9 (draft; on hold)
 
 This candidate fixes portable update, profile handoff, clean-Windows startup and
-privacy-control problems. It includes the implementation merged through PR #79;
-the final release commit and tagged artifacts have not been selected or built.
+privacy-control problems. It includes the implementation merged through PR #79
+and local follow-ups for Windows Recent links and the ZIP dependency. Unsigned
+local build checks are recorded below; the final release commit and tagged
+artifacts have not been selected or built.
 See the [current release-readiness checklist](RELEASE-READINESS.md) for completed
 evidence, open risks and delivery steps. These notes do not authorize publication.
 
@@ -46,7 +48,10 @@ evidence, open risks and delivery steps. These notes do not authorize publicatio
   site fixes while keeping Strict protection. Exceptions may permit tracking
   elements; uBlock Origin's rules are unchanged.
 - Verification dependencies, bundled extraction tools, build validation and
-  release-upload safeguards have been refreshed.
+  release-upload safeguards have been refreshed. The yanked ZIP dependency was
+  replaced with 9.0.4 while retaining the previous optional decoder set; browser,
+  extension and XPI paths propagate filename-decoding errors. Independent inert
+  archive fixtures cover supported layouts and corruption refusal.
 - Early browser loader failures are reported as errors. Retry, Launch anyway
   and Close remain visible for long diagnostics. Window titles use
   `Nomad Launcher - <Browser Name>`.
@@ -73,16 +78,28 @@ is disabled for portability, independently of the hardening toggle.
 
 ## Validation and limits
 
-**Tested locally:** the canonical gate before documentation commit `9fbac51`
-passed 550 Rust tests (16 ignored). The subsequent final Windows metadata
-correction passed 551 tests (17 ignored), formatting, strict Clippy, safety
-fixtures, structured dependency audit with the existing RSA advisory exception,
-and Rust 1.92 workspace/all-target checking. The
-[subsequent scoped GUI check](HARDENING-GUI-QUALIFICATION.md) used a successful
-release build of that committed source; its documentation adds no Rust change.
-**Tested read-only on GitHub:** all seven checks for merged main `4951d05`
-completed successfully on inspection. Neither result is a tagged-release build
-or CI for subsequent local commits.
+**Tested locally:** the latest code checkpoint `f560926` passed the full canonical
+gate: 558 Rust tests (18 ignored), formatting, strict Clippy, safety fixtures and
+a clean structured dependency audit with the existing RSA advisory exception.
+Rust 1.92 workspace/all-target checking and all six unsigned release PE metadata
+guards passed. These build checks did not execute the six outputs or qualify
+new browser versions. Earlier 550/551-test results retain their historical scope;
+they are not the current total. See the [ZIP checkpoint](RELEASE-READINESS.md#zip-dependency-gate-resolved-2026-10-16)
+and the [native GUI scope](HARDENING-GUI-QUALIFICATION.md).
+
+**Tested read-only on 2026-10-16:** current main still names `4951d05`; all seven
+reported check runs are completed/success. Current tracked build/test source is
+unchanged from `f560926`; five saved validation-log hashes and eleven changed
+source/fixture hashes match the prior receipt. The subsequent local commits are
+not covered by main's CI. Paginated tag/release inventories found no exact
+v1.0.9 tag or visible release. No tagged build or new CI result is claimed.
+
+**Owner decisions for v1.0.9:** retain Ungoogled Chromium with the disclosed CRLSet
+freshness limitation, and accept/defer the unverified natural browser-crash and
+Explorer-navigation metadata coverage gap. These are release-specific decisions,
+not technical passes or future-release acceptances. Independent-context recovery
+testing is separately deferred; its release disposition and wider platform/
+production-path coverage remain unresolved. [Recorded decisions and remaining scope](RELEASE-READINESS.md#open-work-and-acceptance-evidence).
 
 | Browser | Exercised Windows 11 scope |
 |---|---|
@@ -99,7 +116,8 @@ and preserves the limits of each build/run. In particular:
 - Ungoogled Chromium has no assured authenticated CRLSet refresh path. Its
   launcher discloses this security-data gap. Certificate-chain/hostname/expiry
   checks are distinct; neither DNS filtering nor a newer bundle proves fresh
-  revocation data. Removing one flag is not a reviewed fix.
+  revocation data. Removing one flag is not a reviewed fix. The owner accepted
+  this disclosed limitation for v1.0.9; technical refresh remains unresolved.
 - Recovery has same-context native and authored-file browser-integration
   evidence. Different-user/independently keyed-machine isolation, physical
   interruption and genuine Windows crash-report forms remain unqualified.
@@ -107,7 +125,9 @@ and preserves the limits of each build/run. In particular:
   fake-root replay after the narrow Recent flag correction. Natural crash forms,
   actual Explorer/browser navigation, Windows 10 execution, other native failure
   origins, other browser/platform Windows-association and live-browser combinations, and
-  cross-machine sign-in retain gaps. Already-running Helium URL/file Close/Continue
+  cross-machine sign-in retain gaps. The natural-crash/Explorer-navigation gap
+  is accepted and deferred for v1.0.9 while remaining unverified; this does not
+  accept every wider platform gap. Already-running Helium URL/file Close/Continue
   now has a [scoped native pass](LIVE-PROTOCOL-HANDOFF-QUALIFICATION.md), including
   original browser/worker identity and bookmark preservation. Windows-selected
   Helium HTTP/HTML handoff and HTTPS dispatch also have a [bounded pass](WINDOWS-SHELL-HANDOFF-QUALIFICATION.md);
