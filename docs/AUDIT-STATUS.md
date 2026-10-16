@@ -1,5 +1,9 @@
 # Audit status
 
+For the current consolidated disposition, read [release readiness](RELEASE-READINESS.md).
+The sections below are chronological evidence; earlier pending/delivery statements
+retain their historical scope and may be superseded by later records.
+
 Baseline reviewed 2026-10-07 against `f37c9a9`; documentation follow-up against
 `1b13fb8` on `rebuild/foundation`.
 This reconciles the original handoff findings with the current source and local
@@ -2391,3 +2395,476 @@ native DNS fallback. The full limitations and provenance are in
 [Waterfox DNS defaults](WATERFOX-DNS-DEFAULTS.md). No production installation or
 release was performed; subsequent commit/push delivery does not extend these
 test results. The broader audit/release hold remains.
+
+## Waterfox runtime DNS observations completed (2026-10-15)
+
+**Tested guest / host-verified selected evidence:** The clean `4951d05` unsigned
+x64 launcher with Waterfox 6.7.6 observed two completed OHTTP address-response
+sequences normally. A fresh disposable guest with the same pinned binaries and
+a program-scoped HTTPS block present at startup observed native/system probe
+resolution, status-0 native completion records and effective request mode 2.
+This supersedes the earlier statement that all Waterfox traffic/fallback remains
+unverified, only for these two specific runs. The original confirmation-domain
+probe remains inconclusive.
+
+The two temporary guest rules were verified at closure/collection, removed,
+and separately inspected as absent in both stores. Original test config and
+selected DNS fields were preserved. The host verified bounded typed selected
+exports, exact digests, public-format/numeric correspondence, helper provenance,
+192 source hashes and byte-identical preservation outside guest-writable output.
+PowerShell 5.1/7 offline outage safety fixtures passed. Raw logs/profiles stayed
+inside their disposable guests. [Exact result, commands, receipts and limits](WATERFOX-DNS-DEFAULTS.md#runtime-address-responses-and-startup-outage-fallback-2026-10-15)
+are recorded separately from the settings/relaunch check.
+
+**Inference / remaining:** Mode 2 permits native/system fallback when encrypted
+DNS is unavailable. That is consistent with upstream policy, not evidence that
+the successful normal DoH test failed. Native/system resolution does not prove
+plaintext OS packets. Broader browser/platform/profile coverage, independent-key
+recovery and genuine Windows-generated Recent/WER fixtures remain separate gaps.
+Ungoogled CRLSet refresh remains unresolved; rating 3/5 and the release hold stay.
+Only documentation is being committed; experimental target helpers/evidence are
+not part of the production change. No push, CI or release result follows from
+this local record.
+
+**Tested before this documentation commit:** `pwsh -NoProfile -File
+scripts/check.ps1` passed on Windows: 550 Rust tests passed, 16 ignored,
+formatting, strict Clippy, offline safety fixtures and the structured dependency
+audit with the existing documented RSA advisory exception. Log:
+`target/waterfox-dns-evidence-check.log`. No new Rust/runtime change was needed.
+Remote checks for this new local documentation commit have not run.
+
+## Windows Shell/queued-WER metadata qualification (2026-10-15)
+
+**Confirmed in baseline / corrected locally:** native Shell Recent links from a
+networking-disabled Windows 11 Sandbox carried `DisableKnownFolderTracking`,
+which the committed parser refused. The baseline same-byte fake-host replay
+failed with exit 101 because the owned shortcut remained. The correction allows
+only that documented bit, preserves full target agreement and refuses ignored
+KnownFolder/SpecialFolder-record combinations. Both initial and final refactored
+harnesses passed with exit 0 using the unchanged captured bytes. All unrelated
+sentinels, the source captures and ownership marker were preserved.
+
+**Tested WER scope:** Windows queued two custom noncritical reports with exact
+controlled AppPath values. Unmodified UTF-16LE metadata passed existing WER
+cleanup in four fake-root placements. No WER production change was needed.
+These are custom API reports, not natural browser-crash variants; no real host
+cleanup, browser crash, dump request or raw metadata export was performed.
+
+**Verified selected evidence:** both baseline and final receipts, bounded typed
+outputs, all input hashes and 194 final source hashes, result serialization,
+source delta, and byte-identical unmapped host preservation passed. The original
+partial collector and failing baseline retain their original verdicts. The
+[qualification record](WINDOWS-METADATA-QUALIFICATION.md) contains commands,
+receipt/build identities and operational boundaries.
+
+**Tested final source:** canonical gate passed 551 Rust tests, 17 ignored,
+formatting, strict Clippy, safety fixtures and the structured dependency audit
+with the existing RSA exception. Rust 1.92 workspace/all-target checking passed.
+The final refactored binary was replayed in the offline guest after lint fixes.
+Changes are included in this local correction checkpoint on
+`codex/windows-cleanup-metadata`, base `fcd3c01`.
+No remote CI, push or release is claimed. Windows 10, actual Explorer/browser
+navigation, natural crash/user-store WER forms, independent-context recovery and
+CRLSet freshness remain open; rating 3/5 and release hold remain.
+
+## Required-settings native GUI follow-up (2026-10-15)
+
+**Tested:** after committing the Windows metadata correction as `187771c`, a
+release build of that exact production source passed PE checks and ran in the
+existing offline Windows 11 Sandbox with a digest-verified Helium 0.19.2.1 import.
+Malformed required Local State stopped launch; native UI exposed Retry/Close
+without Launch anyway. Retry repeated the error until the authored JSON was
+repaired, then started the exact portable browser with one native owned watcher.
+A second malformed case closed through the actual Close button without launch.
+Protected EXE/DLL, version/identity/configuration markers and profile sentinel
+retained hashes. The browser closed without force; final owned process count
+was zero. Earlier original Recent/WER records and captures were also unchanged.
+
+**Verified selected evidence:** nine phase receipts and 52 unmapped retained
+files passed host schema/hash/provenance, typed assertion and UI-button checks;
+unsafe mutation cases were refused. Initial UIA ProcessId/logging assumptions,
+a normal-close child-exit race, cropped image and verifier-schema failure remain
+recorded with their corrections. No numeric launcher exit-zero claim follows
+from the Close receipt's unavailable exit code. The
+[qualification record](HARDENING-GUI-QUALIFICATION.md) distinguishes these from
+production failures and saved requests from effective settings.
+
+Only evidence documentation is uncommitted on `codex/hardening-error-gui`.
+The existing 551-test/17-ignored canonical and Rust 1.92 results still apply to
+unchanged Rust; release compilation and scoped native interaction add evidence,
+not remote CI. Other native origins/platforms, staged rollback, independent
+Windows contexts and CRLSet freshness remain open. Rating 3/5 and release hold
+remain; no push or publication was performed.
+
+## Mullvad startup and native protocol-prompt follow-up
+
+**Tested, receipts dated 2026-10-16 UTC:** production source remained `187771c`.
+A signed/hash-verified official Mullvad 15.0.25 package passed production adapter
+extraction inside a fresh offline Windows 11 Sandbox. No profile directory was
+pre-created. Startup, normal close and relaunch passed; uBlock, NoScript and the
+Mullvad extension were recorded active on both runs. Only the updater policy was
+written, no profile user.js was present, and exact protected files/public sentinel
+were preserved. This is a signed import/startup test, not automatic updater or
+real-user bookmark/account migration qualification.
+
+**Tested native handoff:** four Helium freshness-prompt cases exercised the
+production `-- <target>` entry: URL/file Close canceled without acknowledgment or
+browser; Continue opened the public guest-loopback URL/local HTML and saved the
+expected acknowledgment. Permissive update config left cache and authored stage/
+backup sentinels unchanged. Native UI controls and one complete prompt image were
+captured. Windows association resolution and already-running-browser combinations
+were not repeated. Prompt explanatory text appeared low contrast; it is recorded
+as a minor presentation follow-up, not a functional pass for every UI property.
+
+**Verified selected evidence:** 29 typed receipts, all input hashes/addon linkage,
+activation/policy/prompt semantics, preserved files and final idle/server shutdown
+passed host review. Three unsafe verifier mutations were refused; 52 unmapped
+files were preserved and rehashed. Exact commands, identities and limits are in
+the [combined qualification](BROWSER-STARTUP-HANDOFF-QUALIFICATION.md).
+
+The local `codex/browser-release-qualification` documentation checkpoint includes
+these results and the preceding required-settings GUI evidence. Rust is unchanged;
+its prior 551-test/17-ignored canonical and Rust 1.92 results still apply. Mullvad
+release compilation/PE checks and the scoped runtime results add evidence without
+claiming remote CI. Independent Windows recovery, CRLSet freshness, native
+post-replacement rollback and remaining platform variants stay open. No push,
+tag or publication was performed; rating 3/5 and the release hold remain.
+
+## Native bundle promotion and recovery follow-up (2026-10-16 UTC)
+
+**Tested:** committed source `ddaa365` (production Rust unchanged from `187771c`)
+ran in the existing offline Windows 11 Sandbox with separate owned fixtures.
+The production-linked helper induced OS error 32 during staged promotion after
+the old bundle had moved to backup: production rollback restored the old tree,
+kept stage and left the closed profile's ordinary-file inventory unchanged.
+An authored mid-swap state plus a blocked backup restore retained backup/stage
+and profile. The next unmodified retail direct launch restored the old browser
+before stage cleanup. Successful promotion then exactly matched the candidate
+tree and preserved the closed profile. Four normal browser launches/closes
+retained the native-created bookmark, uBlock toolbar entry and public sentinel;
+final owned process count was zero.
+
+**Verified selected evidence:** 23 typed phase receipts, all eight input hashes
+in two locations, candidate linkage/native JSON hashes, native UI/restore event,
+normal closures and final state passed host review. Four unsafe verifier
+mutations were refused; 39 files plus the report were retained outside the
+guest-writable mapping with a 155-file source inventory. Release compilation,
+GUI/console PE guards and 17 targeted install regressions passed. Exact identities,
+commands, preservation method and limits are in the [qualification](NATIVE-SWAP-RECOVERY-QUALIFICATION.md).
+
+**Verified in code:** completed promotion removes the backup best-effort before
+browser startup. Later startup/profile failure does not automatically roll back.
+This is a disclosed structural limit, not an outstanding test that can enable a
+missing feature. The old “post-replacement rollback” wording is superseded by
+this boundary and the bounded completed cases. Identical authentic Helium
+0.19.2.1 bundles had authored variant labels; no real version transition,
+physical crash, media loss, or combined promotion/rollback failure is claimed.
+
+This documentation-only checkpoint adds no Rust behavior change. Prior canonical
+551-test/17-ignored and Rust 1.92 results remain applicable; no new full gate or
+remote CI was claimed. The [readiness checklist](RELEASE-READINESS.md) carries
+forward completed checks and separates CRLSet/independent-Windows gaps and
+remaining fault/platform coverage. Rating 3/5 and release hold remain. No push,
+tag or publication was performed.
+
+## Already-running Helium protocol handoff (2026-10-16 UTC)
+
+**Tested:** exact source `9e0188f` (Rust unchanged from `187771c`) ran in the
+existing offline Windows 11 Sandbox with a separate digest-verified Helium
+0.19.2.1 import. Native URL/file Close/Continue prompts preserved the original
+browser main process and cleanup worker. URL cancellation made no public target
+request; file cancellation left the target tab absent. Continue delivered the
+public loopback URL/local HTML into that same browser alongside the baseline.
+Two duplicate cleanup workers exited through the coordinator lock; just one
+worker-start event was recorded. Native-created bookmark, uBlock toolbar presence,
+protected files and authored stage/backup/profile sentinels were retained. Normal
+browser closure and owned server shutdown left all fixture processes absent.
+
+**Verified selected evidence:** all main/supplemental input hashes, 23 typed
+receipts, chronological UI/PID/target/acknowledgment/coordinator observations,
+closed bookmark count and final idle state passed host review. Four unsafe
+verifier mutations were refused; 42 files plus the verification report were
+retained outside the guest-writable mapping, with a 155-file source inventory.
+Release compilation, GUI PE checks and four targeted reminder regressions passed.
+The [qualification](LIVE-PROTOCOL-HANDOFF-QUALIFICATION.md) records exact commands,
+input identities, pre-execution matcher correction and fixture limitations.
+
+The scoped live-browser protocol-argument track is completed. No registry/default-
+app association resolution, other browser family, Windows 10, packet capture or
+extension-effectiveness result is claimed. Raw profile/bookmark/log data remains
+in the guest. Production behavior is unchanged; prior canonical/MSRV results
+remain applicable, with no new full gate or remote CI claim. CRLSet freshness,
+independently initialized Windows recovery and other specific coverage limits
+remain in the [checklist](RELEASE-READINESS.md). Rating 3/5 and release hold remain.
+No push, tag or publication was performed.
+
+## Windows-selected Helium Shell handoff (2026-10-16 UTC)
+
+**Tested:** production source `4c94a88` (Rust unchanged from `187771c`) ran in the
+offline Windows 11 guest with a separate authenticated Helium 0.19.2.1 import.
+The user selected HTTP/HTTPS/.html in Default apps. Selected ProgIDs plus native
+command queries matched the exact launcher. Normal Windows ShellExecute supplied
+only each target: cold HTTP reached the public server; a local HTML filename with
+spaces produced its image-beacon receipt in the live browser; HTTPS dispatched
+to that same session but had no TLS content success. Original main/worker identity,
+portable Data argument, protected files and stage/backup/profile sentinels passed.
+The user closed the browser normally; all test processes were verified absent.
+
+**Tested registration:** a production-linked guarded helper registered two copies
+with distinct derived identities and resolved Shell commands. Removing copy B
+preserved A. It exercised the shared registry API, not retail message boxes. The
+initial PID-variable/controller failure, canonical-path correction and false
+Hashtable comparison fields remain preserved; independent typed UserChoice hashes
+were unchanged before operator selection. No production defect/fix was inferred.
+
+**Verified selected evidence:** 18 bounded receipts, main/additional input hashes,
+identity/target/process/profile linkage, public routes, selected choice and final
+idle state passed host review. Five unsafe verifier mutations were refused; 52
+files plus an immutable report were retained with a 155-file unchanged source
+inventory. Release compilation, GUI/console PE guards and 17 inert registration
+regressions passed. [Exact scope and identities](WINDOWS-SHELL-HANDOFF-QUALIFICATION.md)
+distinguish this from HTTPS navigation, other families/platforms and raw-profile replay.
+
+**Cleanup:** computer-use native pipe was unavailable after retry/reset; the user
+performed Windows selection, normal closure and confirmed guest discard. Edge was
+unavailable for restoring the old selections, so the active candidate was not
+removed while selected and UserChoice was never written directly. The closed
+window left the background Sandbox running; the authorized exact-ID CLI stop
+exited zero and final inventory was empty. A separate disposal report links/rechecks
+the original snapshot without rewriting its pre-discard pending status. No
+individual unregister-A or restored-default-hash success is claimed.
+
+The local `codex/windows-shell-associations` checkpoint is documentation only.
+Prior canonical 551-test/17-ignored and Rust 1.92 results remain applicable; no
+new full gate or remote CI was claimed. The completed bounded Shell matrix is
+carried forward in [readiness](RELEASE-READINESS.md); other browser/platform
+combinations, CRLSet freshness and independently initialized Windows recovery
+remain separate. Rating 3/5 and release hold remain. No push, tag or publication
+was performed.
+
+## Independent Windows recovery package preparation (2026-10-16)
+
+**Verified in code:** a separate Windows lib-test-only module exercises production
+native binding and journal logic with known public payloads and an inert owned
+instance. Its native test is ignored and requires enrolled disposable VM inputs,
+fixed paths/accounts, a pinned same-source transfer bundle and offline runner.
+The four phases distinguish source, another local user, an independently
+initialized machine and return to the original user. Direct unprotect errors are
+required for refusal; scope-mismatch retention alone cannot qualify isolation.
+No production runtime or original Sandbox guard was changed.
+
+**Tested:** canonical safety fixtures, formatting, strict Clippy and all 553 Rust
+tests passed (18 ignored). The full canonical command then failed dependency
+auditing: the pre-existing locked `zip 2.4.2` was reported as yanked. It reported
+zero matching vulnerability advisories under the existing RSA exception, but the
+deny-warnings gate correctly refused the warning. Cargo manifests/lockfile and
+audit exceptions are unchanged. Treat dependency remediation as a separate next
+priority, not a passing audit. Rust 1.92 workspace/all-targets check and Windows
+PowerShell 5.1 metadata fixtures passed. The new regressions reject altered or
+mixed bundles, missing phases, mistyped assertions, unsafe names/links, failed
+native exits, false context relationships and ordinary-host runner invocation.
+The initial too-long test function failed Clippy and was split before this run.
+Logs: `target/vm-recovery-validation-9936920862714a969b6032dba2975841/`.
+
+**Not tested:** none of the four native VM phases has run. Tooling does not create
+VMs/accounts or attest independent initialization. Two separately initialized
+trusted disposable Windows VMs and reviewed operator provenance remain required.
+The [runbook](INDEPENDENT-WINDOWS-RECOVERY.md) pins the phase order, selected public
+exports, host checks and limits. No personal-host DPAPI operation, browser launch,
+registry/configuration change, VM creation or key export was performed by this
+preparation. There is no new hostile-host, roaming, forensic or durability claim.
+Rating 3/5 and release hold remain; CRLSet disposition is separate. No push, tag,
+release or remote CI pass is claimed.
+
+## Yanked ZIP dependency remediation (2026-10-16)
+
+**Verified in code:** based on `a779970`, `core/Cargo.toml` and `Cargo.lock` replace
+`zip 2.4.2` with `9.0.4` and its required dependency graph. Explicit features keep
+the previous AES/Bzip2/Deflate/Deflate64/LZMA/time/XZ/Zstd set without adding the
+new optional PPMd/legacy decoders. Browser ZIP extraction, Chromium extension
+extraction and Gecko XPI layout inspection propagate the new fallible filename
+API. Existing ownership, traversal, reparse, size and transaction controls remain.
+The XPI check still checks signature-file presence only; browser validation and
+AMO hash verification retain their separate roles. No endpoint, telemetry,
+configuration default, audit exception or verification bypass is added.
+
+**Upstream checked:** current [crates.io release metadata](https://crates.io/api/v1/crates/zip)
+reported both 2.4.2 and 8.6.0 yanked, and 9.0.4 stable/non-yanked with Rust 1.88
+minimum. The [9.0.4 release](https://github.com/zip-rs/zip2/releases/tag/v9.0.4)
+and [tagged manifest](https://github.com/zip-rs/zip2/blob/v9.0.4/Cargo.toml)
+were read; Cargo selected/verified the registry package using its lockfile digest.
+Registry metadata does not by itself establish publisher trust or future support.
+
+**Tested:** full canonical gate passed: safety regressions, formatting, strict
+Clippy, 558 Rust tests passed / 18 ignored, and a clean structured dependency
+audit using the unchanged documented RSA exception. `cargo +1.92 check
+--workspace --all-targets --locked --target x86_64-pc-windows-msvc` passed.
+`cargo build --release --workspace --locked --target x86_64-pc-windows-msvc`
+built all six launchers; `Assert-NomadArtifact` passed for each actual output.
+This is PE metadata inspection, not execution or fresh Windows startup testing.
+No new live-upstream browser compatibility or native recovery phase ran.
+
+Five new Rust regressions use [independently generated public ZIP bytes](../core/tests/fixtures/zip-compat/README.md),
+not archives generated by the upgraded Rust library. They cover flat/wrapped
+payloads, nonseekable-stream descriptors, Stored/Deflate/Bzip2/LZMA, UTF-8 paths,
+a forced ZIP64 local header, CRC corruption, truncation, extension budgets and
+XPI layout boundaries. Initial strict-UTF8 refusal assertions were incorrect:
+reviewed ZIP source retains CP437 fallback. Those assumptions were removed,
+without adding a new filename restriction or hiding a production failure.
+CRC/truncation tests and the existing unsafe-path/budget/rollback tests pass.
+Logs and six artifact hashes: `target/zip-refresh-4cc6bb695d184c9a850f7355bfcc47ce/`.
+
+This closes only the new dependency-gate blocker. The VM package stays pinned to
+its original clean source and no native isolation result is claimed. CRLSet,
+independent-Windows and other documented coverage limits remain. Rating 3/5 and
+release hold remain. No push, tag, remote CI pass, signing or release occurred.
+
+## Owner CRLSet acceptance and VM-test deferral (2026-10-16)
+
+**User decision:** "Retain Ungoogled Chromium and explicitly accept the disclosed
+CRLSet limitation for v1.0.9". Recorded in [release readiness](RELEASE-READINESS.md#release-specific-residual-risk-decision-2026-10-16)
+and linked from the component limitation/feasibility records. This resolves only
+the owner disposition for the known v1.0.9 gap. Technical refresh/loading remains
+unresolved; existing flags, endpoints, trust checks and public/runtime disclosures
+are unchanged. No acceptance for future releases or provider/browser changes,
+revocation pass, broader residual risk or release publication was inferred.
+
+The user separately deferred independent-VM setup/testing. The prepared package
+and failed second-Sandbox observation remain within their original scopes; none
+of the four independent-VM native phases ran. Deferral is not evidence of
+isolation and is not release acceptance of that unverified claim. Hyper-V was
+enabled through the separately approved no-restart host script; its receipt
+reported restart required, with no automatic restart requested. No guest VM or
+ISO download was created/performed by the assistant. No further host setup is
+part of this deferral checkpoint.
+
+**Read-only verification:** current official Windows release metadata still names
+155.0.8059.39-1.1. Nomad's existing standing notice, warning log and disclosure
+regression assertions were reread; no browser/component traffic or new CRLSet
+runtime test ran. Documentation links, UTF-8/LF and whitespace passed. The latest
+code validation is `f560926`: full canonical gate, 558 passed / 18 ignored,
+Rust 1.92, six release PE guards. No redundant gate or remote CI is claimed for
+this text-only change. Rating 3/5 and overall release hold remain for other
+outstanding scope/acceptance decisions. No push, tag, signing or release occurred.
+
+## Bounded browser metadata observation (2026-10-16)
+
+**Tested:** clean source `7df4600`, authenticated Helium 0.19.2.1 and a fresh
+offline Windows 11 Sandbox. A public loopback page/beacon established browser
+navigation. A command-line debug-URL request did not produce an observed main
+process exit. A separately pinned native DebugBreakProcess follow-up succeeded
+on a retained exact owned PID/image handle, but still obtained no observed exit
+or matching Report.wer. Nine owned browser processes remained in the snapshot.
+A later process snapshot had no WER fault process; its event query returned
+System.Exception, so no successful event-log or complete-history claim is made.
+The token-filename Recent check is not exhaustive target resolution.
+
+**Not qualified:** no new report bytes or production cleanup replay, spontaneous
+browser crash, Explorer navigation, user-store variant or Windows 10 pass. No
+WER policy change, custom report, rewritten AppPath or substitute synthetic
+capture was used to manufacture success. Existing Shell/custom-WER results stand.
+Direct upstream browser launch is not retail Nomad watcher/cleanup coverage.
+No personal host browser/profile/store was used or faulted; raw report/dump/
+profile data stayed in the guest and was not exported.
+
+**Verified selected evidence:** frozen capture/fault/diagnostic inputs, typed
+campaign/source/observation linkage and explicit non-success fields passed host
+review. Six unsafe verifier mutations were refused. Sixteen bounded selected/
+helper/provenance files plus reports were preserved outside mappings; after
+rechecking every digest, exact owned Sandbox stop exited zero and final inventory
+showed it absent. The original verification remains unchanged and a separate
+disposal receipt links it. [Full scope, commands and identities](BROWSER-METADATA-OBSERVATION.md).
+
+Tracked changes are documentation only. Syntax/host-refusal checks, selected
+verification, copy hashes, disposal, document links/anchors and UTF-8/LF/whitespace
+passed. No new Rust or redundant full gate was run; the latest code result stays
+`f560926` (558 passed / 18 ignored, clean audit, Rust 1.92, six release PE guards).
+CRLSet's v1.0.9 acceptance and independent-VM deferral are separate. This bounded
+attempt leaves the remaining metadata gap, rating 3/5 and release hold intact.
+No push, remote CI, tag, signing or publication occurred.
+
+## Owner metadata coverage acceptance and deferral (2026-10-16)
+
+**User decision, recorded verbatim:** "Accept and defer this metadata coverage
+gap for v1.0.9". The question named the offline attempt's absent WER report and
+unverified natural browser-crash/Explorer-navigation cleanup coverage. Recorded
+in [release readiness](RELEASE-READINESS.md#metadata-coverage-disposition-2026-10-16)
+and linked from the browser observation, WER and Recent safety records. This
+resolves that specific release decision; those cases remain unverified and
+deferred. No capture, replay pass or complete trace-removal guarantee is inferred.
+
+The original inconclusive observations and selected verification/disposal receipts
+are unchanged. Existing Windows 11 Shell API Recent/custom queued WER results
+retain their narrower scopes. No production code, configuration, default, cleanup
+policy, test or immutable receipt was changed. No browser/fault/cleanup rerun was
+performed. Future technical qualification still requires reproducible disposable
+scenarios and original bounded metadata with unrelated sentinels.
+
+The separate v1.0.9 CRLSet acceptance stands. Independent Windows recovery
+isolation remains deferred and unverified without a release acceptance of that
+claim. Genuine user-store variants, Windows 10 and wider production/platform
+coverage retain their documented limits; this response does not accept those
+separate items. Rating 3/5 and the overall release hold remain pending the other
+scope/acceptance decisions and final candidate/delivery checks.
+
+**Validation:** UTF-8/LF, local document links/anchors and whitespace checked for
+the five documentation files. The latest code validation remains `f560926`
+(full canonical gate, 558 passed / 18 ignored, clean structured audit with the
+existing RSA exception, Rust 1.92 and six release PE guards). No new full gate
+or remote CI is claimed for this documentation-only disposition. No push, tag,
+signing or publication occurred.
+
+## Draft release notes and delivery-state reconciliation (2026-10-16)
+
+**Tested read-only:** main remains `4951d05b0b4c3305324daee3696bfa577d5b9ba1`
+with seven completed/success checks. Successful paginated inventories found no
+exact v1.0.9 tag or visible release. The clean starting local checkpoint `d856c37`
+is 12 commits ahead; attribution and complete messages for those local commits
+were inspected. No push or CI result for that local chain follows from this read.
+
+The tracked diff from validated code checkpoint `f560926` contains documentation
+only. Five saved validation-log hashes and eleven non-documentation source/fixture
+hashes match its receipt. Existing 558-pass/18-ignored, Rust 1.92 and six unsigned
+release PE-guard results therefore remain applicable within their original scope;
+no redundant gate or execution of those artifacts was performed. The post-main
+Recent-link and ZIP production changes were reread; this bounded review is not
+a new whole-repository audit.
+
+The draft release notes now describe the local Recent/ZIP fixes, latest local
+validation, and separate CRLSet/metadata v1.0.9 acceptances. Independent-context
+recovery and wider platform/production-path release decisions remain unresolved;
+none was inferred from proceeding with preparation. The current draft remains
+on hold, with exact-candidate remote CI, compatibility, artifacts/provenance,
+offline owner signature and publication still future work. No remote mutation,
+tag, signing, browser run, VM setup or persistent host change occurred.
+
+**Validation:** three UTF-8/LF documentation files, local links/anchors and
+whitespace checked. [Release-readiness checkpoint](RELEASE-READINESS.md#draft-release-note-reconciliation-2026-10-16).
+
+## Remaining v1.0.9 scope accepted; delivery pending (2026-10-16)
+
+**User decisions:** "Accept and defer for v1.0.9" for the independent-user/machine
+recovery test, and "Accept disclosed limits for v1.0.9" for the named remaining
+coverage and post-promotion health-rollback limits. The first question explicitly
+retained enabled recovery with isolation labelled unverified; same-context
+evidence exists but all four independent-VM native phases remain unrun. The
+second named Windows 10, other browser/UI/association combinations, cross-machine
+sign-in, remaining version transitions and physical interruption/media loss,
+plus the lack of automatic health rollback after successful promotion. Bounded
+promotion rollback/recovery passes remain distinct from those missing results.
+
+[Readiness](RELEASE-READINESS.md#remaining-scope-acceptance-2026-10-16), draft
+release notes, independent recovery qualification and update safety now record
+the explicit dispositions. These decisions, together with the earlier CRLSet and
+natural-crash/navigation metadata acceptances, resolve the currently listed
+v1.0.9 scope choices. The rating remains 3/5. Unrun tests remain unverified,
+structural limits remain disclosed, and no stronger isolation, trace-removal,
+compatibility or rollback claim follows. No future release or new finding is
+pre-accepted. Historical pending-decision checkpoints retain their chronology.
+
+Candidate CI/compatibility and delivery verification are now the remaining work.
+No code, default, runtime setting, guard, receipt, VM or host configuration changed.
+Five UTF-8/LF documentation files, local links/anchors and whitespace checked;
+no browser or full gate rerun was needed for this text-only disposition. Prior
+`f560926` local validation is not remote CI for the local chain. No push, PR,
+merge, tag, signing or publication was performed or inferred from these answers.

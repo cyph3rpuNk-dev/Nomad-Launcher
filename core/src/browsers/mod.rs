@@ -194,9 +194,11 @@ fn check_xpi_signature_files(bytes: &[u8]) -> Result<()> {
         let Ok(entry) = archive.by_index(i) else {
             continue;
         };
-        let name = entry.name();
+        let name = entry
+            .name()
+            .map_err(|e| BrowserError::Parse(format!("invalid XPI entry name: {e}")))?;
         if name.starts_with("META-INF/") {
-            let ext = std::path::Path::new(name)
+            let ext = std::path::Path::new(name.as_ref())
                 .extension()
                 .and_then(|e| e.to_str());
             if ext.is_some_and(|e| e.eq_ignore_ascii_case("rsa") || e.eq_ignore_ascii_case("sf")) {
@@ -800,6 +802,19 @@ engine_version = "2.0"
     }
 
     // ── provision_gecko_ublock_xpi tests ──────────────────────────────────────
+
+    #[test]
+    fn independent_xpi_zip_layout_and_truncation_handling() {
+        // This checks layout only; the public .sf marker is not a real signature.
+        check_xpi_signature_files(include_bytes!("../../tests/fixtures/zip-compat/flat.zip"))
+            .unwrap();
+        for bytes in [
+            include_bytes!("../../tests/fixtures/zip-compat/truncated.zip").as_slice(),
+            include_bytes!("../../tests/fixtures/zip-compat/wrapped-stream.zip").as_slice(),
+        ] {
+            assert!(check_xpi_signature_files(bytes).is_err());
+        }
+    }
 
     /// Inert XPI-shaped fixture; the signature bytes are deliberately not valid.
     fn make_xpi_with_signature_files() -> Vec<u8> {

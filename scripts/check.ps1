@@ -47,6 +47,9 @@ try {
         Invoke-GateStep 'Recovery evidence regression fixtures' {
             pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-cleanup-recovery-sandbox.ps1')
         }
+        Invoke-GateStep 'Independent VM qualification safety fixtures' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-vm-recovery.ps1')
+        }
         Invoke-GateStep 'Recovery integration safety fixtures' {
             pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-recovery-integration.ps1')
         }

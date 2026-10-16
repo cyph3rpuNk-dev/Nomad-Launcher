@@ -2,6 +2,11 @@
 
 ## Decision and scope
 
+**Subsequent owner disposition (2026-10-16):** Retain Ungoogled Chromium in
+v1.0.9 with explicit acceptance of the disclosed CRLSet limitation. The technical
+finding below remains unresolved; acceptance does not establish a loading/refresh
+capability. See the [release-specific decision](RELEASE-READINESS.md#release-specific-residual-risk-decision-2026-10-16).
+
 **Source review / inference:** No production-supported, CRLSet-only update and
 loading route was identified in the reviewed Chromium 155.0.8059.39 source paths
 and Ungoogled Windows 155.0.8059.39-1.1 packaging. This is a scoped finding, not
