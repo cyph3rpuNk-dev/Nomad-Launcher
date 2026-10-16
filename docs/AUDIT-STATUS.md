@@ -2529,3 +2529,40 @@ release compilation/PE checks and the scoped runtime results add evidence withou
 claiming remote CI. Independent Windows recovery, CRLSet freshness, native
 post-replacement rollback and remaining platform variants stay open. No push,
 tag or publication was performed; rating 3/5 and the release hold remain.
+
+## Native bundle promotion and recovery follow-up (2026-10-16 UTC)
+
+**Tested:** committed source `ddaa365` (production Rust unchanged from `187771c`)
+ran in the existing offline Windows 11 Sandbox with separate owned fixtures.
+The production-linked helper induced OS error 32 during staged promotion after
+the old bundle had moved to backup: production rollback restored the old tree,
+kept stage and left the closed profile's ordinary-file inventory unchanged.
+An authored mid-swap state plus a blocked backup restore retained backup/stage
+and profile. The next unmodified retail direct launch restored the old browser
+before stage cleanup. Successful promotion then exactly matched the candidate
+tree and preserved the closed profile. Four normal browser launches/closes
+retained the native-created bookmark, uBlock toolbar entry and public sentinel;
+final owned process count was zero.
+
+**Verified selected evidence:** 23 typed phase receipts, all eight input hashes
+in two locations, candidate linkage/native JSON hashes, native UI/restore event,
+normal closures and final state passed host review. Four unsafe verifier
+mutations were refused; 39 files plus the report were retained outside the
+guest-writable mapping with a 155-file source inventory. Release compilation,
+GUI/console PE guards and 17 targeted install regressions passed. Exact identities,
+commands, preservation method and limits are in the [qualification](NATIVE-SWAP-RECOVERY-QUALIFICATION.md).
+
+**Verified in code:** completed promotion removes the backup best-effort before
+browser startup. Later startup/profile failure does not automatically roll back.
+This is a disclosed structural limit, not an outstanding test that can enable a
+missing feature. The old “post-replacement rollback” wording is superseded by
+this boundary and the bounded completed cases. Identical authentic Helium
+0.19.2.1 bundles had authored variant labels; no real version transition,
+physical crash, media loss, or combined promotion/rollback failure is claimed.
+
+This documentation-only checkpoint adds no Rust behavior change. Prior canonical
+551-test/17-ignored and Rust 1.92 results remain applicable; no new full gate or
+remote CI was claimed. The [readiness checklist](RELEASE-READINESS.md) carries
+forward completed checks and separates CRLSet/independent-Windows gaps and
+remaining fault/platform coverage. Rating 3/5 and release hold remain. No push,
+tag or publication was performed.
