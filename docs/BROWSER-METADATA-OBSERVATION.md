@@ -27,6 +27,16 @@ continues to cover its original captured forms.
 | Process/event diagnostic | Snapshot had no WerFault/WerFaultSecure process and no selected matching event rows. The event query returned System.Exception. | No successful event-log query or complete process/reporting history is claimed. |
 | Recent filename observation | No token-named .lnk found. | Filename filtering is not full target resolution or proof that no Recent/Jump List data was created. |
 
+## Owner disposition (2026-10-16)
+
+**User decision:** "Accept and defer this metadata coverage gap for v1.0.9".
+This covers the unverified natural browser-crash and Explorer-navigation cleanup
+cases identified in the question. The decision resolves their release-specific
+disposition without qualifying the missing captures or cleanup replay. Original
+observations and receipts remain unchanged. Independent recovery isolation and
+wider platform coverage are separate decisions; see
+[release readiness](RELEASE-READINESS.md#metadata-coverage-disposition-2026-10-16).
+
 ## Isolation and inputs
 
 **Tested preparation:** Sandbox networking, vGPU, clipboard, audio/video and
@@ -133,9 +143,10 @@ and six release PE-guard results at `f560926` remain the latest code validation;
 no redundant full gate, remote CI, push or release pass is claimed here.
 
 Natural browser-crash Report.wer capture/replay, real Explorer navigation,
-genuine user-store variants and Windows 10 remain unqualified. Resume with a
-supported reproducible guest scenario and original bounded bytes; otherwise make
-an explicit release-scope decision for that remaining coverage gap. Do not repeat
-the completed custom API report case and call it a natural-crash result. CRLSet
+genuine user-store variants and Windows 10 remain unqualified. The owner accepted
+and deferred the natural-crash/navigation gap for v1.0.9 as recorded above; this
+is not a blanket acceptance of wider platform coverage. Future qualification
+needs a supported reproducible guest scenario and original bounded bytes. Do not
+repeat the completed custom API report case and call it a natural-crash result. CRLSet
 has its separate v1.0.9 owner acceptance; independent VM isolation is separately
 deferred and unverified. Rating 3/5 and the overall release hold remain.

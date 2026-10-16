@@ -2782,3 +2782,34 @@ passed. No new Rust or redundant full gate was run; the latest code result stays
 CRLSet's v1.0.9 acceptance and independent-VM deferral are separate. This bounded
 attempt leaves the remaining metadata gap, rating 3/5 and release hold intact.
 No push, remote CI, tag, signing or publication occurred.
+
+## Owner metadata coverage acceptance and deferral (2026-10-16)
+
+**User decision, recorded verbatim:** "Accept and defer this metadata coverage
+gap for v1.0.9". The question named the offline attempt's absent WER report and
+unverified natural browser-crash/Explorer-navigation cleanup coverage. Recorded
+in [release readiness](RELEASE-READINESS.md#metadata-coverage-disposition-2026-10-16)
+and linked from the browser observation, WER and Recent safety records. This
+resolves that specific release decision; those cases remain unverified and
+deferred. No capture, replay pass or complete trace-removal guarantee is inferred.
+
+The original inconclusive observations and selected verification/disposal receipts
+are unchanged. Existing Windows 11 Shell API Recent/custom queued WER results
+retain their narrower scopes. No production code, configuration, default, cleanup
+policy, test or immutable receipt was changed. No browser/fault/cleanup rerun was
+performed. Future technical qualification still requires reproducible disposable
+scenarios and original bounded metadata with unrelated sentinels.
+
+The separate v1.0.9 CRLSet acceptance stands. Independent Windows recovery
+isolation remains deferred and unverified without a release acceptance of that
+claim. Genuine user-store variants, Windows 10 and wider production/platform
+coverage retain their documented limits; this response does not accept those
+separate items. Rating 3/5 and the overall release hold remain pending the other
+scope/acceptance decisions and final candidate/delivery checks.
+
+**Validation:** UTF-8/LF, local document links/anchors and whitespace checked for
+the five documentation files. The latest code validation remains `f560926`
+(full canonical gate, 558 passed / 18 ignored, clean structured audit with the
+existing RSA exception, Rust 1.92 and six release PE guards). No new full gate
+or remote CI is claimed for this documentation-only disposition. No push, tag,
+signing or publication occurred.
