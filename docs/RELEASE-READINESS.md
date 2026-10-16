@@ -7,6 +7,15 @@ reconciles the existing audit records; it is not a new exhaustive audit or
 permission to tag, push, sign or publish. Completed checks below should not be
 repeated merely because older chronological entries still say pending.
 
+**Owner disposition (2026-10-16):** Retain Ungoogled Chromium in v1.0.9 and
+explicitly accept its disclosed CRLSet freshness limitation for that release.
+This resolves the owner decision for that item; it does not fix or qualify
+revocation refresh. The standing launcher/README/SECURITY disclosures remain.
+Independent-VM recovery testing was separately deferred at the user's request,
+not passed or accepted as a verified isolation guarantee. No tag, publication,
+broader risk acceptance or removal of the overall release hold is authorized by
+these decisions.
+
 **Tested repository state:** main was independently read through GitHub's API at
 `4951d05b0b4c3305324daee3696bfa577d5b9ba1` (PR #79 merged). All seven reported
 check runs for that exact commit were completed/success: canonical check,
@@ -50,8 +59,8 @@ or network. The linked records retain failed and superseded attempts.
 | Live-browser protocol handoff | Already-running Helium retained its original main process/worker through URL/file Close/Continue; intended targets opened only after Continue. Bookmark/uBlock/protected sentinels and normal final closure passed; duplicate workers exited through the coordinator lock. No Windows association selection was exercised. | [Live handoff evidence](LIVE-PROTOCOL-HANDOFF-QUALIFICATION.md). |
 | Windows-selected Shell handoff | User selected the Nomad Helium candidate for HTTP/HTTPS/.html. Real Windows ShellExecute cold HTTP content, live HTML beacon and live HTTPS dispatch passed with the same portable process/worker; two-copy registration/removal scoped checks passed. HTTPS content and retail registration dialogs were not qualified. The disposable guest was discarded after evidence preservation. | [Windows handoff evidence](WINDOWS-SHELL-HANDOFF-QUALIFICATION.md). |
 | Native bundle promotion/recovery | Failed promotion restored the old real bundle; blocked restoration preserved backup/stage; the next retail direct launch recovered. Successful promotion and bookmark/uBlock/sentinel preservation passed. Same authenticated version with authored variant tags; no physical crash or post-success health rollback. | [Native swap evidence](NATIVE-SWAP-RECOVERY-QUALIFICATION.md), [rollback boundary](UPDATE-SAFETY.md#promotion-and-rollback-boundary). |
-| Ungoogled component investigation | Published-build snapshot and authenticated CRLSet-loading feasibility review completed. Investigation completion does not close the revocation-data gap. | [Runtime evidence](UNGOOGLED-COMPONENT-UPDATES.md), [feasibility](CRLSET-REFRESH-FEASIBILITY.md). |
-| Local validation | Final Windows metadata correction: 551 Rust tests passed, 17 ignored, formatting, strict Clippy, safety fixtures and clean structured audit with the existing RSA exception; Rust 1.92 passed. | [Metadata evidence](WINDOWS-METADATA-QUALIFICATION.md), `target/windows-metadata-final-check.log`; [audit policy](../SECURITY.md#dependency-audit-policy). |
+| Ungoogled component investigation / owner disposition | Published-build snapshot and authenticated CRLSet-loading feasibility review completed. The owner explicitly accepted retaining the disclosed gap for v1.0.9 on 2026-10-16. Technical refresh remains unresolved; no refresh pass is claimed. | [Runtime evidence](UNGOOGLED-COMPONENT-UPDATES.md), [feasibility](CRLSET-REFRESH-FEASIBILITY.md). |
+| Local validation | Latest code checkpoint `f560926`: full canonical gate passed with 558 Rust tests / 18 ignored, formatting, strict Clippy, safety fixtures and clean structured audit with the existing RSA exception; Rust 1.92 and all six release PE guards passed. No remote CI or native execution of those release outputs is claimed. | [ZIP checkpoint](#zip-dependency-gate-resolved-2026-10-16), [audit policy](../SECURITY.md#dependency-audit-policy); earlier [metadata evidence](WINDOWS-METADATA-QUALIFICATION.md) retains its original scope. |
 
 ## Open work and acceptance evidence
 
@@ -62,8 +71,7 @@ does not make that decision for the owner.
 
 | Priority | Open item | Next concrete action / acceptance evidence |
 |---|---|---|
-| 1 | Ungoogled Chromium revocation-data freshness | A supported signed CRLSet-only loading/refresh capability needs separate design and runtime validation, including effective rejection of a controlled revoked certificate. No supported narrow route was identified in the reviewed interfaces. Do not remove a flag, change an endpoint or copy an unverified list as a claimed fix. Any release retaining the disclosed gap needs an explicit owner disposition. |
-| 2 | Recovery isolation across independent Windows contexts | Use a separately initialized disposable Windows machine and a separately created user. Exchange only the public-payload ciphertext fixture, verify refusal and retained intent, and preserve receipts. The second Sandbox's machine-only sample decrypted; another identical Sandbox rerun cannot qualify independent keys. Never export keys or bypass the current Sandbox-only runner guards to test personal stores. A [separately guarded VM package](INDEPENDENT-WINDOWS-RECOVERY.md) is now prepared, with source/peer/foreign/return phases and strict host verification; preparation is not a native isolation pass. |
+| 2 | Recovery isolation across independent Windows contexts (deferred by user, unverified) | User deferred this qualification on 2026-10-16. No acceptance of the unverified isolation claim was given. To resume, use a separately initialized disposable Windows machine and a separately created user. Exchange only the public-payload ciphertext fixture, verify refusal and retained intent, and preserve receipts. The second Sandbox's machine-only sample decrypted; another identical Sandbox rerun cannot qualify independent keys. Never export keys or bypass the current Sandbox-only runner guards to test personal stores. A [separately guarded VM package](INDEPENDENT-WINDOWS-RECOVERY.md) is now prepared, with source/peer/foreign/return phases and strict host verification; preparation is not a native isolation pass. |
 | 3 | Remaining natural-crash/navigation metadata variants | Windows 11 Shell API Recent links and custom queued WER metadata now passed unmodified-byte replay; the Recent flag defect was reproduced and corrected. Actual Explorer/browser navigation, natural browser-crash reports, genuine user-store variants and Windows 10 remain separate qualification targets. Continue only in disposable environments without report upload or personal host data, preserving encodings and unrelated sentinels. [Scope](WINDOWS-METADATA-QUALIFICATION.md). |
 | 4 | Remaining platform and production-path coverage | Windows 10, remaining hardening-error origins/Gecko/staged UI, other browser/platform Windows-association and live-browser combinations, independent-machine sign-in, real version-transition compatibility, physical interruption/media-loss and wider recovery/fault cases retain specific gaps. Bounded native failed-promotion/restore/recovery, Mullvad startup, fresh-browser protocol prompts, already-running Helium handoff and the bounded Windows-selected Helium Shell matrix are completed above. Automatic health-based rollback after successful promotion is not implemented; assess that disclosed structural limit separately from unrun tests. Choose a bounded disposable scenario from its runbook, preserve profile/sentinels and record exact build/OS/results. Historical removed-Firefox coverage is not current six-browser coverage. |
 | 5 | Final candidate and delivery | After the hold is resolved, select the full reviewed commit rather than reuse `bc3f889`; recheck its actual CI/compatibility and release notes. Tag/push remain separate authorized actions. The tag workflow must build/attest the six launchers, checksums and licenses; verify exact artifacts/provenance, then the owner signs the checksum manifest offline before publication. A local gate is not release integrity. |
@@ -72,8 +80,9 @@ The Windows 11 Shell/custom-WER metadata track now has a scoped pass and
 correction; its natural-crash/navigation/Windows 10 extensions remain in priority
 3. Independent Windows initialization for priority 2 has not been qualified.
 Further preparation must preserve the no-upload boundary; a custom queued WER
-report must not be relabelled as a natural browser crash. The CRLSet design decision remains separate
-and cannot be resolved by declaring the investigative snapshot a pass.
+report must not be relabelled as a natural browser crash. The CRLSet technical
+gap remains open, with explicit owner acceptance for v1.0.9 as recorded above. That acceptance does not turn the investigative
+snapshot into a refresh pass.
 
 ## Validation and delivery limits
 
@@ -137,3 +146,38 @@ coverage retain the scopes listed above. The previously prepared VM package
 remains pinned to `a779970`; it is not silently rebuilt or relabelled for this
 new dependency graph. No native VM phase, remote CI or release approval follows
 from this local pass. Rating 3/5 and release hold remain.
+
+## Release-specific residual-risk decision (2026-10-16)
+
+**User decision, recorded verbatim:** "Retain Ungoogled Chromium and explicitly
+accept the disclosed CRLSet limitation for v1.0.9".
+
+The six-browser release scope is retained. No component flag, update endpoint,
+CRLSet file, verification rule or default is changed. The existing runtime row,
+launch log, README and SECURITY limitation remain. A current browser bundle,
+DNS filtering or Certificate Transparency is not evidence of current revocation
+data. The [technical follow-up](CRLSET-REFRESH-FEASIBILITY.md) remains open for a
+supported authenticated loading/refresh route and effective runtime validation.
+This acceptance is specific to v1.0.9 and does not pre-accept future releases or
+future browser/provider changes.
+
+**Separate user direction:** skip the independent-VM setup/test and move to the
+next item. This defers that test only. All four native phases remain unrun, no
+isolation pass is claimed and no release acceptance of that unverified claim
+was inferred. Hyper-V enablement is a separate completed host setup action;
+its receipt reported restart required with no automatic restart. No guest VM
+or ISO was created/downloaded by the assistant in that setup attempt.
+
+**Read-only refresh:** the official Windows release metadata still identified
+[155.0.8059.39-1.1](https://github.com/ungoogled-software/ungoogled-chromium-windows/releases/tag/155.0.8059.39-1.1),
+the same build covered by the existing source/runtime investigation. No new
+whole-source review, browser run, revocation test or component service contact
+was performed. The existing disclosures and regression assertions were reread.
+
+**Validation:** documentation-only disposition; UTF-8/LF, local document links
+and whitespace checked. The full canonical 558-pass/18-ignored, Rust 1.92 and
+six release PE guard results at `f560926` remain the latest code validation;
+no new remote CI or full gate is claimed for this text-only checkpoint.
+Rating 3/5 and the overall release hold remain pending the other listed scope
+and acceptance decisions. No push, signing, tag or publication is authorized or
+performed by this disposition.
