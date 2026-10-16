@@ -2840,3 +2840,31 @@ tag, signing, browser run, VM setup or persistent host change occurred.
 
 **Validation:** three UTF-8/LF documentation files, local links/anchors and
 whitespace checked. [Release-readiness checkpoint](RELEASE-READINESS.md#draft-release-note-reconciliation-2026-10-16).
+
+## Remaining v1.0.9 scope accepted; delivery pending (2026-10-16)
+
+**User decisions:** "Accept and defer for v1.0.9" for the independent-user/machine
+recovery test, and "Accept disclosed limits for v1.0.9" for the named remaining
+coverage and post-promotion health-rollback limits. The first question explicitly
+retained enabled recovery with isolation labelled unverified; same-context
+evidence exists but all four independent-VM native phases remain unrun. The
+second named Windows 10, other browser/UI/association combinations, cross-machine
+sign-in, remaining version transitions and physical interruption/media loss,
+plus the lack of automatic health rollback after successful promotion. Bounded
+promotion rollback/recovery passes remain distinct from those missing results.
+
+[Readiness](RELEASE-READINESS.md#remaining-scope-acceptance-2026-10-16), draft
+release notes, independent recovery qualification and update safety now record
+the explicit dispositions. These decisions, together with the earlier CRLSet and
+natural-crash/navigation metadata acceptances, resolve the currently listed
+v1.0.9 scope choices. The rating remains 3/5. Unrun tests remain unverified,
+structural limits remain disclosed, and no stronger isolation, trace-removal,
+compatibility or rollback claim follows. No future release or new finding is
+pre-accepted. Historical pending-decision checkpoints retain their chronology.
+
+Candidate CI/compatibility and delivery verification are now the remaining work.
+No code, default, runtime setting, guard, receipt, VM or host configuration changed.
+Five UTF-8/LF documentation files, local links/anchors and whitespace checked;
+no browser or full gate rerun was needed for this text-only disposition. Prior
+`f560926` local validation is not remote CI for the local chain. No push, PR,
+merge, tag, signing or publication was performed or inferred from these answers.

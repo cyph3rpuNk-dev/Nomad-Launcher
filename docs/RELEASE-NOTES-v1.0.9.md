@@ -1,4 +1,4 @@
-# Nomad Launcher v1.0.9 (draft; on hold)
+# Nomad Launcher v1.0.9 (draft; delivery checks pending)
 
 This candidate fixes portable update, profile handoff, clean-Windows startup and
 privacy-control problems. It includes the implementation merged through PR #79
@@ -97,9 +97,12 @@ v1.0.9 tag or visible release. No tagged build or new CI result is claimed.
 **Owner decisions for v1.0.9:** retain Ungoogled Chromium with the disclosed CRLSet
 freshness limitation, and accept/defer the unverified natural browser-crash and
 Explorer-navigation metadata coverage gap. These are release-specific decisions,
-not technical passes or future-release acceptances. Independent-context recovery
-testing is separately deferred; its release disposition and wider platform/
-production-path coverage remain unresolved. [Recorded decisions and remaining scope](RELEASE-READINESS.md#open-work-and-acceptance-evidence).
+not technical passes or future-release acceptances. The owner also accepted and
+deferred independent-user/machine recovery testing, with recovery enabled and
+isolation labelled unverified, and accepted the listed remaining platform/
+production coverage limits and lack of post-promotion health rollback. The listed
+scope decisions are resolved; exact-candidate CI and delivery checks remain.
+[Recorded decisions and limits](RELEASE-READINESS.md#remaining-scope-acceptance-2026-10-16).
 
 | Browser | Exercised Windows 11 scope |
 |---|---|
@@ -120,14 +123,17 @@ and preserves the limits of each build/run. In particular:
   this disclosed limitation for v1.0.9; technical refresh remains unresolved.
 - Recovery has same-context native and authored-file browser-integration
   evidence. Different-user/independently keyed-machine isolation, physical
-  interruption and genuine Windows crash-report forms remain unqualified.
+  interruption and genuine Windows crash-report forms remain unqualified. The
+  owner accepted deferring the independent-context test for v1.0.9 with recovery
+  still enabled; this is not an isolation guarantee.
 - Windows 11 Shell API Recent links and custom queued WER metadata passed
   fake-root replay after the narrow Recent flag correction. Natural crash forms,
   actual Explorer/browser navigation, Windows 10 execution, other native failure
   origins, other browser/platform Windows-association and live-browser combinations, and
   cross-machine sign-in retain gaps. The natural-crash/Explorer-navigation gap
-  is accepted and deferred for v1.0.9 while remaining unverified; this does not
-  accept every wider platform gap. Already-running Helium URL/file Close/Continue
+  is accepted and deferred for v1.0.9 while remaining unverified. The listed
+  wider coverage gaps now have their separate v1.0.9 acceptance. Already-running
+  Helium URL/file Close/Continue
   now has a [scoped native pass](LIVE-PROTOCOL-HANDOFF-QUALIFICATION.md), including
   original browser/worker identity and bookmark preservation. Windows-selected
   Helium HTTP/HTML handoff and HTTPS dispatch also have a [bounded pass](WINDOWS-SHELL-HANDOFF-QUALIFICATION.md);
@@ -135,7 +141,9 @@ and preserves the limits of each build/run. In particular:
   restoration and subsequent direct recovery now have a [scoped Windows 11 pass](NATIVE-SWAP-RECOVERY-QUALIFICATION.md).
   Successful promotion removes the old backup before browser startup; later
   profile/startup failure has no automatic health-based rollback. Real version
-  transitions, physical interruption and media-loss cases remain separate.
+  transitions, physical interruption and media-loss cases remain unqualified;
+  those coverage limits and the lack of health rollback were explicitly accepted
+  for v1.0.9. Back up the portable folder before updating.
 - Safe Browsing is disabled by Nomad hardening in Chromium/managed Gecko.
   DNS filtering does not replace browser-level phishing/malware protection.
   Host forensics, compromised computers and read/write access to an unencrypted
@@ -145,8 +153,10 @@ The [subsequent startup/handoff qualification](BROWSER-STARTUP-HANDOFF-QUALIFICA
 adds Mullvad runtime and four native protocol-prompt cases; no Rust change or new
 remote CI result follows from this evidence.
 
-The broader audit rating stays 3/5 and v1.0.9 remains on hold. Final commit
-selection, tag/push, tagged build/compatibility checks, six-artifact/checksum/
+The broader audit rating stays 3/5. The listed release-scope decisions are now
+resolved through explicit v1.0.9 acceptance; candidate CI and delivery remain
+pending. Final commit selection, push/PR/merge/tag, tagged build/compatibility
+checks, six-artifact/checksum/
 license/provenance verification, the owner's offline checksum signature and
 publication remain separate delivery actions. Follow README.md's release
 verification instructions before trusting downloaded artifacts.

@@ -108,6 +108,12 @@ promotion, using one authenticated same-version Helium bundle and a real profile
 Its interruption was authored; physical crashes, media loss, combined promotion/
 rollback failure and real version-transition compatibility were not qualified.
 
+**v1.0.9 owner disposition (2026-10-16):** the owner explicitly accepted the
+disclosed remaining transition/interruption/media-loss coverage limits and the
+lack of automatic health rollback after successful promotion. Those tests remain
+unqualified and the structural limit remains; no updater behavior or guarantee
+changed. [Exact acceptance and delivery boundary](RELEASE-READINESS.md#remaining-scope-acceptance-2026-10-16).
+
 Authentication and compatibility answer different questions. A valid digest or
 signature proves that a package matches what upstream published. The
 compatibility gate proves that this launcher understands that package's layout
