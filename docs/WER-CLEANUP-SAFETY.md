@@ -129,3 +129,12 @@ Four replay placements are not four captured OS variants. [Full provenance,
 commands and limitations](WINDOWS-METADATA-QUALIFICATION.md) retain the distinction
 from natural crashes, live service races and Windows 10. The full final gate
 passed 551 Rust tests (17 ignored); Rust 1.92 passed. Work is local/uncommitted.
+
+## Bounded browser capture follow-up (2026-10-16)
+
+An offline Helium navigation/induced-fault attempt obtained no observed browser
+process exit or matching Report.wer. A successful breakpoint API return did not
+establish an unhandled crash. No new metadata was available for production
+cleanup replay; this is an inconclusive capture attempt, not a WER cleanup defect
+or pass. [Observations, selected verification and discarded-guest record](BROWSER-METADATA-OBSERVATION.md)
+retain natural-crash/user-store/Windows 10 coverage as unqualified.
