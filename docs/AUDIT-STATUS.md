@@ -2641,3 +2641,37 @@ carried forward in [readiness](RELEASE-READINESS.md); other browser/platform
 combinations, CRLSet freshness and independently initialized Windows recovery
 remain separate. Rating 3/5 and release hold remain. No push, tag or publication
 was performed.
+
+## Independent Windows recovery package preparation (2026-10-16)
+
+**Verified in code:** a separate Windows lib-test-only module exercises production
+native binding and journal logic with known public payloads and an inert owned
+instance. Its native test is ignored and requires enrolled disposable VM inputs,
+fixed paths/accounts, a pinned same-source transfer bundle and offline runner.
+The four phases distinguish source, another local user, an independently
+initialized machine and return to the original user. Direct unprotect errors are
+required for refusal; scope-mismatch retention alone cannot qualify isolation.
+No production runtime or original Sandbox guard was changed.
+
+**Tested:** canonical safety fixtures, formatting, strict Clippy and all 553 Rust
+tests passed (18 ignored). The full canonical command then failed dependency
+auditing: the pre-existing locked `zip 2.4.2` was reported as yanked. It reported
+zero matching vulnerability advisories under the existing RSA exception, but the
+deny-warnings gate correctly refused the warning. Cargo manifests/lockfile and
+audit exceptions are unchanged. Treat dependency remediation as a separate next
+priority, not a passing audit. Rust 1.92 workspace/all-targets check and Windows
+PowerShell 5.1 metadata fixtures passed. The new regressions reject altered or
+mixed bundles, missing phases, mistyped assertions, unsafe names/links, failed
+native exits, false context relationships and ordinary-host runner invocation.
+The initial too-long test function failed Clippy and was split before this run.
+Logs: `target/vm-recovery-validation-9936920862714a969b6032dba2975841/`.
+
+**Not tested:** none of the four native VM phases has run. Tooling does not create
+VMs/accounts or attest independent initialization. Two separately initialized
+trusted disposable Windows VMs and reviewed operator provenance remain required.
+The [runbook](INDEPENDENT-WINDOWS-RECOVERY.md) pins the phase order, selected public
+exports, host checks and limits. No personal-host DPAPI operation, browser launch,
+registry/configuration change, VM creation or key export was performed by this
+preparation. There is no new hostile-host, roaming, forensic or durability claim.
+Rating 3/5 and release hold remain; CRLSet disposition is separate. No push, tag,
+release or remote CI pass is claimed.

@@ -62,8 +62,9 @@ does not make that decision for the owner.
 
 | Priority | Open item | Next concrete action / acceptance evidence |
 |---|---|---|
+| 0 | Current dependency gate failure | The 2026-10-16 full gate reached dependency auditing after 553 Rust tests passed (18 ignored), then refused the existing locked `zip 2.4.2` as yanked. No vulnerability advisory was reported in that run. Review a supported replacement and extraction compatibility in a separate dependency change; retain the deny-warnings gate. The VM package adds no dependency or exception. |
 | 1 | Ungoogled Chromium revocation-data freshness | A supported signed CRLSet-only loading/refresh capability needs separate design and runtime validation, including effective rejection of a controlled revoked certificate. No supported narrow route was identified in the reviewed interfaces. Do not remove a flag, change an endpoint or copy an unverified list as a claimed fix. Any release retaining the disclosed gap needs an explicit owner disposition. |
-| 2 | Recovery isolation across independent Windows contexts | Use a separately initialized disposable Windows machine and a separately created user. Exchange only the public-payload ciphertext fixture, verify refusal and retained intent, and preserve receipts. The second Sandbox's machine-only sample decrypted; another identical Sandbox rerun cannot qualify independent keys. Never export keys or bypass the current Sandbox-only runner guards to test personal stores. |
+| 2 | Recovery isolation across independent Windows contexts | Use a separately initialized disposable Windows machine and a separately created user. Exchange only the public-payload ciphertext fixture, verify refusal and retained intent, and preserve receipts. The second Sandbox's machine-only sample decrypted; another identical Sandbox rerun cannot qualify independent keys. Never export keys or bypass the current Sandbox-only runner guards to test personal stores. A [separately guarded VM package](INDEPENDENT-WINDOWS-RECOVERY.md) is now prepared, with source/peer/foreign/return phases and strict host verification; preparation is not a native isolation pass. |
 | 3 | Remaining natural-crash/navigation metadata variants | Windows 11 Shell API Recent links and custom queued WER metadata now passed unmodified-byte replay; the Recent flag defect was reproduced and corrected. Actual Explorer/browser navigation, natural browser-crash reports, genuine user-store variants and Windows 10 remain separate qualification targets. Continue only in disposable environments without report upload or personal host data, preserving encodings and unrelated sentinels. [Scope](WINDOWS-METADATA-QUALIFICATION.md). |
 | 4 | Remaining platform and production-path coverage | Windows 10, remaining hardening-error origins/Gecko/staged UI, other browser/platform Windows-association and live-browser combinations, independent-machine sign-in, real version-transition compatibility, physical interruption/media-loss and wider recovery/fault cases retain specific gaps. Bounded native failed-promotion/restore/recovery, Mullvad startup, fresh-browser protocol prompts, already-running Helium handoff and the bounded Windows-selected Helium Shell matrix are completed above. Automatic health-based rollback after successful promotion is not implemented; assess that disclosed structural limit separately from unrun tests. Choose a bounded disposable scenario from its runbook, preserve profile/sentinels and record exact build/OS/results. Historical removed-Firefox coverage is not current six-browser coverage. |
 | 5 | Final candidate and delivery | After the hold is resolved, select the full reviewed commit rather than reuse `bc3f889`; recheck its actual CI/compatibility and release notes. Tag/push remain separate authorized actions. The tag workflow must build/attest the six launchers, checksums and licenses; verify exact artifacts/provenance, then the owner signs the checksum manifest offline before publication. A local gate is not release integrity. |
@@ -91,3 +92,21 @@ endpoint, dependency or key. The canonical/MSRV results above apply to the final
 Rust correction; later evidence-only documentation edits did not trigger another
 gate rerun. New local commits have no remote checks until published and checked.
 Nothing here clears the existing rating or release hold.
+
+## Independent VM preparation checkpoint (2026-10-16)
+
+The separate VM-only ignored fixture, bounded input packaging, enrolled runner,
+phase/matrix verifiers and failure-path regressions are now present. The original
+Sandbox-only guard and production launcher behavior are unchanged. This is
+preparation, not an independent-context native result. No VM/account was created,
+no native binding phase ran and no release isolation claim is cleared.
+
+**Tested:** `pwsh -NoProfile -File scripts/check.ps1` passed its safety fixtures,
+formatting, strict Clippy and 553 Rust tests, with 18 ignored, before failing the
+unchanged dependency audit on yanked `zip 2.4.2`. The audit reported zero matching
+vulnerability advisories with the existing documented RSA exception; that does
+not override its yanked warning or constitute a passing full gate. Windows
+PowerShell 5.1 VM metadata regressions and `cargo +1.92 check --workspace
+--all-targets --locked --target x86_64-pc-windows-msvc` passed. Logs are retained
+under `target/vm-recovery-validation-9936920862714a969b6032dba2975841/`.
+No remote CI, push, tag or publication was performed at this checkpoint.

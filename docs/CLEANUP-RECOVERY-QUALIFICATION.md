@@ -288,3 +288,13 @@ remain distinct from this lib-test fixture and the failed second-Sandbox refusal
 observation. Other browser/protocol/independent-context/physical-interruption/
 Windows 10/query-denial cases remain pending; no earlier receipt/assertion was
 modified. This narrows one production-path gap without clearing the release hold.
+
+## Independent VM package prepared
+
+The [separate enrolled-VM path](INDEPENDENT-WINDOWS-RECOVERY.md) now prepares a
+fixed-input lib-test package for source user, peer local user, independently
+initialized machine and return-origin phases. It does not modify this Sandbox
+suite's guards or reclassify the failed second-Sandbox observation. Its native
+function stays ignored; preparation/metadata regressions do not qualify actual
+DPAPI isolation. Operator-supplied disposable environments and the complete
+host-verified matrix remain required.

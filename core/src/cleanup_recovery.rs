@@ -773,3 +773,8 @@ mod tests {
 #[cfg(all(test, windows))]
 #[path = "cleanup_recovery/sandbox_tests.rs"]
 mod sandbox_tests;
+
+// Separately enrolled disposable VMs; does not relax the Sandbox-only suite.
+#[cfg(all(test, windows))]
+#[path = "cleanup_recovery/vm_binding_tests.rs"]
+mod vm_binding_tests;
