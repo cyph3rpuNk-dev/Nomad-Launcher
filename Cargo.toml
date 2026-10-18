@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["core", "launchers/*"]
+exclude = ["vendor/accesskit_winit-0.32.2"]
 
 [workspace.package]
 version = "1.0.9"
@@ -10,6 +11,11 @@ rust-version = "1.92"
 
 [workspace.dependencies]
 nomad-core = { path = "core" }
+
+[patch.crates-io]
+# Preserve Windows accessibility without the unused Unix D-Bus backend.
+# Source provenance and removal criteria: vendor/accesskit_winit-0.32.2/NOMAD.md.
+accesskit_winit = { path = "vendor/accesskit_winit-0.32.2" }
 
 [profile.release]
 # Turn silent integer wraparound into a loud panic in release builds. The

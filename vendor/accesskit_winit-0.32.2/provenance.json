@@ -1,0 +1,25 @@
+{
+    "version":  "0.32.2",
+    "archive":  "https://static.crates.io/crates/accesskit_winit/accesskit_winit-0.32.2.crate",
+    "archive_sha256":  "1fe9a94394896352cc4660ca2288bd4ef883d83238853c038b44070c8f134313",
+    "revision":  "1bbcf100942bac96c2c3a4a91cb67b0b20201a24",
+    "patch":  "Remove accesskit_unix and async-io from default features; no Rust source changes. Omit upstream Cargo.lock; add upstream LICENSE-APACHE. Trim the trailing blank line from Cargo.toml.orig for repository whitespace checks.",
+    "files":  {
+                  ".cargo_vcs_info.json":  "f92f05495977de786f4e9ec0bc7752b9c8d2859a65985fc816c6f7d5e675479f",
+                  "Cargo.toml":  "faf960d245a437af639c4353bcefefe04b93a59a4523a514d09110f1f0dc507b",
+                  "Cargo.toml.orig":  "af6fc7539175bf630af2daa66c2beeb9d10ecdd25b5417d4091c4755af80ab61",
+                  "CHANGELOG.md":  "a94c9b4c9af9f9db87caf15330a80a018a47a3ecf9232bd3ec2287f23a492988",
+                  "examples/mixed_handlers.rs":  "e8ff941f1c21e066427b3bc691b751b8fd00af21b3f5285ebb20acafb8528a90",
+                  "examples/simple.rs":  "1e752b7bdce7ca8441b2e08f3b2b0de526338f97512f83226382ef7bc4493f99",
+                  "examples/util/fill.rs":  "a1925e5febe03c10ffae00f7e3efccebf0aa68c749fb2f9e115e1599200eb374",
+                  "LICENSE-APACHE":  "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+                  "README.md":  "94659613e5f5b01f3e6e6823ad4355191172884a04c35b460816c347eb90a15b",
+                  "src/lib.rs":  "cbe4ef8dde0a3aa3d9777e51f86eeff2eb4396e290ab5ea83494920b8005b631",
+                  "src/platform_impl/android.rs":  "3bd0c85c8da3ed2dfaafc107616e9a72216dfae65c0dff2eec63c0ed841afae3",
+                  "src/platform_impl/macos.rs":  "9bb36fff123be11afadc7a7f8c09d2b8d04d3f091ad3f6bf23bec55ff933ebf1",
+                  "src/platform_impl/mod.rs":  "7bd9ce32dbdd50903add37e53af398d876d6d570f8b563aaeb57f2b728031aa7",
+                  "src/platform_impl/null.rs":  "0bad7fd53d810d9076ef1cc6feef3e1e68930c26a0677a4fdb38ce36c8658c96",
+                  "src/platform_impl/unix.rs":  "116c505a50fc7ba3c6eb9bc17d6c6dd6065082a8bc246e8889199d4153d1ece3",
+                  "src/platform_impl/windows.rs":  "7222ee5c2c519e5f1a195d9724f720ebf84fa6b6ac11547370f2fb66ec98417b"
+              }
+}
