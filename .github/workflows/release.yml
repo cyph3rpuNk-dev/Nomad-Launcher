@@ -3,7 +3,7 @@ name: Release
 # Build the launchers from source on every v* tag and attach them to a DRAFT
 # GitHub release with build provenance attestation, so users can check that a
 # published binary came from this repository's code instead of trusting an
-# exe built on a maintainer's machine (see README "Verifying a release").
+# exe built on a maintainer's machine (see docs/VERIFYING-RELEASES.md).
 #
 # What stays local, by design: the detached GPG signature over SHA256SUMS.
 # The owner downloads SHA256SUMS from the draft, signs it offline, attaches
