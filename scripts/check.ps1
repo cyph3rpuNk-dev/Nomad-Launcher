@@ -29,6 +29,9 @@ try {
     $targetArgs = @()
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $targetArgs = @('--target', 'x86_64-pc-windows-msvc') }
     if (-not $AuditOnly) {
+        Invoke-GateStep 'Vendored accessibility snapshot' {
+            pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-accesskit-vendor.ps1')
+        }
         Invoke-GateStep 'Artifact guard regression fixtures' {
             pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-artifact-guard.ps1')
         }

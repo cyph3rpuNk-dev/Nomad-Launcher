@@ -6,6 +6,7 @@ $global:GateCalls=[Collections.Generic.List[object]]::new()
 $global:GateCase=''
 function global:pwsh {
     $global:GateCalls.Add(@('pwsh')+@($args)); $global:LASTEXITCODE=0
+    if ($global:GateCase -eq 'vendor-failure' -and ($args -join ' ') -match 'test-accesskit-vendor.ps1') {$global:LASTEXITCODE=1}
     if ($global:GateCase -eq 'artifact-failure' -and ($args -join ' ') -match 'test-artifact-guard.ps1') {$global:LASTEXITCODE=1}
     if ($global:GateCase -eq 'recovery-failure' -and ($args -join ' ') -match 'test-cleanup-recovery-sandbox.ps1') {$global:LASTEXITCODE=1}
     if ($global:GateCase -eq 'vm-failure' -and ($args -join ' ') -match 'test-vm-recovery.ps1') {$global:LASTEXITCODE=1}
@@ -18,14 +19,14 @@ function global:cargo {
     if ($args[0] -in @('clippy','test') -and -not ($args -contains '--locked')) {throw 'Unlocked gate command.'}
     if (($global:GateCase -eq 'clippy-failure' -and $args[0] -eq 'clippy') -or ($global:GateCase -eq 'test-failure' -and $args[0] -eq 'test')) {$global:LASTEXITCODE=1}
 }
-foreach ($case in @('clean','artifact-failure','recovery-failure','vm-failure','integration-failure','dns-failure','clippy-failure','test-failure')) {
+foreach ($case in @('clean','vendor-failure','artifact-failure','recovery-failure','vm-failure','integration-failure','dns-failure','clippy-failure','test-failure')) {
     $global:GateCase=$case; $global:GateCalls.Clear(); $failed=$false
     try {& (Join-Path $PSScriptRoot 'check.ps1') -SkipAudit 6>$null} catch {$failed=$true}
     if ($failed -ne ($case -ne 'clean')) {throw 'Gate ignored or invented a native failure.'}
     $tests=@($global:GateCalls | Where-Object {$_[0] -eq 'cargo' -and $_[1] -eq 'test'})
     if ($case -eq 'clippy-failure' -and $tests.Count -ne 0) {throw 'Dependent tests ran after failed Clippy.'}
-    $expectedFixtures=if ($case -eq 'artifact-failure') {1} elseif ($case -eq 'recovery-failure') {6} elseif ($case -eq 'vm-failure') {7} elseif ($case -eq 'integration-failure') {8} else {9}
-    if ($case -in @('artifact-failure','recovery-failure','vm-failure','integration-failure','dns-failure') -and @($global:GateCalls | Where-Object {$_[0] -eq 'cargo'}).Count -ne 0) {throw 'Cargo ran after failed safety fixtures.'}
+    $expectedFixtures=if ($case -eq 'vendor-failure') {1} elseif ($case -eq 'artifact-failure') {2} elseif ($case -eq 'recovery-failure') {7} elseif ($case -eq 'vm-failure') {8} elseif ($case -eq 'integration-failure') {9} else {10}
+    if ($case -in @('vendor-failure','artifact-failure','recovery-failure','vm-failure','integration-failure','dns-failure') -and @($global:GateCalls | Where-Object {$_[0] -eq 'cargo'}).Count -ne 0) {throw 'Cargo ran after failed safety fixtures.'}
     if (@($global:GateCalls | Where-Object {$_[0] -eq 'pwsh'}).Count -ne $expectedFixtures) {throw 'Required fixture gates are not wired.'}
 }
 function Assert-WorkflowWiring([string]$Text,[string]$Name) {
@@ -77,5 +78,5 @@ foreach ($manifest in @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'launche
 }
 $distributionNames=@([regex]::Matches($dist,"'(Nomad-[A-Za-z0-9-]+\.exe)'") | ForEach-Object {$_.Groups[1].Value})
 if ((@($distributionNames | Sort-Object) -join ',') -cne (@($declaredNames | Sort-Object) -join ',')) {throw 'Distribution binary set must exactly match the workspace.'}
-Write-Host 'CI safeguard fixtures passed (11 failure/wiring cases plus workflow and binary-set checks).'
+Write-Host 'CI safeguard fixtures passed (fixture failures, workflow wiring and binary-set checks).'
 $global:LASTEXITCODE=0

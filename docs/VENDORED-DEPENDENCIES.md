@@ -3,6 +3,21 @@
 Cargo audit does not inspect the embedded 7-Zip executable/DLL or public signing
 keys. These require separate source review and freshness checks.
 
+## Accessibility adapter
+
+The workspace patches `accesskit_winit` 0.32.2 with a verified source snapshot
+under [`vendor/`](../vendor/accesskit_winit-0.32.2/NOMAD.md). Its Rust files are
+unchanged; only its default Unix accessibility features are disabled. Windows
+accessibility remains enabled. Unix is a tooling target and uses the upstream
+null adapter. This removes the unused, unmaintained D-Bus dependency path without
+adding audit exceptions. The patch note records source provenance, the Apache
+license, maintenance steps and removal criteria. The canonical gate checks the
+snapshot hashes and exercises rejection of modified or incomplete snapshots.
+
+Local path patches do not receive the same registry identity matching in
+cargo-audit. Review the recorded upstream crate and AccessKit advisories during
+maintenance; the snapshot hash check detects drift, not new advisories.
+
 ## Bundled extractor
 
 Nomad embeds the x64 `7z.exe` and `7z.dll` from 7-Zip 26.04. The versioned
