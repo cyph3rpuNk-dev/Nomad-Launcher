@@ -50,6 +50,8 @@ jobs:
       - name: Canonical validation
         run: pwsh -NoProfile -File scripts/check.ps1
       - name: Verify current Chromium archive, layout, and all required overlays
+        env:
+          NOMAD_CI_GITHUB_TOKEN: ${{ github.token }}
         run: cargo test --locked --target x86_64-pc-windows-msvc -p nomad-core --test upstream_extract chromium_release -- --ignored --nocapture
       - name: Build reviewable launchers and checksum manifest
         run: .\dist.ps1

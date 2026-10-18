@@ -9,12 +9,28 @@ use nomad_core::updater::{self, UpdateOptions, UpdateOutcome};
 use nomad_core::{Arch, BrowserFamily, Floorp};
 
 #[cfg(windows)]
+#[path = "support/github_ci.rs"]
+mod github_ci;
+
+#[cfg(windows)]
 #[tokio::test]
 #[ignore = "downloads, verifies, and brands the current Chromium release without launching it"]
 async fn chromium_release_passes_the_production_compatibility_gate() {
     let temp = tempfile::tempdir().expect("isolated compatibility directory");
     let install = temp.path().join("Browser");
-    let browser = nomad_core::UngoogledChromium::new(Arch::X64);
+    // CI authenticates only the fixed GitHub metadata request. Preserve the
+    // upstream response bytes and run the normal parser/download/verification/
+    // staging/branding pipeline through the existing endpoint injection seam.
+    let metadata = github_ci::chromium_metadata()
+        .await
+        .expect("live GitHub release metadata must be available");
+    let browser = match &metadata {
+        Some(server) => nomad_core::UngoogledChromium::with_releases_url(
+            Arch::X64,
+            server.url("/releases/latest"),
+        ),
+        None => nomad_core::UngoogledChromium::new(Arch::X64),
+    };
     let outcome = updater::update(
         &browser,
         &install,

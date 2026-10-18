@@ -299,5 +299,7 @@ jobs:
         run: cargo test --locked --target x86_64-pc-windows-msvc -p nomad-core --test upstream_live -- --ignored --nocapture
 
       - name: Download, verify, extract, and validate current browser overlays
+        env:
+          NOMAD_CI_GITHUB_TOKEN: ${{ github.token }}
         run: >-
           cargo test --locked --target x86_64-pc-windows-msvc -p nomad-core --test upstream_extract -- --ignored --nocapture
