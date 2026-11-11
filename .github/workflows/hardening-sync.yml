@@ -78,8 +78,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           branch="hardening-sync/chromium-flags"
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name  "cyph3rpuNk-dev"
+          git config user.email "261779228+cyph3rpuNk-dev@users.noreply.github.com"
 
           # Use a stable branch name so repeated runs update the same PR.
           git checkout -B "$branch"
@@ -202,8 +202,8 @@ jobs:
           [ -z "$pinned" ] && pinned="(none)"
           branch="hardening-sync/arkenfox-${tag}"
 
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name  "cyph3rpuNk-dev"
+          git config user.email "261779228+cyph3rpuNk-dev@users.noreply.github.com"
           git checkout -B "$branch"
 
           cp /tmp/arkenfox-new-user.js core/baselines/arkenfox-user.js

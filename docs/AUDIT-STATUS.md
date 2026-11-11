@@ -454,12 +454,12 @@ Defer the optional module split until behavior validation.
 ## Draft PR and first CI results (2026-10-12)
 
 `rebuild/foundation` was pushed at `67b8c16` and draft
-[PR #68](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/pull/68) opened against
+[PR #68](https://github.com/cyph3rpuNk-dev/Nomad-Launcher-old/pull/68) opened against
 main. All 33 published commits were checked for author/committer identity and
 full-message attribution. No merge or release publication was performed.
 
 Dependency advisories, Rust 1.92 compatibility and Actions static analysis passed.
-The [Windows canonical check](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/actions/runs/38210395672/job/114683031722)
+The [Windows canonical check](https://github.com/cyph3rpuNk-dev/Nomad-Launcher-old/actions/runs/38210395672/job/114683031722)
 and Chromium Compatibility jobs failed at Clippy on the same nine test-only
 assertions. CI's Rust 1.99 introduces `clippy::assert_is_empty`; the host has
 Rust/Clippy 1.98.1. The assertions were changed locally to explicit equality or
@@ -474,7 +474,7 @@ fix and status update were subsequently committed and pushed as `f1b9ec2`.
 ## CI rerun and junction-fixture correction (2026-10-12)
 
 CI on `f1b9ec2` passed Clippy, dependency advisories, Rust 1.92 compatibility and
-Actions static analysis. The [Windows test job](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/actions/runs/38212122177/job/114688413262)
+Actions static analysis. The [Windows test job](https://github.com/cyph3rpuNk-dev/Nomad-Launcher-old/actions/runs/38212122177/job/114688413262)
 and Chromium Compatibility jobs then failed 16 unit tests at the shared
 `owned_directory_link` fixture's path-character assertion, before those tests
 could exercise their safety predicates.
@@ -504,7 +504,7 @@ All nine PR checks passed. The owner merged PR #68 into main as
 dependency audit, Chromium Compatibility, Actions static analysis, and Scorecard
 all passed. These results supersede the earlier pending/failed CI status.
 
-[Chromium Compatibility on the merge](https://github.com/cyph3rpuNk-dev/Nomad-Launcher/actions/runs/38216758798)
+[Chromium Compatibility on the merge](https://github.com/cyph3rpuNk-dev/Nomad-Launcher-old/actions/runs/38216758798)
 verified the live archive/layout/overlays and built the validated launcher artifact.
 The artifact is for review; it is not a tagged, attested release.
 
